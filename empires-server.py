@@ -99,7 +99,7 @@ from game_settings import (
     randomReward,
     unlock_expansion,
 )
-from logger import report_other_log, report_tutorial_step, report_world_log, socketio
+from logger import init_socketio, report_other_log, report_tutorial_step, report_world_log, socketio
 from quest_engine import *
 from state_machine import *
 
@@ -3247,6 +3247,11 @@ def decode_objects(obj):
 
     return obj
 
+
+# The literal msgspec writes for a tagged BattleContext (see ``enc_hook`` and the
+# ``tag=True`` on the struct). Used to skip the walk entirely.
+BATTLE_CONTEXT_MARKER = b"BattleContext"
+
 _original_init = MsgSpecSerializer.__init__
 
 def serializer_init_patch(self, app, format):
@@ -3256,34 +3261,78 @@ def serializer_init_patch(self, app, format):
     original_decode = self.decode
 
     def decode_wrapper(data):
-        return decode_objects(original_decode(data))
+        decoded = original_decode(data)
+
+        # Only walk the tree when one is actually in there.
+        #
+        # decode_objects rebuilds every dict and list it visits, so a save with
+        # no battle in progress was paying for a full copy of the whole
+        # structure to convert zero objects. Profiling showed 932,700 calls to
+        # decode_objects across 20 decodes -- about 46,000 per save -- while
+        # msgspec itself took under 5% of the time. That walk was the single
+        # largest cost in a gateway request.
+        #
+        # A BattleContext can only exist in the payload if its tag was written
+        # into it, so when the marker is absent there is provably nothing to
+        # convert and the decode can be returned as msgspec produced it.
+        if BATTLE_CONTEXT_MARKER not in data:
+            return decoded
+
+        return decode_objects(decoded)
 
     self.decode = decode_wrapper
 
 MsgSpecSerializer.__init__ = serializer_init_patch
 
 
+def configure_app():
+    """Wire the extensions that only exist at runtime.
 
-if __name__ == '__main__':
-    if 'WERKZEUG_RUN_MAIN' not in os.environ and settings.open_browser:
-        if os.path.exists(os.path.join("chromium", "chrome.exe")):
-            threading.Timer(1.25, lambda: os.system(os.path.join("chromium", "chrome.exe") + " --user-data-dir=\"" + os.path.join(my_games_path(), "chromium-profile") + "\"" + " --allow-outdated-plugins " + ("--app=" if settings.app_mode else "") + "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path)).start()
-        elif os.path.exists(os.path.join("chromium", "chrome")):
-            threading.Timer(1.25, lambda: os.system(os.path.join("chromium", "chrome") + " --user-data-dir=\"" + os.path.join(my_games_path(), "chromium-profile") + "\"" + " --–allow-outdated-plugins " + ("--app=" if settings.app_mode else "") + "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path)).start()
-        else:
-            threading.Timer(1.25, lambda: webbrowser.open("http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path)).start()
-    # init_db(app, db)
+    Kept out of ``__main__`` on purpose. A production server does not run this
+    module as ``__main__``: granian imports it by name in each worker, so
+    anything set up here would silently not run and the gateway would come up
+    with no session store and no database. ``wsgi.py`` calls this; so does the
+    ``__main__`` block below.
+
+    ``init_app`` refuses to run twice on one app (the SQLAlchemy and session
+    objects are module-level singletons), so this is guarded -- see wsgi.py,
+    which imports the module and then calls this exactly once.
+    """
     set_crash_log(settings.crash_log)
     if settings.compression:
         compress.init_app(app)
-    socketio.init_app(app)
+    init_socketio(app)
     db.init_app(app)
     sess.init_app(app)
-    # session.app.session_interface.db.create_all()
-    # app.session_interface.db.create_all()
-    # db.create_all()
+    return app
 
-    socketio.run(app, host=settings.host, port=settings.port, debug=settings.debug, allow_unsafe_werkzeug=True)
+
+def open_browser_when_ready():
+    """Open the game in the bundled Chromium, or the default browser."""
+    if 'WERKZEUG_RUN_MAIN' in os.environ or not settings.open_browser:
+        return
+    if os.path.exists(os.path.join("chromium", "chrome.exe")):
+        launch = os.path.join("chromium", "chrome.exe")
+    elif os.path.exists(os.path.join("chromium", "chrome")):
+        launch = os.path.join("chromium", "chrome")
+    else:
+        threading.Timer(1.25, lambda: webbrowser.open(
+            "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path
+        )).start()
+        return
+
+    threading.Timer(1.25, lambda: os.system(
+        launch + " --user-data-dir=\"" + os.path.join(my_games_path(), "chromium-profile")
+        + "\" --allow-outdated-plugins "
+        + ("--app=" if settings.app_mode else "")
+        + "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path
+    )).start()
+
+
+if __name__ == '__main__':
+    open_browser_when_ready()
+    configure_app()
+    serve(app, debug=settings.debug)
     # app.run(host='127.0.0.1', port=5005, debug=True)
     # logging.getLogger('socketio').setLevel(logging.ERROR)
     # logging.getLogger('engineio').setLevel(logging.ERROR)
