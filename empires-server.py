@@ -28,13 +28,23 @@ from builtins import print
 from datetime import timedelta
 from time import sleep
 
-from flask import Flask, Response, jsonify, make_response, redirect, render_template, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    current_app,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+)
 
 from save_engine import (
     InvalidSaveException,
     base_path,
     db,
-        install_path,
+    install_path,
     log_path,
     lookup_objects_save_by_position,
     my_games_path,
@@ -57,10 +67,10 @@ import xml.etree.ElementTree as ET
 
 import pyamf
 import pyamf.amf0
-from flask_session import Session
 from pyamf import remoting
 
 import mod_engine
+from account_saves import AccountBoundSession
 from battle_engine import (
     BattleContext,
     StaleBattleReference,
@@ -111,7 +121,10 @@ rand_seed_w = 5445  # very random
 rand_seed_z = 844
 
 compress = Compress() if settings.compression else None
-sess = Session()
+# AccountBoundSession, not Session: it files each save under the account id
+# rather than under the session cookie, so signing in on a second browser opens
+# the same empire instead of a fresh one. See account_saves.py.
+sess = AccountBoundSession()
 
 
 start = datetime.now()
@@ -215,6 +228,21 @@ def snapi_bridge():
 # Resource keys, in the order the original editor showed them.
 RESOURCE_ORDER = ("coins", "wood", "oil", "aluminum", "copper", "gold", "iron", "uranium")
 
+#: Stand-in for anything the session holds that plain JSON cannot express.
+#: Same marker the 2013 editor used when it dumped the save into its textarea.
+NOT_SERIALIZABLE = "<not serializable>"
+
+
+def not_serializable(obj):
+    """Render an unencodable value instead of failing the whole response.
+
+    The game engine keeps live objects in the session -- ``BattleContext`` is a
+    tagged ``msgspec.Struct`` -- so a save taken during a battle cannot be
+    walked by ``json.dumps``. One unencodable value must not take the endpoint
+    down with it.
+    """
+    return NOT_SERIALIZABLE
+
 
 def _session_snapshot():
     """The save as the 2013 editor's textarea showed it.
@@ -294,7 +322,18 @@ def editor_state():
     player = info.get('player') or {}
     resources = (info.get('world') or {}).get('resources') or {}
 
-    return jsonify({
+    # The session is not plain JSON. ``session['battle']`` and ``last_battle``
+    # decode back into ``BattleContext`` -- a tagged ``msgspec.Struct`` -- the
+    # moment a save carries one, and ``jsonify`` raises on it. The 2013 editor
+    # dumped this same snapshot with ``default=lambda o: '<not serializable>'``;
+    # losing that when the page was migrated turned "a battle is in progress"
+    # into a 500, and a 500 into the front end reporting that the gateway is
+    # unreachable. The marker keeps the endpoint answering; the raw editor is
+    # for reading and the typed fields are what you actually edit.
+    #
+    # ``jsonify`` itself cannot take ``default=`` alongside a positional
+    # payload, so the response is built through the JSON provider directly.
+    payload = {
         "hasSave": validate_save(session, False),
         "zid": get_zid(),
         "level": player.get('level'),
@@ -323,7 +362,11 @@ def editor_state():
             }
             for i, node in enumerate(_backup_chain())
         ],
-    })
+    }
+    return Response(
+        current_app.json.dumps(payload, default=not_serializable) + "\n",
+        mimetype="application/json",
+    )
 
 
 def _apply_save(save_game):

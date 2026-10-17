@@ -55,7 +55,7 @@ function upstreamHeaders(request: Request, locals: App.Locals): Headers {
 export const load: PageServerLoad = async ({ locals, request }) => {
 	requireAdmin(locals);
 
-	const state = await fetchEditorState(request);
+	const state = await fetchEditorState(request, locals.user!.zid);
 
 	return {
 		state,

@@ -6,6 +6,18 @@
 /log.txt
 /server.out.log
 /server.err.log
+# Gateway logs from a run started with stdout redirected, plus the scratch
+# output of the migration scripts.
+/flask.out.log
+/flask.err.log
+/_migrate.log
+/_migrate.err
+/_restore.log
+/_restore.err
+/_peek.log
+/_peek.err
+/_verify.log
+/_verify.err
 /chromium
 /chromium-profile
 /cache

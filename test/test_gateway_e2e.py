@@ -376,3 +376,55 @@ class TestPlayerPages:
         start = body.index("parameters:")
         line = body[start:body.index("\n", start)]
         assert line.rstrip().endswith(('"', "'")), f"unterminated parameters string: {line!r}"
+
+class TestEditorJsonSurvivesALiveBattle:
+    """``/editor.json`` must answer even when the session is not plain JSON.
+
+    ``session['battle']`` and ``session['last_battle']`` come back from the
+    store as ``BattleContext`` -- a tagged ``msgspec.Struct`` -- whenever a save
+    carries one. Without a fallback the endpoint raises, and because the web
+    front end treats a non-OK gateway answer as "unreachable", the whole admin
+    page claimed the gateway was down while it was answering 500.
+    """
+
+    def _world(self, level: int, cash: int, ore: int, coins: int) -> dict:
+        return {
+            "userInfo": {
+                "player": {"level": level, "uid": 2361750976462848, "xp": 234462,
+                           "cash": cash, "playerResourceType": ore},
+                "worldName": "Rising Empire",
+                "world": {"resources": {"coins": coins, "wood": 1}},
+            }
+        }
+
+    def test_a_battle_in_progress_does_not_break_the_endpoint(self, client):
+        from battle_engine import BattleContext
+
+        with client.session_transaction() as session:
+            session["user_object"] = self._world(47, 10000, 3, 39999)
+            session["battle"] = BattleContext(map_name="campaign", island=3)
+            session["last_battle"] = BattleContext(map_name="pvp", island=7)
+
+        response = client.get("/editor.json")
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["level"] == 47
+        assert body["worldName"] == "Rising Empire"
+        # The unencodable value is replaced rather than fatal.
+        assert body["raw"]["battle"] == "<not serializable>"
+
+    def test_the_typed_fields_are_unaffected(self, client):
+        """The numbers an admin actually edits must not become the marker."""
+        from battle_engine import BattleContext
+
+        with client.session_transaction() as session:
+            session["user_object"] = self._world(12, 777, 5, 1234)
+            session["battle"] = BattleContext(map_name="campaign")
+
+        body = client.get("/editor.json").get_json()
+
+        assert body["level"] == 12
+        assert body["empirePoints"] == 777
+        assert body["ore"] == 5
+        assert body["resources"]["coins"] == 1234

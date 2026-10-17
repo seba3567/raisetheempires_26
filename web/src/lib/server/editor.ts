@@ -7,6 +7,7 @@
  * its own load, because this fetch goes straight to the gateway.
  */
 
+import { PLAYER_ZID_HEADER } from './proxy.ts';
 import { config } from './config.ts';
 
 export interface EditorState {
@@ -60,8 +61,15 @@ export interface BackupEntry {
 	coins: number | null;
 }
 
-export async function fetchEditorState(request: Request): Promise<EditorState | null> {
-	const headers = new Headers();
+export async function fetchEditorState(
+	request: Request,
+	playerZid: string
+): Promise<EditorState | null> {
+	// The account id travels with every gateway read. Without it the gateway
+	// files the request under the browser's session cookie, which is a
+	// different row from the account's -- the editor then reports "no save in
+	// this browser" for an empire that very much exists.
+	const headers = new Headers({ [PLAYER_ZID_HEADER]: playerZid });
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 

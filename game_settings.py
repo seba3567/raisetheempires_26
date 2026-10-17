@@ -269,6 +269,29 @@ def simple_list(raw_list):
     return (raw_list if isinstance(raw_list, list) else [raw_list]) if raw_list != '' else []
 
 
+def supplied_zid():
+    """The account id the front door claimed for this request, or None.
+
+    The header half of :func:`get_zid`, with no cookie fallback, because the two
+    callers want different things: ``get_zid`` needs *an* id to file a world
+    under, while the session store needs to know whether the request is
+    *bound to an account at all* before it files anything.
+
+    Same trust rule as ``get_zid``: the header is only as trustworthy as the
+    front door in front of it.
+    """
+    if has_request_context():
+        supplied = request.headers.get(PLAYER_ZID_HEADER)
+        if supplied is not None:
+            try:
+                value = int(supplied)
+            except ValueError:
+                value = None
+            if value is not None and 0 < value <= MAX_SAFE_ZID:
+                return value
+    return None
+
+
 def get_zid():
     """The id the rest of the game files a player under.
 
