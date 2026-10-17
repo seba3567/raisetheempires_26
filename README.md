@@ -29,9 +29,12 @@ This project is dedicated to preserving this Flash game so that it's not lost to
 
 ## Playing in a modern browser
 
-`/ruffle.html` loads the original client through [Ruffle](https://ruffle.rs), so
-the game is playable in a current browser **without installing the Adobe Flash
-Player**.
+The playable site is `web/` — a SvelteKit 3 + Svelte 5 app on Bun that serves
+the accounts, the friend list, the progress page and the game itself. Sign in
+and open `/juego`: the original client runs through [Ruffle](https://ruffle.rs)
+**embedded in that page**, so there is no Adobe Flash Player and no second
+origin. The SWF behind it is the same one, with the same FlashVars and player
+options; `/ruffle.html` still exists for working on the client directly.
 
 If you get `Error #2126: NetConnection object must be connected`, the client
 fell back to the host compiled into the SWF (`127.0.0.1`) instead of the served
@@ -42,10 +45,13 @@ not `sn_app_url`. Ruffle's `NetConnection.connect()` only accepts `http://` and
 `/nodebug.html` is the equivalent page for real Flash — see
 [FLASH.md](FLASH.md).
 
-Ruffle is loaded from a **version-pinned URL with a Subresource Integrity hash**.
-Please keep it that way: this game is archived, so an unpinned CDN tag could
-break it with no way to roll back. To move the version, read the new integrity
-from `https://unpkg.com/@ruffle-rs/ruffle@<version>/?meta`.
+Ruffle is **vendored into `web/static/ruffle/` and pinned by content hash**, not
+loaded from a CDN. Please keep it that way: this game is archived, so an
+unpinned CDN tag — or a CDN that quietly re-bundles — could break it with no way
+to roll back. Note that `ruffle.js` is a *loader*, not a bundle, so the folder
+must keep the chunks and the two WASM binaries next to it. See
+[DEVELOPMENT.md](DEVELOPMENT.md#ruffle-is-vendored-not-fetched) for the full
+procedure and the hashes.
 
 ## Reporting Bugs and Contacting
 :speech_balloon: Check our [Discord group](https://discord.gg/xrNE6Hg)  [![Discord Channel](https://img.shields.io/discord/536575691563466772?label=)](https://discord.gg/xrNE6Hg)

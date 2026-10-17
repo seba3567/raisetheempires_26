@@ -28,6 +28,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"dependencies": {
+		"@ruffle-rs/ruffle": "0.7.1",
 		"flowbite": "^4.0.2",
 		"flowbite-svelte": "^1.33.1"
 	}

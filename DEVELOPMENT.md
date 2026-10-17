@@ -81,9 +81,54 @@ and `/questSettings.xml`.
 `test_crc64.py` pins the `zid` checksum. Together they are the regression net
 for changes to the gateway or the engines.
 
-Ruffle is loaded from a **version-pinned URL with a Subresource Integrity
-hash** — keep it that way. For actual play without a browser, real Flash via
-NPAPI still works through `/nodebug.html` (see `FLASH.md`).
+## Ruffle is vendored, not fetched
+
+`ruffle.js` is **not a single bundle**. It is a ~455 KB loader that resolves a
+WebAssembly core plus two JavaScript chunks at runtime, and it derives their
+names from its own URL. Copying only the loader produces a page whose entire
+symptom is:
+
+```
+GET /ruffle/core.ruffle.<hash>.js net::ERR_ABORTED 404
+Serious error occurred loading SWF file: Error: Failed to load Ruffle WASM
+```
+
+So `web/static/ruffle/` holds the **whole** package from
+`node_modules/@ruffle-rs/ruffle` — 12 files, 29.3 MB, two of them ~14 MB WASM
+binaries. They are committed, not downloaded at install time and not fetched
+from a CDN at runtime. An archived game cannot depend on someone else's uptime,
+and a CDN re-bundle would change the loader's chunk names underneath us.
+
+The copy is pinned by content, not by URL. `ruffle.js` must keep hashing to
+
+```
+sha256-JgNqlFZwiN+z3oinWejtEKTOoHspUArzbzRe70JCAJg=
+```
+
+the same Subresource Integrity hash the old unpkg URL pinned — this moves *where*
+Ruffle comes from without moving *which* Ruffle runs.
+
+To move the version, empty `web/static/ruffle/`, then copy the new package over
+it and re-hash:
+
+```powershell
+cd web
+bun add @ruffle-rs/ruffle@<version>
+Copy-Item node_modules\@ruffle-rs\ruffle\* static\ruffle\ -Recurse -Force
+```
+
+Then confirm all twelve files answer 200 — the two `.wasm` ones **as
+`application/wasm`**, because `WebAssembly.instantiateStreaming` refuses any
+other content type and fails with the same "Failed to load Ruffle WASM":
+
+```powershell
+bun .\build
+curl.exe -s -o NUL -w "%{http_code} %{content_type}`n" http://localhost:8080/ruffle/878d548199cddef07035.wasm
+# 200 application/wasm
+```
+
+For actual play without a browser, real Flash via NPAPI still works through
+`/nodebug.html` (see `FLASH.md`).
 
 ## Tooling decisions
 

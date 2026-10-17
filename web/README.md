@@ -47,10 +47,37 @@ decorativos:
 - **`parameters` con `app_url`.** El cliente arma su URL del gateway AMF0 desde
   ese FlashVar (`Config.SERVICES_GATEWAY_PATH`). Ver abajo.
 
-Ruffle **0.7.1 se sirve localmente** desde `static/ruffle/ruffle.js`, no desde
-unpkg. El SHA-256 del archivo en el repo es
+### Ruffle va completo, no solo el loader
+
+Ruffle **0.7.1 se sirve localmente** desde `static/ruffle/`, no desde unpkg. El
+SHA-256 del loader en el repo es
 `sha256-JgNqlFZwiN+z3oinWejtEKTOoHspUArzbzRe70JCAJg=`. Un proyecto de
 preservación no debería depender de que un CDN siga en pie.
+
+Ojo con esto: **`ruffle.js` no es un bundle, es un loader.** Son 455 KB que
+resuelven en runtime un core WebAssembly y dos chunks de JavaScript cuyos nombres
+derivan de su propia URL. Copiar solo el loader deja la página así:
+
+```
+GET /ruffle/core.ruffle.16d61072ac7fdc4d5013.js net::ERR_ABORTED 404
+Serious error occurred loading SWF file: Error: Failed to load Ruffle WASM
+```
+
+El juego entero, sin ningún otro síntoma. Por eso `static/ruffle/` tiene el
+**paquete completo** de `node_modules/@ruffle-rs/ruffle`: 12 archivos, 29,3 MB,
+dos de ellos binarios WASM de ~14 MB.
+
+```
+ruffle.js                              455 KB   loader
+core.ruffle.16d61072ac7fdc4d5013.js    106 KB   el que pedía y daba 404
+core.ruffle.994eeef0a471a88cd0e3.js    112 KB
+172de42e6619eac8f371.wasm            13968 KB
+878d548199cddef07035.wasm            13894 KB
+```
+
+Los `.wasm` deben servirse como `application/wasm`:
+`WebAssembly.instantiateStreaming` rechaza cualquier otro content type, y el
+fallo se manifiesta como el mismo "Failed to load Ruffle WASM".
 
 ## Por qué `zid` se deriva de la cuenta
 
@@ -93,7 +120,7 @@ dos veces.
 | --- | --- | --- |
 | `/` · `/entrar` · `/registro` · `/cuenta` | SvelteKit | Landing y cuentas |
 | `/juego` | SvelteKit | El SWF, embebido en la página |
-| `/ruffle/ruffle.js` | SvelteKit | Ruffle 0.7.1 local |
+| `/ruffle/*` | SvelteKit | Ruffle 0.7.1 completo (loader + chunks + WASM) |
 | `/ruffle.html` · `/assets/…` · `/flashservices/…` | gateway (proxy) | Cliente y datos del juego |
 | `/save-editor` · `/gazillionaire` · `/patch/…` · `/list_session` | gateway, **solo admin** | Herramientas de edición |
 
