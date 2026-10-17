@@ -210,6 +210,56 @@ def snapi_bridge():
     })
 
 
+# Resource keys, in the order the original editor showed them.
+RESOURCE_ORDER = ("coins", "wood", "oil", "aluminum", "copper", "gold", "iron", "uranium")
+
+@app.route("/player.json")
+def player_state():
+    """The signed-in player's real state, for the web front end.
+
+    The save is the only source of truth for level, XP and resources. The Bun
+    service has its own ``progress`` table for the account, but nothing writes
+    to it from the game, so reading it produced a level 1 player sitting next to
+    a level 85 empire. This endpoint is what the account page now reads.
+
+    Everything here is read from ``session['user_object']``, i.e. the save
+    belonging to this browser's game session, and the zid comes from
+    ``get_zid()`` so it is the account when the request came through the front
+    door. A player who has not started a game yet gets ``hasSave: false``
+    rather than an error.
+    """
+    zid = get_zid()
+    user_object = session.get('user_object')
+
+    if not user_object or not validate_save(session):
+        return jsonify({
+            "hasSave": False,
+            "zid": zid,
+            "level": None,
+            "xp": None,
+            "empirePoints": None,
+            "worldName": None,
+            "picture": get_avatar_pic(),
+            "resources": dict.fromkeys(RESOURCE_ORDER),
+        })
+
+    info = user_object["userInfo"]
+    player = info["player"]
+    resources = info["world"]["resources"]
+
+    return jsonify({
+        "hasSave": True,
+        "zid": zid,
+        # 'cash' is what the client has always displayed as Empire Points.
+        "level": player.get("level"),
+        "xp": player.get("xp"),
+        "empirePoints": player.get("cash"),
+        "worldName": info.get("worldName"),
+        "picture": get_avatar_pic(),
+        "resources": {name: resources.get(name) for name in RESOURCE_ORDER},
+    })
+
+
 def get_allies_friend(saves):
     return [ally["friend"] for ally in allies.values()
             if "friend" in ally and ally["friend"] and ally["neighbor"]] + get_sessions_friends(saves)

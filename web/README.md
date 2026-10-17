@@ -167,12 +167,44 @@ dos veces.
 | --- | --- | --- |
 | `/` · `/entrar` · `/registro` · `/cuenta` | SvelteKit | Landing y cuentas |
 | `/juego` | SvelteKit | El SWF, embebido en la página |
+| `/admin/editor` | SvelteKit, **solo admin** | Editor de imperio, con los iconos del juego |
 | `/ruffle/*` | SvelteKit | Ruffle 0.7.1 completo (loader + chunks + WASM) |
-| `/snapi.json` | gateway (proxy) | Los datos que el SWF pide a la página por `ExternalInterface` |
+| `/snapi.json` · `/player.json` | gateway (proxy) | Datos que el SWF y la web piden al servidor |
 | `/ruffle.html` · `/assets/…` · `/flashservices/…` | gateway (proxy) | Cliente y datos del juego |
 | `/save-editor` · `/gazillionaire` · `/patch/…` · `/list_session` | gateway, **solo admin** | Herramientas de edición |
 
 El hook decide con `event.route.id`: si no hay ruta que coincida, es del gateway.
+
+## La partida se lee del gateway, no de la cuenta
+
+Nivel, XP, Empire Points y recursos salen de `/player.json`, que lee el save. La
+tabla `progress` de Bun se conserva solo como respaldo para una cuenta que
+nunca ha jugado: **nada del juego escribía ahí**, así que se quedó en nivel 1 al
+lado de un imperio de nivel 85.
+
+Esa lectura tiene que mandar **dos** cookies, y no son la misma:
+
+- `rte_session`, la de la cuenta, que este servicio verifica. Al gateway no
+  viaja: lo que importa va en `x-player-zid`.
+- la `session` del gateway, que es la que **elige qué save** se lee.
+
+Sin la segunda, el gateway responde con una partida nueva vacía y la cuenta
+vuelve a mostrar nivel 1. Ojo con un detalle al depurar: la cookie lleva el
+session id pelado, mientras que la columna `session_id` de la base tiene el
+prefijo `session:` de flask-session encima (`_get_store_id`).
+
+## El editor de imperio
+
+`/admin/editor` reemplaza a la plantilla de 2013 para lo que se usa a diario:
+nivel, XP, Empire Points, cada recurso y el mineral principal, con los iconos
+originales del juego. Las operaciones de quests y el JSON crudo siguen solo en
+`/save-editor`, enlazado desde ahí como "editor avanzado".
+
+Los parches se aplican con **lista blanca**: el formulario manda el *nombre* de
+un campo (`coins`, `level`, `ore`…) y el servidor decide a qué ruta del save
+corresponde. El gateway acepta `/patch/<ruta>/int/<valor>` sobre cualquier ruta
+anidada, que es justo lo que no debe quedar expuesto detrás de un campo de
+texto.
 
 ## El editor de imperio es solo de admins
 
@@ -258,10 +290,11 @@ bun run dev       # desarrollo
 | `src/hooks.server.ts` | Sesión, gate admin, y todo lo que no es ruta propia va al gateway |
 | `src/lib/access.ts` | Qué rutas exigen rol admin, y qué hacer según el rol |
 | `src/lib/ids.ts` | CRC-64/GO-ISO y el `zid` |
+| `src/lib/resources.ts` | Catálogo de recursos: etiqueta e icono del juego |
 | `src/lib/snapi.ts` | El puente `ExternalInterface` que el SWF espera en la página |
 | `src/lib/ruffle.ts` | Carga del player y opciones del SWF |
-| `src/lib/server/` | Sesión, base de datos, modelos, proxy — todo server-only |
-| `src/routes/` | `/`, `/entrar`, `/registro`, `/cuenta`, `/juego`, `/salir` |
+| `src/lib/server/` | Sesión, base de datos, modelos, proxy, estado del jugador |
+| `src/routes/` | `/`, `/entrar`, `/registro`, `/cuenta`, `/juego`, `/salir`, `/admin/editor` |
 | `src/routes/+layout.server.ts` | La sesión, para que el header la vea en todas las rutas |
 
 ### Los cuatro detalles que rompen el juego si se tocan

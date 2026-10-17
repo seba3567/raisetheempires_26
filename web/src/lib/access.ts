@@ -29,6 +29,10 @@ const ADMIN_ONLY_PREFIXES: readonly string[] = [
   "/complete_quest/",
   "/remove_quest/",
   "/seed/",
+  // This service's own replacement for /save-editor. It is a route here rather
+  // than a gateway path, but it changes game state just the same, so it gets
+  // the same policy as everything above.
+  "/admin/",
 ];
 
 export type GatewayAccess = "open" | "admin";

@@ -29,6 +29,9 @@ describe('accessDenied classification', () => {
 			'/unlock_quest/quest_0100',
 			'/complete_quest/quest_0100',
 			'/remove_quest/quest_0100',
+			// This service's own empire editor, not a gateway path, but it
+			// writes to the save exactly like /patch does.
+			'/admin/editor',
 			'/patch/player/name/string/bob',
 			'/seed/w/3/z/2',
 		]) {
