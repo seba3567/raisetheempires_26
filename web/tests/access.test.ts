@@ -33,6 +33,9 @@ describe('accessDenied classification', () => {
 			// hand-built save and grant themselves an empire.
 			'/editor/save',
 			'/editor/restore',
+			// The 2013 standalone launcher. /juego is the player now.
+			'/ruffle.html',
+			'/nodebug.html',
 			'/unlock_quest/quest_0100',
 			'/complete_quest/quest_0100',
 			'/remove_quest/quest_0100',
@@ -55,7 +58,6 @@ describe('accessDenied classification', () => {
 			'/entrar',
 			'/registro',
 			'/cuenta',
-			'/ruffle.html',
 			'/flashservices/gateway.php',
 			'/record_stats.php',
 			'/en_US.xml',
@@ -94,7 +96,7 @@ describe('adminDecision', () => {
 	test('leaves ordinary routes alone whatever the role is', () => {
 		for (const user of [{ role: 'admin' }, { role: 'player' }, null]) {
 			expect(adminDecision('/juego', user)).toBe('allow');
-			expect(adminDecision('/ruffle.html', user)).toBe('allow');
+			expect(adminDecision('/home.html', user)).toBe('allow');
 		}
 	});
 

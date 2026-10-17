@@ -140,21 +140,23 @@ def index():
 
 @app.route("/home.html")
 def home():
+    """The 2012 Facebook frame is gone; /juego is the player now.
+
+    This page used to be the launcher, but its only embed was an
+    ``<object>``/``<embed>`` pair pointing at download.macromedia.com, so it sat
+    on "Detecting flash..." forever. It is a redirect now, which is what eight
+    other routes needed: gazillionaire, deprogress, seed, patch, the three
+    quest routes and chooseavatar all finish by sending the browser here, and
+    each of them was landing the admin on a dead page.
+
+    Kept as a route rather than a 404 so an old bookmark or a link in a 2013
+    template still arrives somewhere real.
+    """
     print("home")
     if not validate_save(session, True):
         print("Invalid save game")
-        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
-    saves = get_saves()
-    return render_template("home.html", time=datetime.now().timestamp(), zid=str(get_zid()),
-                           version=version,
-                           allies=json.dumps(get_allies_friend(saves),
-                                             default=lambda o: '<not serializable>', sort_keys=False, indent=2),
-                           app_friends=json.dumps(get_allies_id(saves)),
-                           worldname=session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor",
-                           picture=get_avatar_pic(),
-                           dropdown_items=get_sessions_dropdown_info(saves),
-                           motd=get_motd()
-                           )
+        return make_response(redirect('/admin/editor'))  # an unusable save needs fixing
+    return make_response(redirect('/juego'))
 
 @app.route("/ruffle.html")
 def ruffle():

@@ -256,7 +256,7 @@ class TestPlayerPages:
     browser console, so assert the page contract here.
     """
 
-    @pytest.mark.parametrize("path", ["/ruffle.html", "/nodebug.html", "/home.html"])
+    @pytest.mark.parametrize("path", ["/ruffle.html", "/nodebug.html"])
     def test_page_renders(self, client, path):
         response = client.get(path)
 
@@ -265,6 +265,19 @@ class TestPlayerPages:
         assert body.strip()
         # No template expression leaked into the output.
         assert "{{" not in body
+
+    def test_home_html_sends_the_browser_to_the_real_player(self, client):
+        """/home.html is a redirect now, not the 2012 launcher.
+
+        Eight gateway routes finish by redirecting here -- gazillionaire,
+        deprogress, seed, patch, the three quest routes and chooseavatar -- and
+        every one of them used to drop the admin on a page whose only embed was
+        an ``<object>`` pointing at download.macromedia.com.
+        """
+        response = client.get("/home.html")
+
+        assert response.status_code in (301, 302, 303, 307, 308)
+        assert response.headers["Location"].endswith("/juego")
 
     def test_ruffle_page_pins_and_verifies_the_emulator(self, client):
         """Ruffle must stay version-pinned and integrity-checked.

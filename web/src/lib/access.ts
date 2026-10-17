@@ -29,6 +29,11 @@ const ADMIN_ONLY_EXACT: readonly string[] = [
   // the caller's own session, which is exactly why that was not obvious.
   "/editor/save",
   "/editor/restore",
+  // The standalone Ruffle page. The product's player is /juego, which embeds
+  // the same SWF in this app; this one is the 2013 standalone launcher kept for
+  // working on the client directly, so it is an admin tool rather than a page.
+  "/ruffle.html",
+  "/nodebug.html",
 ];
 
 /** Prefixes, for routes that carry a parameter after them. */

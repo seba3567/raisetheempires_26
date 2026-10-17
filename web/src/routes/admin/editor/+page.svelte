@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
+	import { Modal } from 'flowbite-svelte';
 
 	import { EMPIRE_POINTS_ICON, RESOURCES, XP_ICON, formatAmount } from '#lib/resources';
 	import { xpAsNumber } from '#lib/sessions';
+	import { DEPROGRESS, RAW_REPLACE, WIPE, type PendingConfirm } from '#lib/confirm';
 
 	let { data, form } = $props();
 
-	const state = $derived(data.state);
+	const empire = $derived(data.state);
 	const hasSave = $derived(data.hasSave);
-	const raw = $derived(state ? JSON.stringify(state.raw, null, 2) : '');
+	const raw = $derived(empire ? JSON.stringify(empire.raw, null, 2) : '');
 
 	const saved = $derived(page.url.searchParams.get('ok'));
 
@@ -23,13 +25,13 @@
 	] as const;
 
 	const NUMBERS = $derived([
-		{ field: 'level', label: 'Nivel', icon: XP_ICON, value: state?.level ?? 0 },
-		{ field: 'xp', label: 'XP', icon: XP_ICON, value: xpAsNumber(state?.xp ?? null) ?? 0 },
+		{ field: 'level', label: 'Nivel', icon: XP_ICON, value: empire?.level ?? 0 },
+		{ field: 'xp', label: 'XP', icon: XP_ICON, value: xpAsNumber(empire?.xp ?? null) ?? 0 },
 		{
 			field: 'empirePoints',
 			label: 'Empire Points',
 			icon: EMPIRE_POINTS_ICON,
-			value: state?.empirePoints ?? 0
+			value: empire?.empirePoints ?? 0
 		}
 	]);
 
@@ -48,9 +50,9 @@
 		return Object.entries(quests ?? {}).sort((a, b) => label(a).localeCompare(label(b)));
 	}
 
-	const locked = $derived(sorted(state?.quests.locked));
-	const incomplete = $derived(sorted(state?.quests.incomplete));
-	const complete = $derived(sorted(state?.quests.complete));
+	const locked = $derived(sorted(empire?.quests.locked));
+	const incomplete = $derived(sorted(empire?.quests.incomplete));
+	const complete = $derived(sorted(empire?.quests.complete));
 
 	/**
 	 * Backups, newest first.
@@ -61,9 +63,34 @@
 	 * backup's own index, so restoring one never depends on its row position.
 	 */
 	const BACKUP_PREVIEW = 25;
-	const backups = $derived(state?.backupList ?? []);
+	const backups = $derived(empire?.backupList ?? []);
 	const shownBackups = $derived(backups.slice(0, BACKUP_PREVIEW));
 	const hiddenBackups = $derived(backups.length - shownBackups.length);
+
+	/**
+	 * Confirmation for the three writes that can cost a player their empire.
+	 *
+	 * None of them is undoable from the page -- wiping takes the session with
+	 * it and a bad raw paste leaves a save the client cannot load -- so each one
+	 * goes through a dialog that names the action and what it costs. The form
+	 * to submit lives on the page and is referenced by id, which is what keeps
+	 * the raw JSON visible while you write it.
+	 *
+	 * The wording and the form each one targets are in #lib/confirm, where the
+	 * action/form pairing can be asserted without a browser.
+	 */
+	let pending = $state<PendingConfirm | null>(null);
+	let confirmOpen = $state(false);
+
+	function ask(next: PendingConfirm) {
+		pending = next;
+		confirmOpen = true;
+	}
+
+	function cancel() {
+		confirmOpen = false;
+		pending = null;
+	}
 </script>
 
 <svelte:head>
@@ -77,12 +104,12 @@
 
 	<h1 class="mt-2 text-3xl font-bold">Editor de imperio</h1>
 	<p class="mt-1 text-slate-400">
-		zid <code class="font-mono text-slate-300">{state?.zid ?? '—'}</code>
-		{#if state?.worldName}
-			· {state.worldName}
+		zid <code class="font-mono text-slate-300">{empire?.zid ?? '—'}</code>
+		{#if empire?.worldName}
+			· {empire.worldName}
 		{/if}
-		{#if state}
-			· {state.backups} respaldo{state.backups === 1 ? '' : 's'}
+		{#if empire}
+			· {empire.backups} respaldo{empire.backups === 1 ? '' : 's'}
 		{/if}
 	</p>
 
@@ -147,7 +174,7 @@
 							class="field mt-2 !py-1.5 text-sm"
 							type="number"
 							name="value"
-							value={state?.resources?.[resource.key] ?? 0}
+							value={empire?.resources?.[resource.key] ?? 0}
 							min="0"
 							required
 						/>
@@ -172,7 +199,7 @@
 					<input type="hidden" name="value" value={ore.id} />
 					<button
 						class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-empire-800
-							{state?.ore === ore.id ? 'border-gold-500 text-gold-400' : 'border-empire-700'}"
+							{empire?.ore === ore.id ? 'border-gold-500 text-gold-400' : 'border-empire-700'}"
 					>
 						<img src={ore.icon} alt="" class="size-6" />
 						{ore.label}
@@ -217,7 +244,7 @@
 
 		<!-- Raw editor: the escape hatch for anything the typed fields miss. -->
 		<h2 class="mt-10 text-xl font-semibold">Editor crudo</h2>
-		<form method="POST" action="?/raw" use:enhance class="mt-3">
+		<form id="raw-form" method="POST" action="?/raw" use:enhance class="mt-3">
 			<textarea
 				name="savegame"
 				rows="24"
@@ -225,7 +252,11 @@
 				spellcheck="false">{raw}</textarea
 			>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
-				<button class="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40">
+				<button
+					type="button"
+					class="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40"
+					onclick={() => ask(RAW_REPLACE)}
+				>
 					Reemplazar la partida
 				</button>
 				<p class="text-xs text-red-400/80">
@@ -282,18 +313,20 @@
 					<img src={EMPIRE_POINTS_ICON} alt="" class="size-5" />
 					Añadir 10.000 Empire Points
 				</a>
-				<form method="POST" action="?/danger" use:enhance>
-					<input type="hidden" name="what" value="deprogress" />
-					<button class="rounded-lg border border-empire-700 px-4 py-2 text-sm hover:bg-empire-800">
-						Rebobinar el mapa de batalla
-					</button>
-				</form>
-				<form method="POST" action="?/danger" use:enhance>
-					<input type="hidden" name="what" value="wipe" />
-					<button class="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40">
-						Borrar la partida
-					</button>
-				</form>
+				<button
+					type="button"
+					class="rounded-lg border border-empire-700 px-4 py-2 text-sm hover:bg-empire-800"
+					onclick={() => ask(DEPROGRESS)}
+				>
+					Rebobinar el mapa de batalla
+				</button>
+				<button
+					type="button"
+					class="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40"
+					onclick={() => ask(WIPE)}
+				>
+					Borrar la partida
+				</button>
 			</div>
 			<p class="mt-3 text-xs text-slate-500">
 				Borrar la partida elimina la sesión de juego de este navegador. La cuenta y su
@@ -301,4 +334,40 @@
 			</p>
 		</div>
 	{/if}
+
+	<!--
+		The confirmation for the three things that can cost a player their empire.
+
+		Each dangerous button opens this instead of posting directly. The forms
+		stay on the page and are submitted from here through the `form` attribute,
+		so the raw editor is not hidden behind a dialog the admin has to open and
+		close to get at the JSON.
+	-->
+	<Modal bind:open={confirmOpen} title={pending?.title ?? ''} size="md" dismissable>
+		<p class="text-sm text-slate-300">{pending?.body}</p>
+		{#if pending?.note}
+			<p class="mt-2 text-xs text-slate-500">{pending.note}</p>
+		{/if}
+		<div class="mt-5 flex justify-end gap-3">
+			<button
+				type="button"
+				class="rounded-lg border border-empire-700 px-4 py-2 text-sm hover:bg-empire-800"
+				onclick={cancel}
+			>
+				Cancelar
+			</button>
+			<button
+				type="submit"
+				form={pending?.form ?? ''}
+				class="rounded-lg border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40"
+			>
+				{pending?.confirm}
+			</button>
+		</div>
+	</Modal>
+
+	<!-- The two destructive forms, submitted from the dialog above. -->
+	<form id="danger-form" method="POST" action="?/danger" use:enhance hidden>
+		<input type="hidden" name="what" value={pending?.what ?? ''} />
+	</form>
 </div>
