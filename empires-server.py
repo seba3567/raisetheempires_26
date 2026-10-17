@@ -503,6 +503,7 @@ def format_backup_message(backup):
            + str(backup.get("message", ""))
 
 
+@app.route("/record_stats.php", methods=['GET', 'POST'])
 @app.route("/127.0.0.1record_stats.php", methods=['GET', 'POST'])
 def record_stats():
     return ('', 204)
@@ -765,6 +766,14 @@ def send_from_directory_mod(directory, filename, **options):
     return mod_engine.mod.get(path)() if path in mod_engine.mod else send_from_directory(absolute_directory, filename, **options)
 
 
+# The Flash client prefixes these endpoints with the value of the sn_app_url
+# FlashVar. When that is empty it falls back to the bare hostname, producing a
+# relative URL such as "127.0.0.1flashservices/gateway.php". Relative URLs are
+# fine for record_stats (plain URLRequest), but Ruffle's NetConnection.connect()
+# only accepts URLs starting with http:// or https:// -- anything else is
+# stubbed out and every call() afterwards throws Error #2126. So the absolute
+# variants are registered alongside the legacy relative ones.
+@app.route('/flashservices/gateway.php', methods=['POST'])
 @app.route('/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/gateway.php', methods=['POST'])
 def post_gateway():
     print("Gateway:")
