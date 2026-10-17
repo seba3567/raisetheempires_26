@@ -81,15 +81,44 @@ fallo se manifiesta como el mismo "Failed to load Ruffle WASM".
 
 ## Por qué `zid` se deriva de la cuenta
 
-El servidor Python asigna la identidad del jugador a partir de la cookie:
+El gateway Python **usaba** la identidad del jugador a partir de su propia
+cookie:
 
 ```python
 zid = crc64_go_iso(session_id) // 2048
 ```
 
 Una cookie se regenera. Cuando eso pasa, el mismo jugador recibe otro `zid` y su
-partida queda partida en dos. Aquí el `zid` se deriva del **id de la cuenta**,
-que no cambia al cerrar sesión, cambiar la contraseña ni rotar la cookie.
+partida queda partida en dos. Peor: como esa cookie no tiene nada que ver con la
+cuenta de acá, **iniciar sesión noSERVía de nada dentro del juego** — la partida
+era de la cookie, no del jugador.
+
+Ahora el proxy le entrega la identidad al gateway en el header
+`x-player-zid`, y `get_zid()` la prefiere:
+
+```ts
+// hooks.server.ts -> proxy.ts, solo si hay sesión verificada
+headers.set(PLAYER_ZID_HEADER, event.locals.user.zid);
+```
+
+```python
+# game_settings.py
+supplied = request.headers.get(PLAYER_ZID_HEADER)
+if supplied is not None and 0 < int(supplied) <= MAX_SAFE_ZID:
+    return int(supplied)
+return zid_from_sid(session.sid)   # fallback: juego anónimo intacto
+```
+
+El `zid` se deriva del **id de la cuenta**, que no cambia al cerrar sesión,
+cambiar la contraseña ni rotar la cookie.
+
+> **Este header se confía porque Flask vive en loopback.** Si expones
+> `empires-server.py` en `0.0.0.0`, cualquiera puede reclamar la partida de otro
+> con una cabecera escrita a mano. Mismo supuesto que el gate de admin.
+
+El proxy **borra** cualquier `x-player-zid` que venga del cliente antes de
+mandarlo: la copia automática de headers reenviaría lo que el navegador
+escribiera, y eso sería autonombrarse. Fijado por `tests/proxy.test.ts`.
 
 `src/lib/ids.ts` es el port de `crc64_go_iso.py` y `tests/ids.test.ts` fija los
 mismos vectores que el test de Python, así que ambos lenguajes producen el mismo
@@ -214,7 +243,7 @@ bun run dev       # desarrollo
 | `src/lib/server/` | Sesión, base de datos, modelos, proxy — todo server-only |
 | `src/routes/` | `/`, `/entrar`, `/registro`, `/cuenta`, `/juego`, `/salir` |
 
-### Los dos detalles que rompen el juego si se tocan
+### Los tres detalles que rompen el juego si se tocan
 
 1. **`Host` hacia el gateway.** Flask lee el `Host` para construir el `app_url`
    que se mete en los FlashVars. Si el proxy no manda el host público, Flask ve
@@ -226,3 +255,8 @@ bun run dev       # desarrollo
    proxy lo reenvía, el navegador intenta descomprimir texto plano y la página
    muere con `ERR_CONTENT_DECODING_FAILED`: pantalla negra, ningún otro síntoma.
    Por eso el filtro de headers separa petición de respuesta.
+3. **`x-player-zid`.** Si el proxy deja de mandarlo (o de borrarle la versión del
+   cliente), el login vuelve a no servir de nada: el juego se queda con la
+   partida de su cookie y la cuenta aparece con un imperio vacío. No hay ningún
+   error visible — el juego entra perfecto, solo que es el jugador equivocado.
+   Fijado por `tests/proxy.test.ts` y `test/test_player_identity.py`.

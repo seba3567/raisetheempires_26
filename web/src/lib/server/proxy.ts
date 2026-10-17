@@ -28,6 +28,15 @@ const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 
+/**
+ * Where the signed-in account's id travels to the gateway.
+ *
+ * Kept in sync with `PLAYER_ZID_HEADER` in `game_settings.py`, which is where
+ * it is read. The gateway trusts it only because it is loopback-only and this
+ * service is its sole door — the same reasoning that puts the admin gate here.
+ */
+export const PLAYER_ZID_HEADER = "x-player-zid";
+
 function shouldForwardRequestHeader(name: string): boolean {
   const lower = name.toLowerCase();
   return !HOP_BY_HOP.has(lower) && lower !== "host" && lower !== "content-length";
@@ -51,7 +60,11 @@ function shouldForwardResponseHeader(name: string): boolean {
   return lower !== "content-encoding" && lower !== "content-length";
 }
 
-function buildHeaders(req: Request, publicOrigin: string): Headers {
+function buildHeaders(
+  req: Request,
+  publicOrigin: string,
+  playerZid?: string | null
+): Headers {
   const headers = new Headers();
   for (const [name, value] of req.headers) {
     if (shouldForwardRequestHeader(name)) headers.set(name, value);
@@ -69,6 +82,20 @@ function buildHeaders(req: Request, publicOrigin: string): Headers {
   headers.set("x-forwarded-proto", publicUrl.protocol.replace(":", ""));
   const existing = req.headers.get("x-forwarded-for");
   headers.set("x-forwarded-for", existing ? `${existing}, ${publicUrl.hostname}` : publicUrl.hostname);
+
+  // The signed-in account's id, and only when there is one. Without it the
+  // gateway files the player under a hash of its own cookie, which is why a
+  // login here never stuck in the game. Absent, it falls back to that cookie,
+  // so anonymous play and direct requests keep working unchanged.
+  //
+  // Set, never forwarded: the loop over req.headers above copies whatever the
+  // client sent, so a client must not be able to claim an identity by sending
+  // the header itself. This line is the only thing allowed to set it.
+  if (playerZid) {
+    headers.set(PLAYER_ZID_HEADER, playerZid);
+  } else {
+    headers.delete(PLAYER_ZID_HEADER);
+  }
 
   return headers;
 }
@@ -88,11 +115,15 @@ export type ProxyResult = Response | "websocket-unsupported";
  *
  * `origin` points at the gateway itself and is overridable so tests can use a
  * throwaway upstream or a dead port.
+ *
+ * `playerZid` is the signed-in account's id, or null/undefined for anonymous
+ * traffic. See {@link PLAYER_ZID_HEADER}.
  */
 export async function proxyToGateway(
   req: Request,
   publicOrigin: string,
   origin: string = config.gateway.origin,
+  playerZid?: string | null,
 ): Promise<ProxyResult> {
   // socket.io currently runs in long-polling mode on Werkzeug, so an upgrade
   // would mean something changed upstream. Fail loudly instead of silently
@@ -114,7 +145,7 @@ export async function proxyToGateway(
   try {
     const upstream = await fetch(target, {
       method: req.method,
-      headers: buildHeaders(req, publicOrigin),
+      headers: buildHeaders(req, publicOrigin, playerZid),
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       ...(body === null ? {} : { body }),

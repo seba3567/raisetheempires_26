@@ -247,6 +247,49 @@ describe('content encoding', () => {
 	});
 });
 
+/**
+ * The account identity handed to the gateway.
+ *
+ * Without this header the gateway files the player under a hash of its own
+ * session cookie, so signing in here would not stick in the game: the save
+ * belongs to a cookie, not to an account. The spoofing assertions matter more
+ * than the happy path — the gateway trusts this header precisely because it
+ * sits behind this service, so a client that could set it itself would be
+ * claiming other people's empires.
+ */
+describe('player identity', () => {
+	const ACCOUNT_ZID = '2361750976462848';
+
+	const forwardAs = (req: Request, zid: string | null) =>
+		proxyToGateway(req, PUBLIC, origin, zid);
+
+	test('hands the signed-in account to the gateway', async () => {
+		await forwardAs(new Request(`${PUBLIC}/ruffle.html`), ACCOUNT_ZID);
+		expect(lastSeen().headers['x-player-zid']).toBe(ACCOUNT_ZID);
+	});
+
+	test('sends nothing for anonymous traffic', async () => {
+		await forwardAs(new Request(`${PUBLIC}/ruffle.html`), null);
+		expect(lastSeen().headers['x-player-zid']).toBeUndefined();
+	});
+
+	test('strips a client-supplied zid when nobody is signed in', async () => {
+		const req = new Request(`${PUBLIC}/flashservices/gateway.php`, {
+			headers: { 'x-player-zid': '999999999999999' },
+		});
+		await forwardAs(req, null);
+		expect(lastSeen().headers['x-player-zid']).toBeUndefined();
+	});
+
+	test('overrides a client-supplied zid with the real account', async () => {
+		const req = new Request(`${PUBLIC}/flashservices/gateway.php`, {
+			headers: { 'x-player-zid': '999999999999999' },
+		});
+		await forwardAs(req, ACCOUNT_ZID);
+		expect(lastSeen().headers['x-player-zid']).toBe(ACCOUNT_ZID);
+	});
+});
+
 async function gzip(text: string): Promise<ArrayBuffer> {
 	const stream = new CompressionStream('gzip');
 	const writer = stream.writable.getWriter();

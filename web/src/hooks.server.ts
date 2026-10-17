@@ -53,7 +53,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// paths the gateway owns: the SWF, its assets, the AMF0 endpoint, the XML
 	// settings files and the cheat routes.
 	if (!event.route.id) {
-		const result = await proxyToGateway(event.request, publicOrigin);
+		// The account's id goes along so the game files the save under the
+		// account instead of under a hash of the gateway's own cookie. Null for
+		// anonymous traffic, which the gateway falls back to handling exactly as
+		// it did before.
+		const result = await proxyToGateway(
+			event.request,
+			publicOrigin,
+			undefined,
+			event.locals.user?.zid ?? null
+		);
 		if (result === 'websocket-unsupported') {
 			error(501, 'Este despliegue solo proxea HTTP; el socket.io va en long-polling.');
 		}

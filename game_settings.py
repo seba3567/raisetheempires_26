@@ -4,7 +4,7 @@ import os
 import random
 from datetime import datetime
 
-from flask import session
+from flask import has_request_context, request, session
 
 import mod_engine
 from crc64_go_iso import zid_from_sid
@@ -13,6 +13,16 @@ from save_engine import my_games_path, validate_save
 game_settings_path = os.path.join(my_games_path(), "gamesettings-converted.json")
 initial_island_path = os.path.join(my_games_path(), "allies/initial-island.json")
 cached_urls = []
+
+# Header used by the SvelteKit front door to hand over the signed-in account's
+# identity. See get_zid().
+PLAYER_ZID_HEADER = "x-player-zid"
+
+# ActionScript 3 has no integer type: every Number is a double, so the client
+# represents integers exactly only up to 2^53-1. That bound is why zid divides
+# the 64-bit checksum down by 2048 in the first place, so it is also the bound a
+# header-supplied zid has to respect.
+MAX_SAFE_ZID = 2**53 - 1
 
 def read_games_settings():
     with open(game_settings_path) as f:
@@ -260,6 +270,36 @@ def simple_list(raw_list):
 
 
 def get_zid():
+    """The id the rest of the game files a player under.
+
+    Two sources, in order:
+
+    1. ``x-player-zid``, set by the SvelteKit service in ``web/`` only when the
+       request carries a session it has verified itself. This is what makes a
+       login stick in the game: the account owns the save instead of a cookie.
+    2. The Flask session cookie, the original behaviour.
+
+    The header is trusted because the gateway is loopback-only and this service
+    is its only door -- the same reason the admin gate lives in Bun. **If Flask
+    is ever exposed on 0.0.0.0, a client can claim any player id by setting this
+    header by hand.**
+
+    Anything malformed, out of range or absent falls back to the cookie, so
+    anonymous play and direct requests to the gateway keep working unchanged.
+
+    ``has_request_context()`` is belt and braces: ``session`` is request-bound
+    too, so in practice this is only ever reached inside a request. It keeps the
+    header dependency explicit rather than assuming it.
+    """
+    if has_request_context():
+        supplied = request.headers.get(PLAYER_ZID_HEADER)
+        if supplied is not None:
+            try:
+                value = int(supplied)
+            except ValueError:
+                value = None
+            if value is not None and 0 < value <= MAX_SAFE_ZID:
+                return value
     return zid_from_sid(session.sid)
 
 

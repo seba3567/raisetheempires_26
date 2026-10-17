@@ -203,6 +203,14 @@ contract with a client we cannot recompile. The practical consequence is that th
 Flask dev server is never reachable from outside, so **the previously planned
 app-factory and WSGI work is dropped, not deferred**. Do not start it.
 
+That loopback-only rule is also what the identity handoff rests on. The front
+door passes the signed-in account's `zid` down in `x-player-zid`, and
+`get_zid()` in `game_settings.py` prefers it over the cookie derivation, which
+is what makes a login stick in the game instead of the save belonging to a
+cookie. The gateway trusts that header **only** because nothing else can reach
+it: expose Flask on `0.0.0.0` and anyone can claim another player's empire with
+a hand-written header. Same assumption as the admin gate.
+
 Run both while developing:
 
 ```powershell
