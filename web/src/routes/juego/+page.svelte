@@ -1,11 +1,15 @@
-/**
- * The player page.
- *
- * The SWF is embedded in this page rather than behind a separate document: no
- * iframe, no second origin, and the site's own chrome stays around it. The
- * player options are the ones already proven in templates/ruffle.html.
- */
 <script lang="ts">
+	/**
+	 * The player page.
+	 *
+	 * The SWF is embedded in this page rather than behind a separate document: no
+	 * iframe, no second origin, and the site's own chrome stays around it. The
+	 * player options are the ones already proven in templates/ruffle.html.
+	 *
+	 * This comment has to live inside the script block. At the top level of a
+	 * Svelte component, `/** ... *\/` is not a comment -- Svelte reads it as
+	 * markup text and renders the whole thing on the page, above the player.
+	 */
 	import { onMount } from 'svelte';
 	import {
 		PLAYER_BACKGROUND,
@@ -15,6 +19,7 @@
 		loadRuffle,
 		type RufflePlayerHandle
 	} from '#lib/ruffle';
+	import { SNAPI_ENDPOINT, installSnapiBridge } from '#lib/snapi';
 
 	let { data } = $props();
 
@@ -30,6 +35,22 @@
 		void (async () => {
 			try {
 				await loadRuffle();
+
+				/*
+				 * Install the ExternalInterface bridge *before* loading the SWF.
+				 *
+				 * The client calls getUserInfo() during setup and dereferences the
+				 * result without checking it, so loading first and bridging after
+				 * kills the game with "Error #1009 ... accessing field: zid" before
+				 * anything is playable. Fetched here rather than server-side so the
+				 * request goes through the proxy exactly like the player does, and
+				 * arrives with this browser's cookies and the account's zid.
+				 */
+				const social = await fetch(SNAPI_ENDPOINT, { credentials: 'same-origin' });
+				if (!social.ok) {
+					throw new Error(`${SNAPI_ENDPOINT} respondió ${social.status}`);
+				}
+				installSnapiBridge(await social.json());
 
 				const ruffle = window.RufflePlayer?.newest();
 				if (!ruffle) throw new Error('RufflePlayer no está disponible');

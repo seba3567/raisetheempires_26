@@ -150,6 +150,7 @@ dos veces.
 | `/` · `/entrar` · `/registro` · `/cuenta` | SvelteKit | Landing y cuentas |
 | `/juego` | SvelteKit | El SWF, embebido en la página |
 | `/ruffle/*` | SvelteKit | Ruffle 0.7.1 completo (loader + chunks + WASM) |
+| `/snapi.json` | gateway (proxy) | Los datos que el SWF pide a la página por `ExternalInterface` |
 | `/ruffle.html` · `/assets/…` · `/flashservices/…` | gateway (proxy) | Cliente y datos del juego |
 | `/save-editor` · `/gazillionaire` · `/patch/…` · `/list_session` | gateway, **solo admin** | Herramientas de edición |
 
@@ -239,11 +240,13 @@ bun run dev       # desarrollo
 | `src/hooks.server.ts` | Sesión, gate admin, y todo lo que no es ruta propia va al gateway |
 | `src/lib/access.ts` | Qué rutas exigen rol admin, y qué hacer según el rol |
 | `src/lib/ids.ts` | CRC-64/GO-ISO y el `zid` |
+| `src/lib/snapi.ts` | El puente `ExternalInterface` que el SWF espera en la página |
 | `src/lib/ruffle.ts` | Carga del player y opciones del SWF |
 | `src/lib/server/` | Sesión, base de datos, modelos, proxy — todo server-only |
 | `src/routes/` | `/`, `/entrar`, `/registro`, `/cuenta`, `/juego`, `/salir` |
+| `src/routes/+layout.server.ts` | La sesión, para que el header la vea en todas las rutas |
 
-### Los tres detalles que rompen el juego si se tocan
+### Los cuatro detalles que rompen el juego si se tocan
 
 1. **`Host` hacia el gateway.** Flask lee el `Host` para construir el `app_url`
    que se mete en los FlashVars. Si el proxy no manda el host público, Flask ve
@@ -260,3 +263,29 @@ bun run dev       # desarrollo
    partida de su cookie y la cuenta aparece con un imperio vacío. No hay ningún
    error visible — el juego entra perfecto, solo que es el jugador equivocado.
    Fijado por `tests/proxy.test.ts` y `test/test_player_identity.py`.
+4. **El puente de `ExternalInterface`.** El SWF no tiene red social propia:
+   durante el setup llama a tres funciones JavaScript **por nombre global** —
+   `getUserInfo()`, `getFriendData()`, `getAppFriendIds()` — y lee campos de lo
+   que devuelven. Si no existen, `getUser()` deja su usuario en `null` y
+   `toSocialNetworkUser` hace `new SocialNetworkUser(param1.zid)` sobre `null`
+   sin comprobarlo: el juego muere en el setup con
+
+   ```
+   Error #1009: Cannot access a property or method of a null object reference.
+   (accessing field: zid)
+   ```
+
+   sin llegar a ser jugable. `src/lib/snapi.ts` instala esas funciones **antes**
+   de `player.load()`; si se cargara primero y se instalara después, el cliente
+   ya las llamó. Datos en `/snapi.json` (gateway), y `zid` tiene que ir como
+   número JSON. Fijado por `tests/snapi.test.ts`.
+
+### Detalles de Svelte 5 que muerden
+
+- **`/** ... */` arriba de un componente se renderiza como texto.** En el nivel
+  superior de un `.svelte`, Svelte no lo interpreta como comentario: lo pinta en
+  la página, arriba del player. El comentario va **dentro** del bloque `<script>`.
+- **`page.data` solo trae lo que devolvió el load de esa ruta.** El header leía
+  `page.data.user`, que el `+page.server.ts` raíz definía solo para `/`, así que
+  en `/juego` se veía "Entrar" con la sesión viva — indistinguible de una sesión
+  que se pierde sola. Va en el `+layout.server.ts` raíz, que corre en todas.

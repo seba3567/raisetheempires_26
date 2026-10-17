@@ -28,7 +28,7 @@ from builtins import print
 from datetime import timedelta
 from time import sleep
 
-from flask import Flask, Response, make_response, redirect, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, make_response, redirect, render_template, request, send_from_directory
 
 from save_engine import (
     InvalidSaveException,
@@ -173,6 +173,42 @@ def ruffle():
                            dropdown_items=get_sessions_dropdown_info(saves),
                            motd=get_motd()
                            )
+
+@app.route("/snapi.json")
+def snapi_bridge():
+    """The data the SWF asks the hosting page for through ExternalInterface.
+
+    The client has no social network of its own. During setup it calls three
+    global JavaScript functions by name -- getUserInfo(), getFriendData() and
+    getAppFriendIds() -- and reads fields off what they return. ``ruffle.html``
+    defined them as inline functions; the SvelteKit player fetches this instead.
+
+    If they are missing the client does not degrade, it dies: ``getUser()``
+    leaves its user object null, and ``toSocialNetworkUser`` immediately does
+    ``new SocialNetworkUser(param1.zid)`` on it, so setup aborts with
+
+        Error #1009: Cannot access a property or method of a null object
+        reference. (accessing field: zid)
+
+    before anything is playable. zid has to stay a JSON number, not a string --
+    ActionScript has no integers and it is used as an int on the far side.
+    """
+    saves = get_saves()
+    zid = get_zid()
+    worldname = session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor"
+    return jsonify({
+        "user": {
+            "zid": zid,
+            "uid": zid,
+            "first_name": worldname,
+            "name": worldname,
+            "sex": "F",
+            "pic_square": get_avatar_pic(),
+        },
+        "friends": get_allies_friend(saves),
+        "appFriends": get_allies_id(saves),
+    })
+
 
 def get_allies_friend(saves):
     return [ally["friend"] for ally in allies.values()
