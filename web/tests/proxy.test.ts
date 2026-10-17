@@ -171,9 +171,25 @@ describe('proxyToGateway', () => {
 
 		if (res === 'websocket-unsupported') throw new Error('unreachable');
 		expect(res.status).toBe(502);
+		expect(await res.text()).toContain('Game server not responding');
+	});
+
+	test('the failure page does not hand out the operator instructions', async () => {
+		// This page is served to players. Telling a stranger which address the
+		// gateway runs on, and which command starts it, is a free map of the
+		// machine for anyone who can make one request fail.
+		const res = await proxyToGateway(
+			new Request(`${PUBLIC}/flashservices/gateway.php`, { method: 'POST', body: 'x' }),
+			PUBLIC,
+			'http://127.0.0.1:1',
+		);
+		if (res === 'websocket-unsupported') throw new Error('unreachable');
+
 		const html = await res.text();
-		expect(html).toContain('Gateway unreachable');
-		expect(html).toContain('empires-server.py');
+		expect(html).not.toContain('127.0.0.1');
+		expect(html).not.toContain('empires-server.py');
+		expect(html).not.toContain('--port');
+		expect(html).not.toContain('GATEWAY_ORIGIN');
 	});
 
 	test('declines a WebSocket upgrade rather than breaking it silently', async () => {

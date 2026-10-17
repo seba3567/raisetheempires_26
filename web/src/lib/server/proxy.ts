@@ -163,15 +163,20 @@ export async function proxyToGateway(
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+
+    // The detail belongs in the log, not in the response. Telling whoever
+    // triggered this to "start empires-server.py on 127.0.0.1:5005" hands a
+    // stranger the internal address and the operator's command line, and this
+    // page is shown to players, not to whoever runs the box.
+    console.error(`[proxy] ${incoming.pathname} -> ${config.gateway.origin}: ${reason}`);
+
     return new Response(
       `<!doctype html><meta charset="utf-8">
-       <title>Gateway unreachable</title>
+       <title>Game server not responding</title>
        <body style="font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">
        <h1>Game server not responding</h1>
-       <p>The AMF0 gateway at <code>${config.gateway.origin}</code> could not be reached.</p>
-       <p>Start it with:</p>
-       <pre style="background:#f4f4f5;padding:1rem;border-radius:.5rem">python empires-server.py --port 5005 --no-popup</pre>
-       <p><small>${reason}</small></p>`,
+       <p>The game server could not be reached. This is on our side, not yours.</p>
+       <p>Try again in a moment.</p>`,
       { status: 502, headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }
