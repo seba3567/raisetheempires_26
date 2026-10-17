@@ -130,6 +130,7 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 
 | Path | Purpose |
 | --- | --- |
+| `web/` | Public front end — Bun + TypeScript. See `web/README.md` |
 | `empires-server.py` | Flask app and AMF gateway (2.4k lines, entry point) |
 | `battle_engine.py` | Combat resolution |
 | `quest_engine.py`, `state_machine.py` | Quest progression |
@@ -138,6 +139,37 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 | `mod_engine.py` | Mod loading (xmldiff / jsonpatch) |
 | `crc64_go_iso.py` | `zid` checksum — typed and strict-checked |
 | `test/` | pytest suite (`*_test.py`, legacy naming) |
+
+## Two services, and which one is public
+
+```
+navegador -> web/ (Bun, :8080)  ->  empires-server.py (Flask, 127.0.0.1:5005)
+```
+
+`web/` is the only thing that should ever be exposed. It owns the landing page,
+accounts, friendships and progress, and proxies everything else through to the
+Python gateway.
+
+The gateway stays in Python because the AMF0 payload dialect is a compatibility
+contract with a client we cannot recompile. The practical consequence is that the
+Flask dev server is never reachable from outside, so **the previously planned
+app-factory and WSGI work is dropped, not deferred**. Do not start it.
+
+Run both while developing:
+
+```powershell
+cd web; bun run start                                    # :8080, public
+..\.venv\Scripts\python.exe empires-server.py --port 5005 --no-popup   # loopback
+```
+
+## Everyday commands (web)
+
+```powershell
+cd web
+bun test          # 78 tests
+bun run typecheck # tsc --noEmit
+bun run scripts/manage-user.ts list-admins
+```
 
 ## Adding tests
 
