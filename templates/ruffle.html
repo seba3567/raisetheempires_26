@@ -232,7 +232,7 @@
 														allowFullscreen: true,
 														quality: "high",
 														//autoplay: true,
-														parameters: "serverTime={{ time }}&is_staging=true&debugMode=true&generateSchema=1&sn_app_url=\&stats=1"
+														parameters: "serverTime={{ time }}&is_staging=true&debugMode=true&generateSchema=1&app_url={{ request.host_url }}&sn_app_url=\&stats=1"
 													}).then(() => {
 														console.info("Ruffle successfully loaded the file");
 													}).catch((e) => {

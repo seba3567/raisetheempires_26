@@ -43,33 +43,47 @@ pip install -e ".[dev]"
 `conftest.py` at the repo root puts the project on `sys.path`, so `pytest`
 works from a clean checkout. You no longer need to export `PYTHONPATH`.
 
-## The browser problem, and what replaces it
+## The browser problem, and what it needed
 
 The Flash client reaches the server over AMF remoting through
-`NetConnection.connect()`. **Ruffle does not implement that method** — it is
-listed as a missing member at <https://ruffle.rs/compatibility/avm2> — so
-loading the game in a browser with Ruffle renders the UI but every server call
-fails with `Error #2126: NetConnection object must be connected`. No Ruffle
-config flag changes that, and none of the SWF variants shipped in this repo
-avoid `NetConnection`.
+`NetConnection.connect()`. Ruffle only accepts URLs starting with `http://` or
+`https://`; anything else is stubbed out and every subsequent `call()` throws
+`Error #2126: NetConnection object must be connected`.
 
-`test/test_gateway_e2e.py` is therefore the substitute for clicking through the
-game. It boots the **real Flask app** against a throwaway SQLite database and
-drives `post_gateway` over the real gateway URL with **real AMF0 bytes**, the
-same way the client encodes them:
+The client builds its endpoint URLs from the `app_url` FlashVar
+(`GlobalEngine.parseFlashVars`). When that is absent it falls back to the
+constant compiled into the SWF:
 
-- `TestGatewayProtocol` — envelope invariants for every call
-- `TestPlayerBootstrap` — `UserService.initUser`, zid stability, world generation
-- `TestFleetLifecycle` — `WorldService.addFleet`
-- `TestWorldActions` — `WorldService.performAction` mutating the world
-- `TestStartupServices` — the social calls fired at boot
+```actionscript
+// Config.as
+public static var BASE_PATH:String = "127.0.0.1";
+public static var SERVICES_GATEWAY_PATH:String = BASE_PATH + "flashservices/gateway.php";
+```
 
-When you change an engine, run this file. If it passes, the client contract is
-intact even though no browser is involved.
+`127.0.0.1flashservices/gateway.php` is scheme-less, so Ruffle dropped the
+connection. Two fixes make `/ruffle.html` fully playable:
 
-To see the game itself, you still need real Flash via NPAPI (Basilisk +
-Flash Player 32.0.0.371 from the Internet Archive) and the `/nodebug.html`
-page — see `FLASH.md`. `/ruffle.html` is still useful for the UI and assets.
+1. **`app_url` must be passed as an absolute URL.** Note it is `app_url`, not
+   `sn_app_url` — the latter feeds a different constant and does nothing for the
+   gateway. `templates/ruffle.html` passes `app_url={{ request.host_url }}`.
+2. **The gateway must accept both AMF array encodings.** Flash encodes arrays as
+   dense AMF arrays (pyamf decodes them to lists); Ruffle encodes them as
+   objects with numeric keys (`{0: ...}`). `_amf_as_list` in
+   `empires-server.py` accepts both. Without it the batch comes through as a
+   dict and dispatch fails with
+   `AttributeError: 'int' object has no attribute 'functionName'`.
+
+Because of this the server also registers absolute routes alongside the legacy
+relative ones: `/flashservices/gateway.php`, `/record_stats.php`, `/en_US.xml`
+and `/questSettings.xml`.
+
+`test/test_gateway_e2e.py` covers the AMF protocol, and
+`test_crc64.py` pins the `zid` checksum. Together they are the regression net
+for changes to the gateway or the engines.
+
+Ruffle is loaded from a **version-pinned URL with a Subresource Integrity
+hash** — keep it that way. For actual play without a browser, real Flash via
+NPAPI still works through `/nodebug.html` (see `FLASH.md`).
 
 ## Tooling decisions
 

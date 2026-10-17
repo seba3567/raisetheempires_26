@@ -29,17 +29,17 @@ This project is dedicated to preserving this Flash game so that it's not lost to
 
 ## Playing in a modern browser
 
-`/ruffle.html` loads the original client through [Ruffle](https://ruffle.rs), so you
-can inspect the game UI and its assets without installing the Adobe Flash Player.
+`/ruffle.html` loads the original client through [Ruffle](https://ruffle.rs), so
+the game is playable in a current browser **without installing the Adobe Flash
+Player**.
 
-**It is not fully playable there yet.** The client talks to the server over AMF
-remoting through `flash.net.NetConnection.connect()`, and Ruffle rejects the
-scheme-less URL the client builds (`flashservices/gateway.php`), so every server
-call fails with `Error #2126: NetConnection object must be connected`. The UI
-loads and the ExternalInterface bridge works; the game cannot talk to the
-backend.
+If you get `Error #2126: NetConnection object must be connected`, the client
+fell back to the host compiled into the SWF (`127.0.0.1`) instead of the served
+one. That happens when the `app_url` FlashVar is missing — note it is `app_url`,
+not `sn_app_url`. Ruffle's `NetConnection.connect()` only accepts `http://` and
+`https://` URLs, and the compiled-in default has no scheme.
 
-For actual gameplay use `/nodebug.html` with real Flash — see
+`/nodebug.html` is the equivalent page for real Flash — see
 [FLASH.md](FLASH.md).
 
 Ruffle is loaded from a **version-pinned URL with a Subresource Integrity hash**.

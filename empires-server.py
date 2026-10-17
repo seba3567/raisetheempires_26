@@ -525,12 +525,14 @@ def game_settings_file():
     return send_from_directory_mod("assets/29oct2012", "gameSettings_with_fixes.xml")
 
 
+@app.route("/en_US.xml")
 @app.route("/127.0.0.1en_US.xml")
 def en_us_file():
     # return send_from_directory_mod("assets/32995", "en_US.xml")
     return send_from_directory_mod("assets/29oct2012", "en_US.xml")
 
 
+@app.route("/questSettings.xml")
 @app.route("/127.0.0.1questSettings.xml")
 def quest_settings_file():
     return send_from_directory_mod("assets/29oct2012", "questSettings_with_fixes.xml")
@@ -766,13 +768,33 @@ def send_from_directory_mod(directory, filename, **options):
     return mod_engine.mod.get(path)() if path in mod_engine.mod else send_from_directory(absolute_directory, filename, **options)
 
 
-# The Flash client prefixes these endpoints with the value of the sn_app_url
-# FlashVar. When that is empty it falls back to the bare hostname, producing a
-# relative URL such as "127.0.0.1flashservices/gateway.php". Relative URLs are
-# fine for record_stats (plain URLRequest), but Ruffle's NetConnection.connect()
-# only accepts URLs starting with http:// or https:// -- anything else is
-# stubbed out and every call() afterwards throws Error #2126. So the absolute
-# variants are registered alongside the legacy relative ones.
+def _amf_as_list(value):
+    """Return ``value`` as a list, decoding dense integer-keyed AMF objects.
+
+    Flash's own NetConnection encodes arrays as dense AMF arrays, which pyamf
+    decodes to Python lists. Other AVM2 implementations -- Ruffle among them --
+    encode them as objects with numeric keys instead, which pyamf decodes to
+    ``{0: ..., 1: ...}``. The game logic expects lists, so accept both shapes.
+
+    Only the two places the client sends arrays are touched: the batch's
+    transaction list and each transaction's ``params``. Everything else keeps
+    its original type, because pyamf objects are dict subclasses that the
+    dispatch loop reads with attribute access (``reqq.functionName``).
+    """
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        if keys and all(isinstance(k, int) and not isinstance(k, bool) for k in keys):
+            return [value[k] for k in sorted(keys)]
+    return value
+
+
+# The Flash client builds its endpoint URLs from the app_url FlashVar. When that
+# is missing it falls back to the compiled-in default "127.0.0.1", producing a
+# scheme-less URL such as "127.0.0.1flashservices/gateway.php". Relative URLs
+# are fine for record_stats (plain URLRequest), but Ruffle's
+# NetConnection.connect() only accepts URLs starting with http:// or https:// --
+# anything else is stubbed out and every call() afterwards throws Error #2126.
+# So the absolute variants are registered alongside the legacy relative ones.
 @app.route('/flashservices/gateway.php', methods=['POST'])
 @app.route('/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/gateway.php', methods=['POST'])
 def post_gateway():
@@ -785,8 +807,11 @@ def post_gateway():
     print(resp_msg.bodies)
     # print(resp_msg.bodies[0])
 
+    batch_body = resp_msg.bodies[0][1].body
     resps = []
-    for reqq in resp_msg.bodies[0][1].body[1]:
+    for reqq in _amf_as_list(batch_body[1]):
+        if isinstance(reqq, dict) and reqq.get('params') is not None:
+            reqq['params'] = _amf_as_list(reqq['params'])
         if reqq.functionName == 'UserService.initUser':
             try:
                 resps.append(user_response())

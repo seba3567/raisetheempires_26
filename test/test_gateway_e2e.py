@@ -305,6 +305,21 @@ class TestPlayerPages:
         for flashvar in ("serverTime=", "sn_app_url=", "stats=1"):
             assert flashvar in body
 
+    def test_ruffle_page_passes_app_url_as_absolute(self, client):
+        """``app_url`` must be absolute or Ruffle cannot open the AMF socket.
+
+        GlobalEngine.parseFlashVars rebuilds the gateway URL from this FlashVar.
+        Without it the client falls back to the host compiled into the SWF
+        ("127.0.0.1"), producing a scheme-less URL that Ruffle's
+        NetConnection.connect() rejects -- every call then fails with
+        Error #2126. Note it is ``app_url``; ``sn_app_url`` feeds a different
+        constant and does not affect the gateway.
+        """
+        body = client.get("/ruffle.html").get_data(as_text=True)
+
+        assert "app_url=http://" in body, "app_url must be an absolute http URL"
+        assert "app_url=" in body and "app_url=\\" not in body.replace("&sn_app_url=\\", "")
+
     def test_ruffle_bootstrap_has_no_broken_line_continuation(self, client):
         """A missing backslash leaves a raw newline inside a JS string literal.
 
