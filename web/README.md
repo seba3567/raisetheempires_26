@@ -154,3 +154,21 @@ proxy no reenvía `Host`, Flask ve `127.0.0.1:5005`, el `app_url` apunta al
 gateway directo y el juego se salta este servicio por completo — en silencio, sin
 ningún error visible. Hay un test que lo fija:
 `tests/proxy.test.ts` → "gives Flask the PUBLIC host, not the upstream address".
+
+### Y el detalle que lo deja en pantalla negra
+
+`fetch` de Bun **decodifica el body**: infla un `gzip` y devuelve bytes planos,
+pero deja el header `Content-Encoding: gzip` en la respuesta. Si el proxy reenvía
+ese header, el navegador intenta descomprimir texto que ya es texto y la página
+muere con `ERR_CONTENT_DECODING_FAILED`. Sin otros síntomas: pantalla negra.
+
+Por eso `proxy.ts` distingue los headers de petición de los de respuesta. En la
+respuesta se descartan `content-encoding` y `content-length`; en la petición se
+reenvían, porque el body de la petición sí viaja tal cual.
+
+**Consecuencia:** a través del proxy el juego se sirve **sin comprimir**. En
+localhost da igual, pero para un despliegue público conviene recomprimir
+selectivamente (solo texto/xml/json/js/css por encima de cierto tamaño, nunca lo
+que ya venía codificado). Está pendiente a propósito: meter una segunda capa de
+codificación sin poder medir la latencia real sería cambiar un fallo visible por
+uno invisible.

@@ -203,3 +203,62 @@ describe("proxyToGateway", () => {
     expect(res.status).toBe(413);
   });
 });
+
+describe("content encoding", () => {
+  // Regression: Flask compresses with gzip. fetch() inflates the body for us but
+  // leaves Content-Encoding in the headers, so forwarding it made the browser
+  // try to inflate plain text. The symptom was a blank page and nothing else:
+  // ERR_CONTENT_DECODING_FAILED.
+
+  let gzipUpstream: ReturnType<typeof Bun.serve>;
+  let gzipOrigin = "";
+
+  beforeAll(async () => {
+    // Real gzip bytes, so the failure mode is reproduced rather than simulated.
+    const compressed = await gzip("<!DOCTYPE html><html>hola</html>");
+    gzipUpstream = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(compressed, {
+          headers: { "content-type": "text/html", "content-encoding": "gzip" },
+        });
+      },
+    });
+    gzipOrigin = `http://127.0.0.1:${gzipUpstream.port}`;
+  });
+
+  afterAll(() => {
+    gzipUpstream?.stop(true);
+  });
+
+  test("does not claim an encoding that fetch already decoded", async () => {
+    const res = await proxyToGateway(
+      new Request("http://localhost:8080/home.html", {
+        headers: { "accept-encoding": "gzip, deflate" },
+      }),
+      gzipOrigin,
+    );
+    if (res === "websocket-unsupported") throw new Error("unreachable");
+
+    expect(res.headers.get("content-encoding")).toBeNull();
+    expect(res.headers.get("content-length")).toBeNull();
+    expect(await res.text()).toBe("<!DOCTYPE html><html>hola</html>");
+  });
+
+  test("the bytes on the wire are the decoded ones, not gzip", async () => {
+    const res = await proxyToGateway(new Request("http://localhost:8080/home.html"), gzipOrigin);
+    if (res === "websocket-unsupported") throw new Error("unreachable");
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x3c); // '<'
+    expect(bytes[1]).toBe(0x21); // '!'
+  });
+});
+
+async function gzip(text: string): Promise<ArrayBuffer> {
+  const stream = new CompressionStream("gzip");
+  const writer = stream.writable.getWriter();
+  void writer.write(new TextEncoder().encode(text));
+  void writer.close();
+  return await new Response(stream.readable).arrayBuffer();
+}

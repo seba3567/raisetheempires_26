@@ -28,15 +28,33 @@ const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 
-function shouldForward(name: string): boolean {
+function shouldForwardRequestHeader(name: string): boolean {
   const lower = name.toLowerCase();
   return !HOP_BY_HOP.has(lower) && lower !== "host" && lower !== "content-length";
+}
+
+/**
+ * Response headers need one more exclusion than request headers.
+ *
+ * `fetch` decodes the body for us: it transparently inflates a gzipped response
+ * and hands back plain bytes, while leaving `Content-Encoding: gzip` in the
+ * headers. Forwarding that header makes the browser try to inflate text that is
+ * already plain, and the page dies with ERR_CONTENT_DECODING_FAILED — a blank
+ * screen with no other symptom.
+ *
+ * Content-Length goes for the same reason: it described the compressed length,
+ * which no longer matches the body we are forwarding.
+ */
+function shouldForwardResponseHeader(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (!shouldForwardRequestHeader(name)) return false;
+  return lower !== "content-encoding" && lower !== "content-length";
 }
 
 function buildHeaders(req: Request): Headers {
   const headers = new Headers();
   for (const [name, value] of req.headers) {
-    if (shouldForward(name)) headers.set(name, value);
+    if (shouldForwardRequestHeader(name)) headers.set(name, value);
   }
 
   const url = new URL(req.url);
@@ -93,7 +111,7 @@ export async function proxyToGateway(
 
     const headers = new Headers();
     for (const [name, value] of upstream.headers) {
-      if (shouldForward(name)) headers.set(name, value);
+      if (shouldForwardResponseHeader(name)) headers.set(name, value);
     }
 
     return new Response(upstream.body, {
