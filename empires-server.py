@@ -788,6 +788,38 @@ def _amf_as_list(value):
     return value
 
 
+def _amf_detach(value, _path=None):
+    """Rebuild ``value`` so that no object appears twice by identity.
+
+    pyamf's AMF0 encoder writes a reference marker (0x07) whenever the same
+    Python object is encountered a second time. Flash resolves those, but
+    Ruffle's ``deserialize_value_impl`` does not implement ``AmfValue::Reference``
+    and logs an error, yielding ``undefined`` in the client -- which surfaces as
+    null objects in the game (e.g. ``TInitRequestFriends/onComplete`` throwing
+    #1009).
+
+    Several handlers legitimately reuse one dict in more than one place (for
+    example the same ally appears in several friend lists), so the response is
+    rebuilt with fresh containers. Scalars are returned untouched: repeating
+    ``None`` or an int never produces a reference marker.
+    """
+    if _path is None:
+        _path = set()
+
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in _path:
+            # Cyclic payload; AMF has no way to express it anyway.
+            print("WARNING: cyclic structure in gateway response, truncating")
+            return None
+        _path = _path | {id(value)}
+
+        if isinstance(value, dict):
+            return {k: _amf_detach(v, _path) for k, v in value.items()}
+        return [_amf_detach(item, _path) for item in value]
+
+    return value
+
+
 # The Flash client builds its endpoint URLs from the app_url FlashVar. When that
 # is missing it falls back to the compiled-in default "127.0.0.1", producing a
 # scheme-less URL such as "127.0.0.1flashservices/gateway.php". Relative URLs
@@ -1229,11 +1261,11 @@ def post_gateway():
         if reqq.functionName != 'UserService.tutorialProgress' and reqq.functionName != 'WorldService.performAction':
             report_other_log(reqq.functionName, resps[-1] if resps else None, reqq, resp_msg.bodies[0][0])
 
-    emsg = {
+    emsg = _amf_detach({
         "serverTime": datetime.now().timestamp(),
         "errorType": 0,
         "data": resps
-    }
+    })
 
     req = remoting.Response(emsg)
     ev = remoting.Envelope(pyamf.AMF0)
