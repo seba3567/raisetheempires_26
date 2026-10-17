@@ -36,6 +36,10 @@ describe('accessDenied classification', () => {
 			// The 2013 standalone launcher. /juego is the player now.
 			'/ruffle.html',
 			'/nodebug.html',
+			// The 2013 avatar picker. /registro has no avatar step yet, so
+			// deleting this would drop the capability rather than migrate it.
+			'/new.html',
+			'/chooseavatar/blank.png',
 			'/unlock_quest/quest_0100',
 			'/complete_quest/quest_0100',
 			'/remove_quest/quest_0100',
@@ -69,8 +73,10 @@ describe('accessDenied classification', () => {
 			'/css/zbar.css',
 			'/img/avatars/blank.png',
 			'/socket.io/',
-			'/new.html',
-			'/releases.html',
+			// The 2013 friends page used to be open to anyone and dumped every
+			// player's world name, level and xp. It is now a redirect into the
+			// admin area, so the gate catches the path itself.
+			'/friends.html',
 		]) {
 			expect(`${path}: ${accessDenied(path)}`).toBe(`${path}: false`);
 		}

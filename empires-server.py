@@ -489,7 +489,10 @@ def no_debug():
 @app.route("/wipe_session", methods=['GET', 'POST'])
 def wipe_session():
     session.clear()
-    response = make_response(redirect('/login.html'))
+    # Used to land on /login.html, the 2013 session picker. That page is gone;
+    # the front door is this service's own landing page, which offers both
+    # signing in and starting a new account.
+    response = make_response(redirect('/'))
     # response.set_cookie('session', '', expires=0)
     return response
 
@@ -752,19 +755,17 @@ def en_us_file():
 def quest_settings_file():
     return send_from_directory_mod("assets/29oct2012", "questSettings_with_fixes.xml")
 
-@app.route("/releases.html")
-def releases():
-    return render_template("releases.html", version=version)
-
 @app.route("/friends.html")
 def friends_page():
-    saves = get_saves()
-    return render_template("friends.html", version=version, release_date=release_date, dropdown_items=get_sessions_dropdown_info(saves), zid=str(get_zid()))
+    """The 2013 player list, gone. /admin/sessions replaced it.
 
-@app.route("/login.html")
-def login_page():
-    saves = get_saves()
-    return render_template("login.html", version=version, release_date=release_date, dropdown_items=get_sessions_dropdown_info(saves))
+    It dumped every player's world name, level and xp into the page, which is
+    the same data /list_session hands over and for the same reason it is
+    admin-only there. ``ruffle.html`` and ``nodebug.html`` linked here as "My
+    Neighbors"; they now link to /admin/sessions, which renders the same list
+    with the same gate.
+    """
+    return redirect('/admin/sessions')
 
 def get_avail_avatars():
     # list(set([u for u in fetch_urls() if u.endswith('.png')]))

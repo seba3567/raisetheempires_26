@@ -34,6 +34,10 @@ const ADMIN_ONLY_EXACT: readonly string[] = [
   // working on the client directly, so it is an admin tool rather than a page.
   "/ruffle.html",
   "/nodebug.html",
+  // The 2013 avatar picker. /registro does not offer a choice yet, so this
+  // stays rather than losing the capability; it is owner-only until the
+  // account form grows an avatar step.
+  "/new.html",
 ];
 
 /** Prefixes, for routes that carry a parameter after them. */
@@ -43,6 +47,9 @@ const ADMIN_ONLY_PREFIXES: readonly string[] = [
   "/complete_quest/",
   "/remove_quest/",
   "/seed/",
+  // Writes the caller's profilePic, so it belongs with the rest of the 2013
+  // owner tools.
+  "/chooseavatar/",
   // This service's own replacement for /save-editor. It is a route here rather
   // than a gateway path, but it changes game state just the same, so it gets
   // the same policy as everything above.

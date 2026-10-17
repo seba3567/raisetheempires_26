@@ -1,7 +1,9 @@
 function logout() {
     document.cookie = "session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
     console.log("Logout. Session cookie eaten");
-    location.href = "/login.html";
+    // Was /login.html, the 2013 session picker. That page is gone; this
+    // service's landing page is where you sign in or start an account.
+    location.href = "/";
 }
 
 function newPlayer() {

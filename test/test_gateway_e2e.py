@@ -247,6 +247,51 @@ class TestStartupServices:
         assert isinstance(body["data"], list)
 
 
+class TestRetired2013Pages:
+    """The 2013 web cluster, and where each piece went.
+
+    Every page here was a launcher or a session picker from before accounts
+    existed. The routes are asserted rather than left to rot: a stale template
+    that nothing renders any more should 404, and every redirect that used to
+    land on a dead page should land on a live one.
+    """
+
+    @pytest.mark.parametrize("path", ["/index.html", "/releases.html", "/login.html"])
+    def test_retired_pages_are_gone(self, client, path):
+        """Their only consumers went with them, so they must not linger.
+
+        ``index.html`` was shadowed by this service's own landing page,
+        ``releases.html`` was linked only from ``index.html``, and
+        ``login.html`` was the session picker the account system replaced.
+        """
+        assert client.get(path).status_code == 404
+
+    def test_friends_page_points_at_the_migrated_list(self, client):
+        """It used to print every player's world, level and xp to anyone.
+
+        ``/admin/sessions`` renders the same list behind the admin gate, and
+        the two 2013 debug players now link straight there.
+        """
+        response = client.get("/friends.html")
+
+        assert response.status_code in (301, 302, 303, 307, 308)
+        assert response.headers["Location"].endswith("/admin/sessions")
+
+    def test_wiping_a_save_lands_somewhere_that_exists(self, client):
+        """It redirected to /login.html, which no longer renders."""
+        response = client.get("/wipe_session")
+
+        assert response.status_code in (301, 302, 303, 307, 308)
+        assert response.headers["Location"] in ("/", "http://localhost/")
+
+    def test_the_changelog_is_still_served(self, client):
+        """Data, not a 2013 page: nothing renders it, but it is still content."""
+        response = client.get("/changelog.txt")
+
+        assert response.status_code == 200
+        assert response.get_data(as_text=True).strip()
+
+
 class TestPlayerPages:
     """Smoke tests for the HTML the browser actually renders.
 
