@@ -274,6 +274,11 @@
 			<p class="text-xs text-slate-500">
 				{backups.length} en total. El primero es la partida anterior a la actual. Restaurar
 				guarda el estado actual antes de reemplazarlo, así que también se puede deshacer.
+				{#if backups.length >= (empire?.maxBackups ?? Infinity)}
+					Se guardan los {empire?.maxBackups} más recientes: cada respaldo es una copia
+					completa de la partida, así que mantenerlos todos hacía que el juego cargara cada
+					menú más lento.
+				{/if}
 			</p>
 			<ul class="mt-3 max-h-96 divide-y divide-empire-800 overflow-y-auto text-sm">
 				{#each shownBackups as backup (backup.index)}

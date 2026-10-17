@@ -41,7 +41,9 @@ from flask import (
 )
 
 from save_engine import (
+    MAX_BACKUPS,
     InvalidSaveException,
+    backup_chain,
     base_path,
     db,
     install_path,
@@ -272,12 +274,7 @@ def _backup_chain():
     it replaced, so walking down the chain is exactly the order the 2013 editor
     listed them in. Index 0 is the last save before the current one.
     """
-    chain = []
-    node = session
-    while "backup" in node:
-        node = node["backup"]
-        chain.append(node)
-    return chain
+    return backup_chain()
 
 
 def _backup_count():
@@ -352,6 +349,9 @@ def editor_state():
         },
         "raw": snapshot,
         "backups": _backup_count(),
+        # The editor shows the ceiling instead of hard-coding it, so raising
+        # MAX_BACKUPS in save_engine is a one-line change.
+        "maxBackups": MAX_BACKUPS,
         "backupList": [
             {
                 "index": i,

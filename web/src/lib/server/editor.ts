@@ -34,10 +34,17 @@ export interface EditorState {
 	raw: unknown;
 	backups: number;
 	/**
+	 * The ceiling the gateway trims the chain to (`MAX_BACKUPS`).
+	 *
+	 * Carried through instead of hard-coded in the UI so raising it in
+	 * save_engine.py is a one-line change that the page follows.
+	 */
+	maxBackups: number;
+	/**
 	 * The stacked backups, newest first, so an admin can roll back.
 	 *
 	 * `index` is what `/editor/restore` takes: 0 is the save that was replaced
-	 * most recently. 128 of them is normal for a played-on world, so the UI
+	 * most recently. The gateway keeps the `maxBackups` most recent, so the UI
 	 * shows the tail and keeps the list scrollable.
 	 */
 	backupList: BackupEntry[];
@@ -52,9 +59,9 @@ export interface BackupEntry {
 	/**
 	 * What this backup actually holds.
 	 *
-	 * A played-on world stacks over a hundred of them and the timestamps alone
-	 * do not say which one you want, so the two numbers that move between saves
-	 * an hour apart are carried along.
+	 * A played-on world stacks dozens of them and the timestamps alone do not
+	 * say which one you want, so the two numbers that move between saves an
+	 * hour apart are carried along.
 	 */
 	level: number | null;
 	empirePoints: number | null;
