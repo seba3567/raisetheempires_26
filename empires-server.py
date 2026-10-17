@@ -58,6 +58,7 @@ from save_engine import (
     ensure_fleets,
     install_path,
     log_path,
+    logger,
     lookup_objects_save_by_position,
     my_games_path,
     save_database_uri,
@@ -76,6 +77,7 @@ import json
 import random
 import threading  #, webbrowaser
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
 import pyamf
 import pyamf.amf0
@@ -1091,6 +1093,50 @@ def send_from_directory_mod(directory, filename, **options):
     return mod_engine.mod.get(path)() if path in mod_engine.mod else send_from_directory(absolute_directory, filename, **options)
 
 
+@contextmanager
+def _tolerate_batch_failure(call_count):
+    """Keep one bad call in an AMF batch from killing the rest of it.
+
+    Every gateway crash this week was the same shape: a handler raised something
+    the narrow ``except`` around it did not name, it escaped to Flask, and Flask
+    answered 500. Ruffle reads a 500 as an unreachable gateway and retries the
+    same batch forever, so one bad call cost the player the whole turn.
+
+    Three of them in a row also showed the cost of fixing that one exception at
+    a time -- ``IndexError`` caught but ``TypeError`` not, ``pyamf.DecodeError``
+    caught but ``OSError`` not. Enumerating the next one is guesswork, so this
+    catches everything at the boundary instead and lets the specific handlers
+    above it stay narrow, where they can carry a real recovery.
+
+    The exception is swallowed and logged at ERROR with the full traceback.
+    That traceback is how each of these was found in the first place, so it has
+    to keep reaching log.txt -- this changes who the client hears from, not
+    whether we write it down.
+
+    As a context manager rather than a try/except so the 425-line dispatch chain
+    below keeps its indentation.
+    """
+    try:
+        yield
+    except Exception:
+        logger.error(
+            "Gateway batch failed after at least one call; answering the rest",
+            exc_info=True,
+        )
+
+
+def _pad_batch_results(resps, call_count):
+    """Give every call in a batch an answer, even ones that raised.
+
+    The client matches responses to requests, so a short list is not a shorter
+    turn -- it is a mismatched one. Anything that did not get a real answer
+    gets the empty result, which is what an unimplemented service returns anyway.
+    """
+    while len(resps) < call_count:
+        resps.append(dummy_response())
+    return resps
+
+
 def _amf_as_list(value):
     """Return ``value`` as a list, decoding dense integer-keyed AMF objects.
 
@@ -1179,435 +1225,443 @@ def post_gateway():
     # print(resp_msg.bodies[0])
 
     batch_body = resp_msg.bodies[0][1].body
+    calls = _amf_as_list(batch_body[1])
     resps = []
-    for reqq in _amf_as_list(batch_body[1]):
-        # The batch is a list of calls and the client is free to put anything in
-        # it. pyamf decodes a call into an ASObject -- a dict subclass that also
-        # answers attribute access, which is why `reqq.functionName` below is
-        # not a bug -- but a stray scalar used to reach that line and raise
-        # AttributeError, taking every other call in the same batch down with
-        # it. Skip it and answer the rest.
-        if not isinstance(reqq, dict):
-            print("Skipping non-object entry in AMF batch:", repr(reqq))
-            continue
-        if reqq.get('params') is not None:
-            reqq['params'] = _amf_as_list(reqq['params'])
-        if reqq.functionName == 'UserService.initUser':
-            try:
-                resps.append(user_response())
-            except InvalidSaveException as error:
-                print('Handling InvalidSaveException error:', error)
-                # return make_response(redirect('/save-editor')) #can't do it here
+    with _tolerate_batch_failure(len(calls)):
+        for reqq in calls:
+            # The batch is a list of calls and the client is free to put anything in
+            # it. pyamf decodes a call into an ASObject -- a dict subclass that also
+            # answers attribute access, which is why `reqq.functionName` below is
+            # not a bug -- but a stray scalar used to reach that line and raise
+            # AttributeError, taking every other call in the same batch down with
+            # it. Skip it and answer the rest.
+            if not isinstance(reqq, dict):
+                print("Skipping non-object entry in AMF batch:", repr(reqq))
+                continue
+            if reqq.get('params') is not None:
+                reqq['params'] = _amf_as_list(reqq['params'])
+            if reqq.functionName == 'UserService.initUser':
+                try:
+                    resps.append(user_response())
+                except InvalidSaveException as error:
+                    print('Handling InvalidSaveException error:', error)
+                    # return make_response(redirect('/save-editor')) #can't do it here
 
-        elif reqq.functionName == 'DataServicesService.getRequestFriends':
-            resps.append(friend_response())
-        elif reqq.functionName == 'PVPService.getUsersInvaderChallenges':
-            resps.append(invader_response())
-        elif reqq.functionName == 'ZlingshotService.presence':
-            resps.append(zlingshot_response())
-        elif reqq.functionName == 'DataServicesService.getRecentPlayers':
-            resps.append(recent_response())
-        elif reqq.functionName == 'DataServicesService.getFriendsInfo':
-            resps.append(friend_info_response())
-        elif reqq.functionName == 'UserService.tutorialProgress':
-            resps.append(tutorial_response(reqq.params[0], reqq.sequence, resp_msg.bodies[0][0]))
-        elif reqq.functionName == 'WorldService.performAction':
-            wr = perform_world_response(reqq.params)
-            resps.append(wr)
-            report_world_log(reqq.params[0] + ' id ' + str(reqq.params[1].id) + '@' + reqq.params[1].position,
-                             wr["data"], reqq.params, reqq.sequence, resp_msg.bodies[0][0],
-                             wr["metadata"].get('QuestComponent'), wr["metadata"].get('newPVE'))
-        elif reqq.functionName == 'DataServicesService.getSuggestedNeighbors':
-            resps.append(neighbor_suggestion_response())
-        elif reqq.functionName == 'UserService.setSeenFlag':
-            resps.append(seen_flag_response(reqq.params[0]))
-        elif reqq.functionName == 'PVPService.createRandomFleetChallenge':
-            resps.append(random_fleet_challenge_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.spawnFleet':
-            resps.append(spawn_fleet(reqq.params[0]))
-        elif reqq.functionName == 'PVPService.loadChallenge':
-            resps.append(load_challenge_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.resolveBattle':
-            try:
-                resps.append(battle_complete_response(reqq.params[0]))
-            except (StaleBattleReference, IndexError) as error:
-                print('Ignoring stale or out-of-range resolveBattle request:', error)
+            elif reqq.functionName == 'DataServicesService.getRequestFriends':
+                resps.append(friend_response())
+            elif reqq.functionName == 'PVPService.getUsersInvaderChallenges':
+                resps.append(invader_response())
+            elif reqq.functionName == 'ZlingshotService.presence':
+                resps.append(zlingshot_response())
+            elif reqq.functionName == 'DataServicesService.getRecentPlayers':
+                resps.append(recent_response())
+            elif reqq.functionName == 'DataServicesService.getFriendsInfo':
+                resps.append(friend_info_response())
+            elif reqq.functionName == 'UserService.tutorialProgress':
+                resps.append(tutorial_response(reqq.params[0], reqq.sequence, resp_msg.bodies[0][0]))
+            elif reqq.functionName == 'WorldService.performAction':
+                wr = perform_world_response(reqq.params)
+                resps.append(wr)
+                report_world_log(reqq.params[0] + ' id ' + str(reqq.params[1].id) + '@' + reqq.params[1].position,
+                                 wr["data"], reqq.params, reqq.sequence, resp_msg.bodies[0][0],
+                                 wr["metadata"].get('QuestComponent'), wr["metadata"].get('newPVE'))
+            elif reqq.functionName == 'DataServicesService.getSuggestedNeighbors':
+                resps.append(neighbor_suggestion_response())
+            elif reqq.functionName == 'UserService.setSeenFlag':
+                resps.append(seen_flag_response(reqq.params[0]))
+            elif reqq.functionName == 'PVPService.createRandomFleetChallenge':
+                resps.append(random_fleet_challenge_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.spawnFleet':
+                resps.append(spawn_fleet(reqq.params[0]))
+            elif reqq.functionName == 'PVPService.loadChallenge':
+                resps.append(load_challenge_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.resolveBattle':
+                try:
+                    resps.append(battle_complete_response(reqq.params[0]))
+                except (StaleBattleReference, IndexError) as error:
+                    print('Ignoring stale or out-of-range resolveBattle request:', error)
+                    resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.genericString':
+                resps.append(generic_string_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.streakBonus':
+                resps.append(streak_bonus_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.setWorldName':
+                resps.append(world_name_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.updateRoads':
+                resps.append(update_roads_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.streamPublish':
+                resps.append(stream_publish_response(reqq.params))
+            elif reqq.functionName == 'WorldService.stopMayhemEvent':
+                resps.append(stop_mayhem_response())
+            elif reqq.functionName == 'UserService.saveOptions':
+                resps.append(save_options_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.fullScreen':
+                resps.append(full_screen_response())
+            elif reqq.functionName == 'WorldService.viewZoom':
+                resps.append(view_zoom_response(reqq.params[0].get('zoom')))
+            elif reqq.functionName == 'WorldService.loadWorld':
+                resps.append(load_world_response(reqq.params))
+            elif reqq.functionName == 'VisitorService.help':
+                resps.append(tend_ally_response(reqq.params))
+            elif reqq.functionName == 'WorldService.beginNextCampaign':
+                resps.append(next_campaign_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.addFleet':
+                resps.append(add_fleet_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.assignConsumable':
+                try:
+                    resps.append(assign_consumable_response(reqq.params[0]))
+                except StaleBattleReference as error:
+                    print('Ignoring stale assignConsumable request:', error)
+                    resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.publishUserAction':
                 resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.genericString':
-            resps.append(generic_string_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.streakBonus':
-            resps.append(streak_bonus_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.setWorldName':
-            resps.append(world_name_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.updateRoads':
-            resps.append(update_roads_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.streamPublish':
-            resps.append(stream_publish_response(reqq.params))
-        elif reqq.functionName == 'WorldService.stopMayhemEvent':
-            resps.append(stop_mayhem_response())
-        elif reqq.functionName == 'UserService.saveOptions':
-            resps.append(save_options_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.fullScreen':
-            resps.append(full_screen_response())
-        elif reqq.functionName == 'WorldService.viewZoom':
-            resps.append(view_zoom_response(reqq.params[0].get('zoom')))
-        elif reqq.functionName == 'WorldService.loadWorld':
-            resps.append(load_world_response(reqq.params))
-        elif reqq.functionName == 'VisitorService.help':
-            resps.append(tend_ally_response(reqq.params))
-        elif reqq.functionName == 'WorldService.beginNextCampaign':
-            resps.append(next_campaign_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.addFleet':
-            resps.append(add_fleet_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.assignConsumable':
-            try:
-                resps.append(assign_consumable_response(reqq.params[0]))
-            except StaleBattleReference as error:
-                print('Ignoring stale assignConsumable request:', error)
+            elif reqq.functionName == 'UserService.sendUserNotification':
                 resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.publishUserAction':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.sendUserNotification':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.sendZaspReport':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.buyCrest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.buyHealth':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.buySlots':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.clearNotifications':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.createClan':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.getClanInfo':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.getNeighborClanInfo':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.loadAllianceBattle':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.postGroupFeed':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.processMemberQueue':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.removeMember':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.addTaunt':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.updateName':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.updateCrest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.updateTauntViewTime':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DeathMatchService.fetchOpponents':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DeathMatchService.joinRoom':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DeathMatchService.processRewardQueue':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.acceptQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.acceptDecoBuildableRepel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.acceptDefenseTowerRepel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.acceptedGDP':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.acceptedTOS':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.acceptFriendRepel':
-            resps.append(accept_friend_repel_response(reqq.params[0]))
-        elif reqq.functionName == 'CrossPromoService.accepted':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.acknowledgeTOSStatus':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.reactivateFightMeter':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DominationModeService.addDominationChat':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.addFriendPublish':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ClansService.completeQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.partRequest':
-            resps.append(part_request_response(reqq.params))
-        elif reqq.functionName == 'WorldService.beginQuestBattle':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'BlackMarketHelperService.tradeForPart':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.bookmarksDailySpin':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyBack':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'MiniGameService.buyMiniGameFuel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.buyCrewRepelPosition':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyExpansion':
-            resps.append(buy_expansion_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.buyFullHeal':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyItem':
-            resps.append(buy_item_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.buyItems':
-            resps.append(buy_items_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.useItem':
-            resps.append(use_item_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.buyMOTDItem':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyQuestRestartTask':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyQuestTask':
-            resps.append(buy_quest_task_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.buyRewardItem':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.calculateRansom':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.cancelUnstartedChallenge':
-            resps.append(cancel_unstarted_challenge_response())
-        elif reqq.functionName == 'UserService.checkForPromoReward':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.clearOldFlashTokens':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.clearIncentive':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.collectLeaderboards':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.completeSocialRepel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.crewNeighborPoll':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.crewZMCEvent':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'MiniGameService.dropBomb':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.energizerSetup':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.EPGiftSend':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.finishSpy':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.setEspionageHQData':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.exitBattle':
-            resps.append(exit_battle_response())
-        elif reqq.functionName == 'WorldService.expireAQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.getFightList':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.flashFeedRedeemItem':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.EPGiftThankYou':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.getAllChallenges':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DominationModeService.getDominationChat':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DominationModeService.getDominationModeOpponentList':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.getFBCreditPromoStatus':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'FeedService.getFeed':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.getLeaderboards':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.getNeighborVisitChallenges':
-            resps.append(neighbor_invader_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.getPrisonerInfo':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DataServicesService.getPromoData':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.getTargetingData':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.getTargetingGroups':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.grantWatchToEarnRewardNew':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DominationModeService.loadDominationModeBattle':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.loadEnemyFleetForChallenge':
-            resps.append(random_enemy_fleet_challenge_response(reqq.params[0]))
-        elif reqq.functionName == 'QuestSurvivalModeService.loadQuestSurvivalMode':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'SurvivalModeService.loadSurvivalMode':
-            resps.append(load_survival_mode_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.lcs':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DataServicesService.getMatchmakingUsersData':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.matchMakingOptFlag':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.mechlabStatus':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.megaSeriesReset':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ZlingshotService.fetch':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'MFSService.collectReward':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.motdAction':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.multiHarvest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DataServicesService.getRecommendedNeighbors':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.openDialog':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.promoAction':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.purchaseAmmoRefill':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.purchaseContractUnlock':
-            resps.append(purchase_contact_unlock(reqq.params[0]))
-        elif reqq.functionName == 'UserService.purchaseEnergyRefill':
-            resps.append(purchase_energy_refill_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.purchaseManaRefill':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.purchaseUnlock':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.globalPVPOptInOut':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.slotMachineSpin':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.slotMachineSpinBuy':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.immunityExtend':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.immunityStart':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.occupationPlace':
-            resps.append(occupation_place_response(reqq.params))
-        elif reqq.functionName == 'PVPService.pillage':
-            resps.append(pillage_response(reqq.params))
-        elif reqq.functionName == 'UserService.doFavQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.doSeenQuestNotification':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.questTreeReset':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.questTreeSetMode':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.questTreeStartQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.questTreeUnlockQuest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.rejectDecoBuildableRepel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.rejectDefenseTowerRepel':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.rejectFriendRepel':
-            resps.append(reject_friend_repel_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.removeExpiredInventory':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.removeExtraInventoryBuildings':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.removeExtraWorldBuildings':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setTitanName':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.allianceInviteRequest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.allianceJoinRequest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.crewRequest':
-            resps.append(crew_request_response(reqq.params))
-        elif reqq.functionName == 'RequestService.invasionHelpRequest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.neighborRequest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'RequestService.giftRequest':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.resetParliamentDestroyed':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.retrieveNeighborRepelChallenge':
-            resps.append(neighbor_repel_challenge_response(reqq.params))
-        elif reqq.functionName == 'PVPService.reviveAllies':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.reviveUnits':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.moveRoad':
-            resps.append(update_roads_response(reqq.params[0]))
-        elif reqq.functionName == 'WorldService.sellRoad':
-            resps.append(update_roads_response(reqq.params[0]))
-        elif reqq.functionName == 'PVPService.seenPrisonCampNotification':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.seenStrikeTeamComment':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.select':
-            resps.append(select_response(reqq.params[0]))
-        elif reqq.functionName == 'UserService.setCommandoAnimationDone':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setCurrentCampaign':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.setDefenderComment':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setEnergiserAnimationDone':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setFBCreditParticipation':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.setInvasionComment':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.setStrikeTeamComment':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setTag':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.spend':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DeathMatchService.loadBattle':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.startMayhemEvent':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'MiniGameService.loadGame':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'MiniGameService.stop':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.streamPublishWithComment':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.superOreOrder':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.setSurvivalModeToaster':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.treasureVaultSpin':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.unitDropRevealAll':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.unitDropSwitchUnit':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.unitUnlock':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.buyUnlimitedEnergy':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.unlockResource':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'DominationModeService.updateDefenseForce':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'WorldService.upgradeResearchBuilding':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.upgradeState':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.useItem':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'PVPService.useStrikeTeam':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.viralSurfacingSeen':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'VisitorService.accept':
-            resps.append(accept_tend_ally_response(reqq.params))
-        elif reqq.functionName == 'VisitorService.decline':
-            resps.append(decline_tend_ally_response(reqq.params))
-        elif reqq.functionName == 'VisitorService.helpedInvalid':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'UserService.grantWatchToEarnReward':
-            resps.append(dummy_response())
-        elif reqq.functionName == 'ZlingshotService.zoom':
-            resps.append(dummy_response())
-        else:
-            resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.sendZaspReport':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.buyCrest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.buyHealth':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.buySlots':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.clearNotifications':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.createClan':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.getClanInfo':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.getNeighborClanInfo':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.loadAllianceBattle':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.postGroupFeed':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.processMemberQueue':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.removeMember':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.addTaunt':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.updateName':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.updateCrest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.updateTauntViewTime':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DeathMatchService.fetchOpponents':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DeathMatchService.joinRoom':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DeathMatchService.processRewardQueue':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.acceptQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.acceptDecoBuildableRepel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.acceptDefenseTowerRepel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.acceptedGDP':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.acceptedTOS':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.acceptFriendRepel':
+                resps.append(accept_friend_repel_response(reqq.params[0]))
+            elif reqq.functionName == 'CrossPromoService.accepted':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.acknowledgeTOSStatus':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.reactivateFightMeter':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DominationModeService.addDominationChat':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.addFriendPublish':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ClansService.completeQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.partRequest':
+                resps.append(part_request_response(reqq.params))
+            elif reqq.functionName == 'WorldService.beginQuestBattle':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'BlackMarketHelperService.tradeForPart':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.bookmarksDailySpin':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyBack':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'MiniGameService.buyMiniGameFuel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.buyCrewRepelPosition':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyExpansion':
+                resps.append(buy_expansion_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.buyFullHeal':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyItem':
+                resps.append(buy_item_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.buyItems':
+                resps.append(buy_items_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.useItem':
+                resps.append(use_item_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.buyMOTDItem':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyQuestRestartTask':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyQuestTask':
+                resps.append(buy_quest_task_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.buyRewardItem':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.calculateRansom':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.cancelUnstartedChallenge':
+                resps.append(cancel_unstarted_challenge_response())
+            elif reqq.functionName == 'UserService.checkForPromoReward':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.clearOldFlashTokens':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.clearIncentive':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.collectLeaderboards':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.completeSocialRepel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.crewNeighborPoll':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.crewZMCEvent':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'MiniGameService.dropBomb':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.energizerSetup':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.EPGiftSend':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.finishSpy':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.setEspionageHQData':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.exitBattle':
+                resps.append(exit_battle_response())
+            elif reqq.functionName == 'WorldService.expireAQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.getFightList':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.flashFeedRedeemItem':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.EPGiftThankYou':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.getAllChallenges':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DominationModeService.getDominationChat':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DominationModeService.getDominationModeOpponentList':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.getFBCreditPromoStatus':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'FeedService.getFeed':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.getLeaderboards':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.getNeighborVisitChallenges':
+                resps.append(neighbor_invader_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.getPrisonerInfo':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DataServicesService.getPromoData':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.getTargetingData':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.getTargetingGroups':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.grantWatchToEarnRewardNew':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DominationModeService.loadDominationModeBattle':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.loadEnemyFleetForChallenge':
+                resps.append(random_enemy_fleet_challenge_response(reqq.params[0]))
+            elif reqq.functionName == 'QuestSurvivalModeService.loadQuestSurvivalMode':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'SurvivalModeService.loadSurvivalMode':
+                resps.append(load_survival_mode_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.lcs':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DataServicesService.getMatchmakingUsersData':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.matchMakingOptFlag':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.mechlabStatus':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.megaSeriesReset':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ZlingshotService.fetch':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'MFSService.collectReward':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.motdAction':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.multiHarvest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DataServicesService.getRecommendedNeighbors':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.openDialog':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.promoAction':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.purchaseAmmoRefill':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.purchaseContractUnlock':
+                resps.append(purchase_contact_unlock(reqq.params[0]))
+            elif reqq.functionName == 'UserService.purchaseEnergyRefill':
+                resps.append(purchase_energy_refill_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.purchaseManaRefill':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.purchaseUnlock':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.globalPVPOptInOut':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.slotMachineSpin':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.slotMachineSpinBuy':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.immunityExtend':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.immunityStart':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.occupationPlace':
+                resps.append(occupation_place_response(reqq.params))
+            elif reqq.functionName == 'PVPService.pillage':
+                resps.append(pillage_response(reqq.params))
+            elif reqq.functionName == 'UserService.doFavQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.doSeenQuestNotification':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.questTreeReset':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.questTreeSetMode':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.questTreeStartQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.questTreeUnlockQuest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.rejectDecoBuildableRepel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.rejectDefenseTowerRepel':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.rejectFriendRepel':
+                resps.append(reject_friend_repel_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.removeExpiredInventory':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.removeExtraInventoryBuildings':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.removeExtraWorldBuildings':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setTitanName':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.allianceInviteRequest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.allianceJoinRequest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.crewRequest':
+                resps.append(crew_request_response(reqq.params))
+            elif reqq.functionName == 'RequestService.invasionHelpRequest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.neighborRequest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'RequestService.giftRequest':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.resetParliamentDestroyed':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.retrieveNeighborRepelChallenge':
+                resps.append(neighbor_repel_challenge_response(reqq.params))
+            elif reqq.functionName == 'PVPService.reviveAllies':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.reviveUnits':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.moveRoad':
+                resps.append(update_roads_response(reqq.params[0]))
+            elif reqq.functionName == 'WorldService.sellRoad':
+                resps.append(update_roads_response(reqq.params[0]))
+            elif reqq.functionName == 'PVPService.seenPrisonCampNotification':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.seenStrikeTeamComment':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.select':
+                resps.append(select_response(reqq.params[0]))
+            elif reqq.functionName == 'UserService.setCommandoAnimationDone':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setCurrentCampaign':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.setDefenderComment':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setEnergiserAnimationDone':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setFBCreditParticipation':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.setInvasionComment':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.setStrikeTeamComment':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setTag':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.spend':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DeathMatchService.loadBattle':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.startMayhemEvent':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'MiniGameService.loadGame':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'MiniGameService.stop':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.streamPublishWithComment':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.superOreOrder':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.setSurvivalModeToaster':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.treasureVaultSpin':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.unitDropRevealAll':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.unitDropSwitchUnit':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.unitUnlock':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.buyUnlimitedEnergy':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.unlockResource':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'DominationModeService.updateDefenseForce':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'WorldService.upgradeResearchBuilding':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.upgradeState':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.useItem':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'PVPService.useStrikeTeam':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.viralSurfacingSeen':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'VisitorService.accept':
+                resps.append(accept_tend_ally_response(reqq.params))
+            elif reqq.functionName == 'VisitorService.decline':
+                resps.append(decline_tend_ally_response(reqq.params))
+            elif reqq.functionName == 'VisitorService.helpedInvalid':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'UserService.grantWatchToEarnReward':
+                resps.append(dummy_response())
+            elif reqq.functionName == 'ZlingshotService.zoom':
+                resps.append(dummy_response())
+            else:
+                resps.append(dummy_response())
 
-        if reqq.functionName != 'UserService.tutorialProgress' and reqq.functionName != 'WorldService.performAction':
-            report_other_log(reqq.functionName, resps[-1] if resps else None, reqq, resp_msg.bodies[0][0])
+            if reqq.functionName != 'UserService.tutorialProgress' and reqq.functionName != 'WorldService.performAction':
+                report_other_log(reqq.functionName, resps[-1] if resps else None, reqq, resp_msg.bodies[0][0])
+
+    # Anything that raised got no result, and the client matches responses
+    # to requests -- so a short list is a mismatched turn, not a shorter one.
+    # Hand back an empty result for each, which is what an unimplemented
+    # service returns anyway.
+    resps = _pad_batch_results(resps, len(calls))
 
     emsg = _amf_detach({
         "serverTime": datetime.now().timestamp(),
