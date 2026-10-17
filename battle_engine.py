@@ -24,7 +24,7 @@ from quest_engine import (
     roll_reward_random_float,
     simple_list,
 )
-from save_engine import get_saves, store_session
+from save_engine import ensure_fleets, get_saves, store_session
 
 
 class StaleBattleReference(Exception):
@@ -661,8 +661,10 @@ def next_campaign_response(params):
     next_campaign_response = {"errorType": 0, "userId": 1, "metadata": meta,
                               "data": {"map": params["map"], "island": island}}
 
-    if 'fleets' not in session:
-        session["fleets"] = {}
+    # ensure_fleets, not the `if 'fleets' not in session` this replaced: that
+    # check missed a save whose 'fleets' was present but None, which is what a
+    # raw paste through /editor/save leaves behind.
+    ensure_fleets()
 
     enemy_fleet = map_item["island"][island]['fleet']
     #TODO what if defeated?
@@ -820,18 +822,21 @@ def get_lead_map():
 
 
 def register_fleetname_fleet(enemy_fleet):
-    session["fleets"]["FleetName"] = enemy_fleet
+    # This one indexed session["fleets"] with no guard at all, so it was the
+    # third way in from the same missing-registry state.
+    ensure_fleets()["FleetName"] = enemy_fleet
     print("FleetName Enemy fleet:", enemy_fleet)
 
 
 def register_random_fleet(fleet):
-    if 'fleets' not in session:
-        session["fleets"] = {}
+    # See the note on the other guard: a missing key and a None value are two
+    # different failures, and only ensure_fleets covers both.
+    fleets = ensure_fleets()
 
     enemy_fleet = fleet
     fleet_name = get_new_enemy_fleet_name()
 
-    session["fleets"][fleet_name] = enemy_fleet
+    fleets[fleet_name] = enemy_fleet
     print("Random Enemy fleet:", enemy_fleet)
 
 

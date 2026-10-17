@@ -25,6 +25,36 @@ crash_log = True
 
 db = SQLAlchemy()
 
+def ensure_fleets(save=None):
+    """``session['fleets']`` as a dict, creating or repairing it if needed.
+
+    The fleet registry is the most-mutated corner of the save -- battle_engine
+    alone touches it 43 times -- and it had three independent ways of arriving
+    broken, each of which surfaced as a 500 on a gateway call:
+
+    * the key was simply absent. ``add_fleet_response`` indexed
+      ``session["fleets"][name]`` with no guard, so a save that had never run
+      the startup call (or one restored from a paste) raised KeyError;
+    * the value was ``None``. ``/editor/save`` writes
+      ``save_game.get('fleets')``, which is None for a paste that omits the
+      key, and every later ``session["fleets"][x] = y`` then raised TypeError
+      instead of KeyError -- a different traceback for the same mistake;
+    * the two guards battle_engine already had only checked for a *missing*
+      key, so neither of them helped once the value was None.
+
+    Repairing it in one place is why this exists: callers stop having to know
+    which of the three ways the session got here.
+    """
+    target = session if save is None else save
+    fleets = target.get('fleets')
+    if not isinstance(fleets, dict):
+        if fleets is not None:
+            print("WARNING: session['fleets'] was", type(fleets).__name__,
+                  "and is being reset to {}")
+        target['fleets'] = {}
+    return target['fleets']
+
+
 def lookup_object(id):
     [game_object] = [e for e in session['user_object']["userInfo"]["world"]["objects"] if e['id'] == id]
     return game_object

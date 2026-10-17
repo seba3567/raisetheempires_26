@@ -46,6 +46,7 @@ from save_engine import (
     backup_chain,
     base_path,
     db,
+    ensure_fleets,
     install_path,
     log_path,
     lookup_objects_save_by_position,
@@ -385,6 +386,11 @@ def _apply_save(save_game):
     session['fleets'] = save_game.get('fleets')
     session['population'] = save_game.get('population')
     session['save_version'] = save_game.get('save_version')
+
+    # `save_game.get('fleets')` is None for a paste that omits the key, and a
+    # None registry makes every later `session["fleets"][x] = y` a TypeError --
+    # the same 500 this page was called in to fix, one request later.
+    ensure_fleets()
 
 
 @app.route("/editor/save", methods=['POST'])
@@ -1141,7 +1147,23 @@ def post_gateway():
     print(repr(request))
     # print("Data:")
     # print(request.data)
-    resp_msg = remoting.decode(request.data)
+
+    # A body pyamf cannot read is a client that spoke wrong, not a broken
+    # server. Left uncaught this raised out of the Flask handler and answered
+    # 500, which Ruffle reports as an unreachable gateway rather than as a
+    # bad request -- so the client retried the same broken body forever.
+    #
+    # Deliberately wider than pyamf.DecodeError: decoding an empty body raises
+    # OSError from the buffer ("Attempted to read 2 bytes ... but only 0
+    # remain") and a truncated one raises from the struct decoder, and both were
+    # reaching here as 500s as well. This step only parses untrusted input, so
+    # any failure in it belongs to the client.
+    try:
+        resp_msg = remoting.decode(request.data)
+    except Exception as error:
+        print("Rejecting undecodable AMF body:", type(error).__name__, error)
+        return make_response("Bad AMF request", 400)
+
     # print(resp_msg.headers)
     print(resp_msg.bodies)
     # print(resp_msg.bodies[0])
@@ -1149,7 +1171,16 @@ def post_gateway():
     batch_body = resp_msg.bodies[0][1].body
     resps = []
     for reqq in _amf_as_list(batch_body[1]):
-        if isinstance(reqq, dict) and reqq.get('params') is not None:
+        # The batch is a list of calls and the client is free to put anything in
+        # it. pyamf decodes a call into an ASObject -- a dict subclass that also
+        # answers attribute access, which is why `reqq.functionName` below is
+        # not a bug -- but a stray scalar used to reach that line and raise
+        # AttributeError, taking every other call in the same batch down with
+        # it. Skip it and answer the rest.
+        if not isinstance(reqq, dict):
+            print("Skipping non-object entry in AMF batch:", repr(reqq))
+            continue
+        if reqq.get('params') is not None:
             reqq['params'] = _amf_as_list(reqq['params'])
         if reqq.functionName == 'UserService.initUser':
             try:
@@ -2811,9 +2842,14 @@ def add_fleet_response(param):
     add_fleet_response = {"errorType": 0, "userId": 1, "metadata": meta,
                           "data": []}
 
-    session["fleets"][param['name']] = param['units']
+    # ensure_fleets, not `session["fleets"][...]`: the client can call addFleet
+    # on a session whose registry was never created (a save restored from a
+    # paste, or one that has not run the startup call), and this used to raise
+    # KeyError there and take the whole gateway request down with it.
+    fleets = ensure_fleets()
+    fleets[param['name']] = param['units']
     if "allies" in param:
-        session["fleets"]["ally_" + param['name']] = param['allies']
+        fleets["ally_" + param['name']] = param['allies']
     print("Player fleet:", param['units'])
     return add_fleet_response
 
