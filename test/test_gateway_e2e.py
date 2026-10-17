@@ -258,3 +258,61 @@ class TestStartupServices:
 
         assert body["errorType"] == 0
         assert isinstance(body["data"], list)
+
+
+class TestPlayerPages:
+    """Smoke tests for the HTML the browser actually renders.
+
+    The player pages are Jinja templates full of inline JavaScript, so a stray
+    backslash or an unrendered ``{{ ... }}`` silently blanks the whole game.
+    That class of bug is invisible to the gateway tests and only shows up in a
+    browser console, so assert the page contract here.
+    """
+
+    @pytest.mark.parametrize("path", ["/ruffle.html", "/nodebug.html", "/home.html"])
+    def test_page_renders(self, client, path):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert body.strip()
+        # No template expression leaked into the output.
+        assert "{{" not in body
+
+    def test_ruffle_page_pins_and_verifies_the_emulator(self, client):
+        """Ruffle must stay version-pinned and integrity-checked.
+
+        An unpinned CDN tag means a future Ruffle release could break this
+        archived game with no way to roll the change back.
+        """
+        body = client.get("/ruffle.html").get_data(as_text=True)
+
+        assert "@ruffle-rs/ruffle@" in body, "Ruffle must be pinned to a version"
+        assert "integrity=\"sha256-" in body, "Ruffle must be loaded with SRI"
+        assert "crossorigin=\"anonymous\"" in body
+        # The bare, moving tag is what we are trying to avoid.
+        assert 'src="https://unpkg.com/@ruffle-rs/ruffle"' not in body
+
+    def test_ruffle_page_config_is_complete(self, client):
+        body = client.get("/ruffle.html").get_data(as_text=True)
+
+        # allowScriptAccess must stay on or the SWF throws Error #2067 and
+        # aborts GameSettingsInit.onConfigXmlLoaded.
+        assert "allowScriptAccess: true" in body
+        # The SWF itself.
+        assert "ZGame.109338.swf" in body
+        # FlashVars the client needs, including the server clock.
+        for flashvar in ("serverTime=", "sn_app_url=", "stats=1"):
+            assert flashvar in body
+
+    def test_ruffle_bootstrap_has_no_broken_line_continuation(self, client):
+        """A missing backslash leaves a raw newline inside a JS string literal.
+
+        That is a SyntaxError which blanks the player entirely, and it is easy
+        to introduce while editing the FlashVars block.
+        """
+        body = client.get("/ruffle.html").get_data(as_text=True)
+
+        start = body.index("parameters:")
+        line = body[start:body.index("\n", start)]
+        assert line.rstrip().endswith(('"', "'")), f"unterminated parameters string: {line!r}"

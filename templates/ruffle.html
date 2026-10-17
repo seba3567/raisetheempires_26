@@ -13,7 +13,14 @@
 	<link rel="stylesheet" href="css/tooltiplink.css"/>
 	<link rel="stylesheet" href="css/zbar.css"/>
 	<!-- JS -->
-	<script src="https://unpkg.com/@ruffle-rs/ruffle"></script>
+	<!-- Ruffle is pinned to an exact version and verified with Subresource Integrity.
+	     Do not loosen this to the bare "@ruffle-rs/ruffle" tag: unpkg's "latest"
+	     moves, so a future Ruffle release could silently break an archived game
+	     that can never be updated. To move the version, read the new integrity
+	     from https://unpkg.com/@ruffle-rs/ruffle@<version>/?meta -->
+	<script src="https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js"
+	        integrity="sha256-JgNqlFZwiN+z3oinWejtEKTOoHspUArzbzRe70JCAJg="
+	        crossorigin="anonymous"></script>
 	<script src="js/flash.js"></script>
 	<script src="js/session.js"></script>
 	<script src="js/empires.js"></script>

@@ -27,6 +27,26 @@ This project is dedicated to preserving this Flash game so that it's not lost to
 | :exclamation: For *0.07a* and older versions, check the [Flash Continuation](FLASH.md) documentation |
 | :---: |
 
+## Playing in a modern browser
+
+`/ruffle.html` loads the original client through [Ruffle](https://ruffle.rs), so you
+can inspect the game UI and its assets without installing the Adobe Flash Player.
+
+**It is not fully playable there yet.** The client talks to the server over AMF
+remoting through `flash.net.NetConnection.connect()`, and Ruffle rejects the
+scheme-less URL the client builds (`flashservices/gateway.php`), so every server
+call fails with `Error #2126: NetConnection object must be connected`. The UI
+loads and the ExternalInterface bridge works; the game cannot talk to the
+backend.
+
+For actual gameplay use `/nodebug.html` with real Flash — see
+[FLASH.md](FLASH.md).
+
+Ruffle is loaded from a **version-pinned URL with a Subresource Integrity hash**.
+Please keep it that way: this game is archived, so an unpinned CDN tag could
+break it with no way to roll back. To move the version, read the new integrity
+from `https://unpkg.com/@ruffle-rs/ruffle@<version>/?meta`.
+
 ## Reporting Bugs and Contacting
 :speech_balloon: Check our [Discord group](https://discord.gg/xrNE6Hg)  [![Discord Channel](https://img.shields.io/discord/536575691563466772?label=)](https://discord.gg/xrNE6Hg)
 
