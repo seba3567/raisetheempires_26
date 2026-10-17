@@ -149,6 +149,21 @@ def battle_complete_response(params):
         ally_target = ("ally", player_unit_id)
         roll = 0
 
+    # The re-pick above is the second way to end up without a usable unit, and
+    # it is the one that used to crash: `next(...)` yields None when nothing is
+    # left standing, and the `result` dict indexes both strength lists with
+    # whatever came back. That raised TypeError rather than IndexError, and the
+    # gateway only catches (StaleBattleReference, IndexError) -- so a finished
+    # battle took the request down instead of answering it.
+    if (
+        player_unit_id is None
+        or enemy_unit_id is None
+        or not (0 <= enemy_unit_id < len(baddie_strengths))
+        or not (0 <= player_unit_id < len(friendly_strengths))
+    ):
+        print("Battle has no units left to resolve:", player_unit_id, enemy_unit_id)
+        raise StaleBattleReference("resolveBattle with no live units")
+
     result = {"attackerStunned": None, "psh": 1 if is_shielded(ally_target, active_consumables) else 0, "esh": 0, "ps": friendly_strengths[player_unit_id], "es": baddie_strengths[enemy_unit_id], "hv": None, "ur": roll,
      "playerUnit": player_unit_id, "enemyUnit": enemy_unit_id, "seeds": {"w": get_seed_w(), "z": get_seed_z()},
      "energy": None}
