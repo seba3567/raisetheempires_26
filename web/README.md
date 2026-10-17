@@ -47,6 +47,24 @@ decorativos:
 - **`parameters` con `app_url`.** El cliente arma su URL del gateway AMF0 desde
   ese FlashVar (`Config.SERVICES_GATEWAY_PATH`). Ver abajo.
 
+### El juego arranca con un clic, no solo
+
+Chrome no deja iniciar un `AudioContext` sin un gesto del usuario, y Ruffle crea
+el suyo mientras el SWF arranca. Montar el player desde `onMount` producía un
+juego **mudo**, con este error repetido una vez por cada sonido, cada uno con su
+stack trace de Rust:
+
+```
+The AudioContext was not allowed to start. It must be resumed (or created)
+after a user gesture on the page.
+```
+
+Por eso `/juego` muestra una pantalla con un botón **Jugar** y recién ahí carga
+el player. Un clic le da al documento *sticky activation*, y el `AudioContext`
+que Ruffle cree después sí puede arrancar: el error no ocurre en absoluto.
+Reanudar el contexto después sería tapar un error ya lanzado, y dejaría el
+juego mudo hasta que el jugador tocara algo.
+
 ### Ruffle va completo, no solo el loader
 
 Ruffle **0.7.1 se sirve localmente** desde `static/ruffle/`, no desde unpkg. El
