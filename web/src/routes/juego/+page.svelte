@@ -2,9 +2,10 @@
 	/**
 	 * The player page.
 	 *
-	 * Embeds the original Empires & Allies SWF via Ruffle WASM (WebGPU/WebGL).
-	 * Clean, focused presentation letting the native Flash in-game controls
-	 * (sound, music, zoom, fullscreen) take center stage.
+	 * Embeds the original Empires & Allies SWF via Ruffle WASM (WebGPU/WebGL),
+	 * behind the 2012 loading screen: a Message of the Day drawn as the
+	 * backdrop, the remastered EA frame over it, and a gold bar driven by the
+	 * ExternalInterface callbacks the client makes while it boots.
 	 */
 	import { onMount } from 'svelte';
 	import {
@@ -14,7 +15,14 @@
 		type RufflePlayerHandle
 	} from '#lib/ruffle';
 	import { avatarUrl, DEFAULT_AVATAR } from '#lib/avatar';
-	import { SNAPI_ENDPOINT, installSnapiBridge } from '#lib/snapi';
+	import { MOTD_FRAME_URL, motdUrl } from '#lib/motd';
+	import {
+		LOAD_MESSAGES,
+		LOAD_STAGES,
+		SNAPI_ENDPOINT,
+		installSnapiBridge,
+		type LoadStage
+	} from '#lib/snapi';
 
 	let { data, form } = $props();
 
@@ -41,6 +49,65 @@
 	const chosenAvatar = $derived(data.avatar?.current ?? DEFAULT_AVATAR);
 	const canChooseAvatar = $derived(avatarCatalog.length > 0);
 
+	/* ---------------------------------------------------- the loading screen -- */
+
+	/*
+	 * `templates/js/empires.js` drove a bar from the client's setup callbacks:
+	 * getUserInfo 30%, getFriendData 50%, getAppFriendIds 70%, onGameLoaded
+	 * 100% and hide. Those callbacks are the ones in `#lib/snapi`, so the same
+	 * sequence runs here -- this is the original progress, not an invented one.
+	 *
+	 * The frame and the art sit behind the bar and are sized to the 750x500
+	 * canvas the 2013 markup used, letterboxed into the player box.
+	 */
+	/*
+	 * Only the *re-roll* lives here, not the chosen art.
+	 *
+	 * Copying `data.motd.current` into state would capture it once, and the
+	 * avatar action redirects back to /juego, which re-runs load and hands over
+	 * a fresh `data` -- the screen would then paint the art from the previous
+	 * visit. Null means "use what the server picked"; set only by rerollMotd.
+	 */
+	let rerolledMotd = $state<string | null>(null);
+
+	const motdArt = $derived(rerolledMotd ?? data.motd?.current ?? null);
+
+	let progress = $state(0);
+	let stage = $state<LoadStage | 'boot'>('boot');
+	let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * How long the loading screen may stay up after the SWF finished loading
+	 * without the client saying it is ready. Long enough for a world build on
+	 * a slow machine, short enough that a callback that never arrives is not a
+	 * permanently stuck page.
+	 */
+	const LOAD_WATCHDOG_MS = 20_000;
+
+	function onProgress(next: LoadStage) {
+		// Never move backwards: the client can call these in any order it
+		// likes, and a bar that slides back reads as a fault.
+		progress = Math.max(progress, LOAD_STAGES[next]);
+		stage = next;
+		// The client's own "I am up" is the signal the 2013 screen waited for.
+		if (next === 'loaded') finishLoading();
+	}
+
+	/** The one random pick, then re-roll from the catalogue on click. */
+	function rerollMotd() {
+		const pool = data.motd?.motds ?? [];
+		if (pool.length < 2) return;
+		const rest = pool.filter((name) => name !== motdArt);
+		rerolledMotd = rest[Math.floor(Math.random() * rest.length)];
+	}
+
+	/** The backdrop, sized to the player box; null paints the plain blue. */
+	const motdBackground = $derived(
+		motdArt
+			? `url('${motdUrl(motdArt)}')`
+			: `linear-gradient(${PLAYER_BACKGROUND}, #1a1a5e)`
+	);
+
 	async function startPlayer() {
 		try {
 			await loadRuffle();
@@ -52,7 +119,10 @@
 			if (!social.ok) {
 				throw new Error(`${SNAPI_ENDPOINT} respondió ${social.status}`);
 			}
-			installSnapiBridge(await social.json());
+			// The bridge is also what moves the loading bar: the client calls
+			// getUserInfo/getFriendData/getAppFriendIds/onGameLoaded as it boots,
+			// and each one reports its stage.
+			installSnapiBridge(await social.json(), onProgress);
 
 			const ruffleApi = window.RufflePlayer?.newest ? window.RufflePlayer.newest() : null;
 			if (!ruffleApi) throw new Error('RufflePlayer no está disponible');
@@ -77,11 +147,35 @@
 				parameters: data.flashVars
 			});
 
-			phase = 'ready';
+			/*
+			 * `load()` resolving only means the SWF finished *loading*, not that
+			 * the world is up -- the 2013 page kept the screen until the client
+			 * called onGameLoaded, which arrives later and is what the player
+			 * actually remembers. But that callback is the one piece of this
+			 * sequence we cannot prove fires on this build, so the overlay also
+			 * comes down on a watchdog rather than trusting it forever.
+			 */
+			progress = Math.max(progress, LOAD_STAGES.appFriends);
+			watchdog = setTimeout(() => finishLoading(), LOAD_WATCHDOG_MS);
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);
 			phase = 'error';
 		}
+	}
+
+	/**
+	 * Take the loading screen down.
+	 *
+	 * Also called when the client reports it is ready, and by the watchdog when
+	 * it never does. Guarded so a late callback cannot re-enter it.
+	 */
+	function finishLoading() {
+		if (watchdog) {
+			clearTimeout(watchdog);
+			watchdog = null;
+		}
+		progress = LOAD_STAGES.loaded;
+		if (phase === 'loading') phase = 'ready';
 	}
 
 	function start() {
@@ -100,6 +194,8 @@
 		}
 
 		return () => {
+			if (watchdog) clearTimeout(watchdog);
+			watchdog = null;
 			mount?.replaceChildren();
 			playerHandle = null;
 		};
@@ -184,12 +280,70 @@
 				</p>
 			</div>
 		{:else if phase === 'loading'}
+			<!--
+				The 2012 loading screen, rebuilt from templates/ruffle.html: the
+				MOTD as the backdrop with the same bottom vignette, the remastered
+				EA frame over it, and the gold bar underneath.
+
+				The artwork is kept as background layers rather than <img> elements
+				so the whole thing scales into the responsive player box instead of
+				sitting at the original fixed 750x500.
+			-->
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-empire-900/95 text-slate-300"
+				class="absolute inset-0 flex items-center justify-center bg-cover bg-center bg-no-repeat"
+				style={`background-image: ${motdBackground};`}
 			>
-				<div class="h-8 w-8 animate-spin rounded-full border-4 border-gold-400 border-t-transparent"></div>
-				<p class="font-medium text-slate-200">Iniciando Ruffle WASM…</p>
-				<p class="text-xs text-slate-400">Cargando shaders WebGPU y assets del cliente</p>
+				<div
+					class="relative w-full h-full max-w-[750px] flex flex-col items-center justify-end pb-[18%] bg-cover bg-center bg-no-repeat"
+					style="background-image: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 55%);"
+				>
+					<img
+						src={MOTD_FRAME_URL}
+						alt=""
+						class="absolute inset-0 w-full h-full object-contain opacity-95"
+						aria-hidden="true"
+					/>
+
+					<div class="relative flex flex-col items-center gap-3 px-6 text-center">
+						<p
+							class="text-lg font-bold text-white"
+							style="text-shadow: 0 0 6px black, 0 0 12px black;"
+						>
+							{stage === 'boot' ? 'Detecting flash…' : LOAD_MESSAGES[stage]}
+						</p>
+
+						<!--
+							The 2013 bar: a dark trough with a gold fill and an inset
+							highlight, advancing one second per step like the original's
+							`transition: width 1s linear`.
+						-->
+						<div
+							class="flex w-[45%] min-w-[160px] max-w-[300px] h-[18px] overflow-hidden rounded-[10px]"
+							style="background-color:#6d5554; box-shadow: inset 0 4px 9px -1px #4c4635;"
+							role="progressbar"
+							aria-valuemin="0"
+							aria-valuemax="100"
+							aria-valuenow={progress}
+							aria-label="Cargando el juego"
+						>
+							<div
+								class="h-full"
+								style={`width:${progress}%; background-color:#e6b104; box-shadow: inset 0 4px 9px -1px #fae361; transition: width 1s linear;`}
+							></div>
+						</div>
+
+						{#if (data.motd?.motds.length ?? 0) > 1}
+							<button
+								type="button"
+								onclick={rerollMotd}
+								class="mt-1 text-xs text-white/70 hover:text-white underline"
+								style="text-shadow: 0 0 6px black;"
+							>
+								otra imagen
+							</button>
+						{/if}
+					</div>
+				</div>
 			</div>
 		{:else if phase === 'error'}
 			<div

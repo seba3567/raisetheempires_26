@@ -9,9 +9,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+	LOAD_STAGES,
 	SNAPI_ENDPOINT,
 	assertUsablePayload,
 	installSnapiBridge,
+	type LoadStage,
 	type SnapiPayload
 } from '#lib/snapi';
 
@@ -79,6 +81,51 @@ describe('installSnapiBridge', () => {
 		]) {
 			expect(typeof installed()[name]).toBe('function');
 		}
+	});
+});
+
+describe('load progress', () => {
+	/** Call every callback the client makes while booting, in order. */
+	function boot(onProgress: (stage: LoadStage) => void): void {
+		installSnapiBridge(VALID, onProgress);
+		const scope = installed();
+		for (const name of ['getUserInfo', 'getFriendData', 'getAppFriendIds', 'onGameLoaded']) {
+			(scope[name] as () => unknown)();
+		}
+	}
+
+	test('reports each stage as the client walks its setup', () => {
+		const seen: LoadStage[] = [];
+
+		boot((stage) => seen.push(stage));
+
+		expect(seen).toEqual(['user', 'friends', 'appFriends', 'loaded']);
+	});
+
+	test('reaches the same percentages the 2013 loading bar used', () => {
+		// templates/js/empires.js set 30/50/70/100 on these same callbacks.
+		expect(LOAD_STAGES).toEqual({ user: 30, friends: 50, appFriends: 70, loaded: 100 });
+	});
+
+	test('onGameLoaded is a global, or the client cannot reach it', () => {
+		boot(() => {});
+
+		expect(typeof installed()['onGameLoaded']).toBe('function');
+	});
+
+	test('a failing progress handler does not break the bridge', () => {
+		installSnapiBridge(VALID, () => {
+			throw new Error('the page went away');
+		});
+
+		// The user object still comes back: the client dereferences zid on it.
+		const call = installed()['getUserInfo'] as () => SnapiPayload['user'];
+		expect(call()).toEqual(VALID.user);
+	});
+
+	test('a bridge with no handler still works', () => {
+		expect(() => installSnapiBridge(VALID)).not.toThrow();
+		expect((installed()['getUserInfo'] as () => unknown)()).toEqual(VALID.user);
 	});
 });
 

@@ -23,6 +23,35 @@
 /** Where the payload comes from. Served by the gateway, proxied like the SWF. */
 export const SNAPI_ENDPOINT = '/snapi.json';
 
+/**
+ * How far along the boot was, as the 2013 loading screen tracked it.
+ *
+ * `templates/js/empires.js` drove a gold progress bar from exactly these three
+ * callbacks plus `onGameLoaded`, which is where the loading overlay was hidden.
+ * The names and the percentages are kept so the sequence a player sees is the
+ * one they saw in 2012.
+ */
+export type LoadStage = 'user' | 'friends' | 'appFriends' | 'loaded';
+
+/** Percentage the bar reaches at each stage. */
+export const LOAD_STAGES: Record<LoadStage, number> = {
+	user: 30,
+	friends: 50,
+	appFriends: 70,
+	loaded: 100
+};
+
+/** The text the 2013 page put above the bar at each step. */
+export const LOAD_MESSAGES: Record<LoadStage, string> = {
+	user: 'Loading User info...',
+	friends: 'Loading Friends data...',
+	appFriends: 'Loading Friends data...',
+	loaded: 'Loading game...'
+};
+
+/** Told to the host page as the client walks its setup. */
+export type OnProgress = (stage: LoadStage) => void;
+
 export interface SnapiUser {
 	/** Must be a JSON number. ActionScript takes it as an int. */
 	zid: number;
@@ -78,16 +107,45 @@ export function assertUsablePayload(value: unknown): asserts value is SnapiPaylo
  *
  * Must run before `player.load()`: the client calls these during setup, and a
  * call into a function that does not exist yet returns null rather than waiting.
+ *
+ * `onProgress` is optional and purely cosmetic: it is how the loading screen
+ * knows the boot moved, exactly as `templates/js/empires.js` reported it. A
+ * host that does not pass one still gets a working bridge.
  */
-export function installSnapiBridge(payload: SnapiPayload): void {
+export function installSnapiBridge(payload: SnapiPayload, onProgress?: OnProgress): void {
 	assertUsablePayload(payload);
 
 	const scope = globalScope();
 
+	/** Report a stage, but never let the page's own error break the boot. */
+	const report = (stage: LoadStage) => {
+		try {
+			onProgress?.(stage);
+		} catch (cause) {
+			console.debug('onProgress falló en', stage, cause);
+		}
+	};
+
 	// The three the client actually reads during setup.
-	scope['getUserInfo'] = () => payload.user;
-	scope['getFriendData'] = () => payload.friends;
-	scope['getAppFriendIds'] = () => payload.appFriends;
+	scope['getUserInfo'] = () => {
+		report('user');
+		return payload.user;
+	};
+	scope['getFriendData'] = () => {
+		report('friends');
+		return payload.friends;
+	};
+	scope['getAppFriendIds'] = () => {
+		report('appFriends');
+		return payload.appFriends;
+	};
+
+	// The client calls this once it has its world. The 2013 page used it to
+	// fill the bar to 100% and take the loading overlay down; here the player
+	// page does the same when it sees the stage.
+	scope['onGameLoaded'] = () => {
+		report('loaded');
+	};
 
 	// Reached from toSocialNetworkUser -> getAccessToken(). There is no OAuth
 	// here, so there is no token: returning null is the honest answer and the

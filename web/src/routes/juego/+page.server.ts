@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 
 import { chooseAvatar, fetchAvatarState } from '#lib/server/avatar';
 import { buildFlashVars } from '#lib/server/flashvars';
+import { fetchMotdState } from '#lib/server/motd';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url, request, locals }) => {
@@ -17,7 +18,10 @@ export const load: PageServerLoad = async ({ url, request, locals }) => {
 		role: user.role,
 		// Null when the gateway cannot be reached, in which case the picker
 		// falls back to the default avatar and play is not blocked.
-		avatar: await fetchAvatarState(request, user.zid)
+		avatar: await fetchAvatarState(request, user.zid),
+		// Same for the loading art: no MOTD is a plain loading screen, never an
+		// error. Both reads go out together rather than one after the other.
+		motd: await fetchMotdState(request, user.zid)
 	};
 };
 

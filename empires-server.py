@@ -1018,6 +1018,26 @@ def get_avatar_pic():
     avatar_pic = "img/avatars/" + (session['profilePic'] if 'profilePic' in session and session['profilePic'] is not None else "blank.png")
     return avatar_pic
 
+
+@app.route("/motd.json")
+def motd_state():
+    """The Message of the Day art, for the loading screen.
+
+    The 2013 player drew a random one of 139 and painted it behind the EA frame
+    while the game booted. ``templates/ruffle.html`` did it inline; this is the
+    same data as JSON so the SvelteKit player can do it without the template.
+
+    Both the catalogue and the pick are sent: the pick so the page has something
+    to show on the first paint without asking twice, and the catalogue so the
+    front end can offer another without a round trip.
+    """
+    motds = get_avail_motds()
+    return jsonify({
+        "motds": motds,
+        "current": random.choice(motds),
+    })
+
+
 def get_motd():
     motd = "img/motds/" + random.choice(get_avail_motds())
     return motd
