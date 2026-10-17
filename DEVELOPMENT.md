@@ -130,7 +130,7 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 
 | Path | Purpose |
 | --- | --- |
-| `web/` | Public front end — Bun + TypeScript. See `web/README.md` |
+| `web/` | Public front end — SvelteKit 3 + Svelte 5 on Bun. See `web/README.md` |
 | `empires-server.py` | Flask app and AMF gateway (2.4k lines, entry point) |
 | `battle_engine.py` | Combat resolution |
 | `quest_engine.py`, `state_machine.py` | Quest progression |
@@ -143,12 +143,15 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 ## Two services, and which one is public
 
 ```
-navegador -> web/ (Bun, :8080)  ->  empires-server.py (Flask, 127.0.0.1:5005)
+navegador -> web/ (SvelteKit+Bun, :8080)  ->  empires-server.py (Flask, 127.0.0.1:5005)
+              landing, cuentas, amigos,             /ruffle.html, /assets, /js,
+              progreso, y el JUEGO con el            /flashservices/gateway.php
+              SWF embebido en la página
 ```
 
 `web/` is the only thing that should ever be exposed. It owns the landing page,
-accounts, friendships and progress, and proxies everything else through to the
-Python gateway.
+accounts, friendships, progress and the player, and proxies everything else
+through to the Python gateway. See `web/README.md`.
 
 The gateway stays in Python because the AMF0 payload dialect is a compatibility
 contract with a client we cannot recompile. The practical consequence is that the
@@ -158,16 +161,20 @@ app-factory and WSGI work is dropped, not deferred**. Do not start it.
 Run both while developing:
 
 ```powershell
-cd web; bun run start                                    # :8080, public
-..\.venv\Scripts\python.exe empires-server.py --port 5005 --no-popup   # loopback
+# terminal 1 — la puerta publica
+cd web; bun run --bun build; bun .\build
+
+# terminal 2 — el gateway, solo loopback
+..\.venv\Scripts\python.exe empires-server.py --port 5005 --no-popup
 ```
 
 ## Everyday commands (web)
 
 ```powershell
 cd web
-bun test          # 78 tests
-bun run typecheck # tsc --noEmit
+bun test          # 73 tests
+bun run check     # svelte-check
+bun run --bun build
 bun run scripts/manage-user.ts list-admins
 ```
 

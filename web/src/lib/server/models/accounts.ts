@@ -7,7 +7,7 @@
  * rotation there can split one player's save in two.
  */
 import { all, now, one, run, transact } from "../db/client.ts";
-import { zidForUserAsNumber } from "../ids.ts";
+import { zidForUserAsNumber } from "../../ids.ts";
 
 export type Role = "player" | "admin";
 

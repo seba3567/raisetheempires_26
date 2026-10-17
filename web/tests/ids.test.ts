@@ -15,7 +15,7 @@ import {
   zidForUser,
   zidForUserAsNumber,
   zidFromSessionId,
-} from "../src/ids";
+} from '#lib/ids';
 
 /** Python: crc64_go_iso.CRC64_GO_ISO_CHECK */
 const CHECK_VALUE = 13333283586479230977n;

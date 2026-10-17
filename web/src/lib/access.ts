@@ -43,3 +43,22 @@ export function accessDenied(pathname: string): boolean {
 export function adminOnlyPaths(): string[] {
   return [...ADMIN_ONLY_EXACT, ...ADMIN_ONLY_PREFIXES.map((p) => `${p}…`)];
 }
+
+/**
+ * What to do with a request to an admin-only path.
+ *
+ * Kept separate from the hook so the policy is testable without standing up
+ * SvelteKit, and so hooks.server.ts stays a straight line of reading.
+ */
+export type AdminDecision = "allow" | "redirect-login" | "forbid";
+
+export function adminDecision(
+  pathname: string,
+  user: { role: string } | null,
+): AdminDecision {
+  if (!accessDenied(pathname)) return "allow";
+  // Anonymous is sent to log in rather than shown a wall: the route is behind
+  // a login, not behind a ban.
+  if (!user) return "redirect-login";
+  return user.role === "admin" ? "allow" : "forbid";
+}

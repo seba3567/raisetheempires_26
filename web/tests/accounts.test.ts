@@ -23,8 +23,8 @@ import {
   UsernameTaken,
   verifyPassword,
   type Role,
-} from "../src/models/accounts.ts";
-import { zidForUser } from "../src/ids.ts";
+} from '#lib/server/models/accounts';
+import { zidForUser } from '#lib/ids';
 import { resetDb } from "./helpers.ts";
 
 beforeEach(() => {

@@ -1,7 +1,7 @@
 /**
  * Shared test helpers.
  */
-import { db } from "../src/db/client.ts";
+import { db } from '#lib/server/db/client';
 
 /** Empty every table without dropping the schema. */
 export function resetDb(): void {

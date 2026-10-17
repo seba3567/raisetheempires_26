@@ -1,22 +1,16 @@
 {
-  "compilerOptions": {
-    "lib": ["ESNext", "DOM"],
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": true,
-
-    "skipLibCheck": true,
-    "types": ["bun-types"]
-  },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"strict": true,
+		/*
+		 * SvelteKit 3 renamed $lib to #lib and declares it through the
+		 * package.json "imports" field, but svelte-check does not read that, so
+		 * the same mapping has to be mirrored here for types to resolve.
+		 */
+		"paths": {
+			"#lib": ["./src/lib/index.js"],
+			"#lib/*": ["./src/lib/*"]
+		}
+	},
+	"include": ["src", "vite.config.ts"]
 }

@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+
+/*
+ * Flowbite Svelte ships its component styles as utility classes inside the
+ * library, so Tailwind has to scan node_modules for them. In v4 that is what
+ * the @source directive is for; without it the components render unstyled.
+ */
+@source '../node_modules/flowbite-svelte/dist';
+@source '../node_modules/flowbite/dist';
+
+@plugin 'flowbite/plugin';
+
+@theme {
+	--color-empire-950: oklch(0.16 0.02 255);
+	--color-empire-900: oklch(0.21 0.03 255);
+	--color-empire-800: oklch(0.27 0.04 255);
+	--color-empire-700: oklch(0.35 0.05 255);
+	--color-gold-400: oklch(0.78 0.14 80);
+	--color-gold-500: oklch(0.72 0.15 75);
+	--color-gold-600: oklch(0.64 0.15 70);
+}
+
+@layer base {
+	html {
+		background-color: var(--color-empire-950);
+		color: var(--color-slate-200);
+	}
+
+	body {
+		min-height: 100dvh;
+	}
+
+	/*
+	 * The Ruffle canvas is a real element the browser must be able to size and
+	 * focus; overriding its display breaks the emulator, so nothing here may
+	 * touch `.ruffle-player`.
+	 */
+}
+
+/*
+ * Shared surfaces, declared as Tailwind utilities rather than as component
+ * styles. Svelte scopes a component's <style> block before Tailwind ever sees
+ * it, so `@apply` inside a component does not resolve; a `@utility` defined
+ * here works everywhere and keeps the markup readable.
+ */
+@utility panel {
+	@apply rounded-xl border border-empire-800 bg-empire-900/60 p-5;
+}
+
+@utility field {
+	@apply w-full rounded-lg border border-empire-700 bg-empire-950 px-4 py-2.5 text-slate-100;
+}
+
+@utility btn-primary {
+	@apply rounded-lg bg-gold-500 px-6 py-3 font-semibold text-empire-950 hover:bg-gold-400;
+}

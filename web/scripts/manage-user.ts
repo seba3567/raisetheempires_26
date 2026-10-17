@@ -9,15 +9,15 @@
  * The password is read from the environment so it never lands in a shell
  * history entry, a log line, or this file.
  */
-import { config } from "../src/config.ts";
-import { db } from "../src/db/client.ts";
+import { config } from '#lib/server/config';
+import { db } from '#lib/server/db/client';
 import {
-  createUser,
-  findByUsername,
-  isAdmin,
-  setRole,
-  UsernameTaken,
-} from "../src/models/accounts.ts";
+	createUser,
+	findByUsername,
+	isAdmin,
+	setRole,
+	UsernameTaken
+} from '#lib/server/models/accounts';
 
 db();
 

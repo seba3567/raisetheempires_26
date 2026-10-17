@@ -51,20 +51,24 @@ function shouldForwardResponseHeader(name: string): boolean {
   return lower !== "content-encoding" && lower !== "content-length";
 }
 
-function buildHeaders(req: Request): Headers {
+function buildHeaders(req: Request, publicOrigin: string): Headers {
   const headers = new Headers();
   for (const [name, value] of req.headers) {
     if (shouldForwardRequestHeader(name)) headers.set(name, value);
   }
 
-  const url = new URL(req.url);
+  // SvelteKit 3 removed process.env.ORIGIN, so the public host is passed in
+  // rather than read from the request here. It must be the same value the
+  // FlashVars use, or Flask and the SWF disagree about where the gateway is.
+  const publicUrl = new URL(publicOrigin);
+
   // Flask's request.host_url reads Host, so this is what puts the right
   // app_url into the FlashVars.
-  headers.set("host", url.host);
-  headers.set("x-forwarded-host", url.host);
-  headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
+  headers.set("host", publicUrl.host);
+  headers.set("x-forwarded-host", publicUrl.host);
+  headers.set("x-forwarded-proto", publicUrl.protocol.replace(":", ""));
   const existing = req.headers.get("x-forwarded-for");
-  headers.set("x-forwarded-for", existing ? `${existing}, ${url.hostname}` : url.hostname);
+  headers.set("x-forwarded-for", existing ? `${existing}, ${publicUrl.hostname}` : publicUrl.hostname);
 
   return headers;
 }
@@ -76,11 +80,18 @@ export type ProxyResult = Response | "websocket-unsupported";
 /**
  * Forward `req` to the gateway.
  *
- * `origin` defaults to the configured gateway and is overridable only so tests
- * can point at a throwaway upstream or at a dead port.
+ * `publicOrigin` is required, never defaulted. It is the origin the browser
+ * used, and it is load-bearing: Flask builds the SWF's `app_url` FlashVar out
+ * of it. An optional parameter defaulting to the upstream address would quietly
+ * hand Flask `127.0.0.1:5005`, and the game would then call the gateway
+ * directly and skip this service entirely — with no error anywhere to notice.
+ *
+ * `origin` points at the gateway itself and is overridable so tests can use a
+ * throwaway upstream or a dead port.
  */
 export async function proxyToGateway(
   req: Request,
+  publicOrigin: string,
   origin: string = config.gateway.origin,
 ): Promise<ProxyResult> {
   // socket.io currently runs in long-polling mode on Werkzeug, so an upgrade
@@ -103,7 +114,7 @@ export async function proxyToGateway(
   try {
     const upstream = await fetch(target, {
       method: req.method,
-      headers: buildHeaders(req),
+      headers: buildHeaders(req, publicOrigin),
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       ...(body === null ? {} : { body }),
