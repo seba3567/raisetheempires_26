@@ -26,12 +26,20 @@ describe('accessDenied classification', () => {
 			'/deprogress',
 			'/list_session',
 			'/language_editor',
+			// Destroys the save; it sat in the reachable list until now.
+			'/wipe_session',
+			// The editor's own gateway endpoints. They replace the session's
+			// user_object wholesale, so leaving them open let any player POST a
+			// hand-built save and grant themselves an empire.
+			'/editor/save',
+			'/editor/restore',
 			'/unlock_quest/quest_0100',
 			'/complete_quest/quest_0100',
 			'/remove_quest/quest_0100',
-			// This service's own empire editor, not a gateway path, but it
-			// writes to the save exactly like /patch does.
+			// This service's own empire editor and session list, not gateway paths,
+			// but they read and write the save exactly like /patch does.
 			'/admin/editor',
+			'/admin/sessions',
 			'/patch/player/name/string/bob',
 			'/seed/w/3/z/2',
 		]) {
@@ -59,7 +67,6 @@ describe('accessDenied classification', () => {
 			'/css/zbar.css',
 			'/img/avatars/blank.png',
 			'/socket.io/',
-			'/wipe_session',
 			'/new.html',
 			'/releases.html',
 		]) {
@@ -71,6 +78,9 @@ describe('accessDenied classification', () => {
 		expect(accessDenied('/patchery')).toBe(false);
 		expect(accessDenied('/unlock_quests')).toBe(false);
 		expect(accessDenied('/save-editor-help')).toBe(false);
+		// /editor.json only reads the caller's own save back to them; it is what
+		// the editor page loads and a player has no reason to be refused it.
+		expect(accessDenied('/editor.json')).toBe(false);
 	});
 });
 
@@ -144,7 +154,14 @@ async function demote(userId: number) {
 describe('adminOnlyPaths', () => {
 	test('lists every gated family', () => {
 		const listed = adminOnlyPaths().join(' ');
-		for (const needle of ['/save-editor', '/gazillionaire', '/patch/', '/list_session']) {
+		for (const needle of [
+			'/save-editor',
+			'/gazillionaire',
+			'/patch/',
+			'/list_session',
+			'/editor/save',
+			'/editor/restore'
+		]) {
 			expect(`${needle}: ${listed.includes(needle)}`).toBe(`${needle}: true`);
 		}
 	});

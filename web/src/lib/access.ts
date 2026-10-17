@@ -20,6 +20,15 @@ const ADMIN_ONLY_EXACT: readonly string[] = [
   "/deprogress",
   "/list_session",
   "/language_editor",
+  // Destroys the save outright. It was reachable by anyone holding a game
+  // session, which used to be the same thing as being a player.
+  "/wipe_session",
+  // The raw-paste endpoint behind the editor. It replaces this session's
+  // user_object, battle and fleets wholesale, so an ungated player could POST
+  // a hand-built save and grant themselves any empire. It only ever touches
+  // the caller's own session, which is exactly why that was not obvious.
+  "/editor/save",
+  "/editor/restore",
 ];
 
 /** Prefixes, for routes that carry a parameter after them. */

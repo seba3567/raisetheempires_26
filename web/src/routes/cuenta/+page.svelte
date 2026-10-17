@@ -118,7 +118,7 @@
 					+10.000 Empire Points
 				</a>
 				<a
-					href="/list_session"
+					href="/admin/sessions"
 					class="rounded-lg border border-empire-700 px-4 py-2.5 text-sm hover:bg-empire-800"
 				>
 					Ver sesiones guardadas

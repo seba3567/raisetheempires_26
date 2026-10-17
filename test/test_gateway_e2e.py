@@ -33,27 +33,14 @@ _sequence = iter(range(1001, 100000))
 
 
 @pytest.fixture(scope="module")
-def client(tmp_path_factory):
-    """A test client bound to the real app, backed by a throwaway database."""
-    db_path = tmp_path_factory.mktemp("rte-e2e") / "save.db"
-    app = empires_server.app
-    app.config.update(
-        TESTING=True,
-        SECRET_KEY="gateway-e2e",
-        SESSION_TYPE="sqlalchemy",
-        SESSION_SQLALCHEMY=empires_server.db,
-        SQLALCHEMY_DATABASE_URI=f"sqlite:///{db_path}",
-        SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    )
-    empires_server.db.init_app(app)
-    empires_server.sess.init_app(app)
-    # logger.py reports battle/world events over socket.io, so the gateway path
-    # needs a live SocketIO server too.
-    empires_server.socketio.init_app(app)
-    with app.app_context():
-        empires_server.db.create_all()
+def client(gateway_app):
+    """A test client bound to the real app, backed by a throwaway database.
 
-    return app.test_client()
+    The app itself is configured once in ``conftest.py`` -- SQLAlchemy cannot
+    be registered on the same Flask app twice, so two modules cannot each set
+    up their own database.
+    """
+    return gateway_app.test_client()
 
 
 @pytest.fixture

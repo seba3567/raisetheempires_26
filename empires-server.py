@@ -143,7 +143,7 @@ def home():
     print("home")
     if not validate_save(session, True):
         print("Invalid save game")
-        return make_response(redirect('/save-editor')) #todo disable save editor toggle?
+        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
     saves = get_saves()
     return render_template("home.html", time=datetime.now().timestamp(), zid=str(get_zid()),
                            version=version,
@@ -161,7 +161,7 @@ def ruffle():
     print("ruffle")
     if not validate_save(session, True):
         print("Invalid save game")
-        return make_response(redirect('/save-editor')) #todo disable save editor toggle?
+        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
     saves = get_saves()
     return render_template("ruffle.html", time=datetime.now().timestamp(), zid=str(get_zid()),
                            version=version,
@@ -212,6 +212,191 @@ def snapi_bridge():
 
 # Resource keys, in the order the original editor showed them.
 RESOURCE_ORDER = ("coins", "wood", "oil", "aluminum", "copper", "gold", "iron", "uranium")
+
+
+def _session_snapshot():
+    """The save as the 2013 editor's textarea showed it.
+
+    Kept verbatim so the raw editor can round-trip: the web front end posts this
+    shape straight back to /editor/save. Changing the keys here changes what a
+    paste from an old backup means.
+    """
+    return {
+        'user_object': session.get('user_object'),
+        'profilePic': session.get('profilePic'),
+        'quests': session.get('quests'),
+        'battle': session.get('battle'),
+        'last_battle': session.get('last_battle'),
+        'fleets': session.get('fleets'),
+        'population': session.get('population'),
+        'saved': session.get('saved'),
+        'save_version': session.get('save_version'),
+        'original_save_version': session.get('original_save_version'),
+    }
+
+
+def _backup_chain():
+    """The stacked backups, newest first.
+
+    ``session['backup']`` is the most recent one and each node links to the one
+    it replaced, so walking down the chain is exactly the order the 2013 editor
+    listed them in. Index 0 is the last save before the current one.
+    """
+    chain = []
+    node = session
+    while "backup" in node:
+        node = node["backup"]
+        chain.append(node)
+    return chain
+
+
+def _backup_count():
+    """How many backups are stacked up, for "revert n steps back"."""
+    return len(_backup_chain())
+
+
+def _backup_summary(node):
+    """What one backup holds, flattened to the numbers an admin picks by.
+
+    The 2013 page showed only a timestamp and a reason, which made choosing
+    between 128 of them guesswork. Level and coins are what actually differ
+    between two saves an hour apart, so they are the summary.
+    """
+    info = ((node.get('user_object') or {}).get('userInfo') or {})
+    player = info.get('player') or {}
+    resources = (info.get('world') or {}).get('resources') or {}
+    return {
+        "level": player.get('level'),
+        "empirePoints": player.get('cash'),
+        "coins": resources.get('coins'),
+    }
+
+
+@app.route("/editor.json")
+def editor_state():
+    """Everything the empire editor needs, for the web front end.
+
+    Replaces the 2013 /save-editor page: same numbers, same quest lists, same
+    raw JSON, but as JSON the new UI can render instead of a wall of <a> tags.
+
+    Quests come in the three buckets the old page showed, because those are the
+    three different things you can do to one: start it, finish it, or take it
+    off the save entirely.
+    """
+    snapshot = _session_snapshot()
+    quests = session.get('quests') or []
+    incomplete = [q["name"] for q in quests if not q["complete"]]
+    complete = [q["name"] for q in quests if q["complete"]]
+
+    info = (snapshot['user_object'] or {}).get('userInfo') or {}
+    player = info.get('player') or {}
+    resources = (info.get('world') or {}).get('resources') or {}
+
+    return jsonify({
+        "hasSave": validate_save(session, False),
+        "zid": get_zid(),
+        "level": player.get('level'),
+        "xp": player.get('xp'),
+        "empirePoints": player.get('cash'),
+        "ore": player.get('playerResourceType'),
+        "worldName": info.get('worldName'),
+        "picture": get_avatar_pic(),
+        "resources": {name: resources.get(name) for name in RESOURCE_ORDER},
+        "quests": {
+            # Not started yet: these are the ones an admin can unlock.
+            "locked": {q: v for q, v in quest_titles.items()
+                       if q not in complete and q not in incomplete},
+            "incomplete": {q: v for q, v in quest_titles.items() if q in incomplete},
+            "complete": {q: v for q, v in quest_titles.items() if q in complete},
+        },
+        "raw": snapshot,
+        "backups": _backup_count(),
+        "backupList": [
+            {
+                "index": i,
+                "label": format_backup_message(node),
+                "saveVersion": node.get('save_version'),
+                "message": node.get("message", ""),
+                **_backup_summary(node),
+            }
+            for i, node in enumerate(_backup_chain())
+        ],
+    })
+
+
+def _apply_save(save_game):
+    """Write a save dict back over the live session.
+
+    The same seven keys the 2013 editor's POST wrote, in the same order. Both
+    the raw JSON paste and the backup restore land here so they cannot drift
+    apart and leave one of them half-applying a save.
+    """
+    session['saved'] = str(session.get('saved', "")) + "edit"
+    session['user_object'] = save_game.get('user_object')
+    if 'profilePic' in session and 'profilePic' in save_game:
+        session['profilePic'] = save_game['profilePic']
+    session['quests'] = save_game.get('quests')
+    session['battle'] = save_game.get('battle')
+    session['fleets'] = save_game.get('fleets')
+    session['population'] = save_game.get('population')
+    session['save_version'] = save_game.get('save_version')
+
+
+@app.route("/editor/save", methods=['POST'])
+def editor_save():
+    """Replace the save from a raw JSON paste.
+
+    The escape hatch from the 2013 editor, kept because it is the only way to
+    change something the typed fields do not cover. Admin-gated at the proxy,
+    and the web editor refuses to post here without an admin session.
+    """
+    try:
+        save_game = json.loads(request.form['savegame'])
+    except (KeyError, ValueError) as error:
+        return jsonify({"ok": False, "message": f"No se pudo leer el JSON: {error}"}), 400
+
+    create_backup("before " + request.form.get("message", "raw edit"))
+    _apply_save(save_game)
+
+    return jsonify({"ok": True})
+
+
+@app.route("/editor/restore", methods=['POST'])
+def editor_restore():
+    """Roll the save back to one of the stacked backups.
+
+    The 2013 editor had this as a row of "Restore this backup" buttons posting
+    ``restore<n>``; the index walked the same chain, newest first. It is the
+    only way back from a bad raw paste or a wipe, so it moves with the editor
+    instead of dying with the old page.
+
+    The current save is backed up before it is replaced, so restoring a backup
+    is itself undoable.
+    """
+    try:
+        index = int(request.form['index'])
+    except (KeyError, ValueError):
+        return jsonify({"ok": False, "message": "Falta el índice del respaldo"}), 400
+
+    chain = _backup_chain()
+    if not chain:
+        return jsonify({"ok": False, "message": "Esta partida no tiene respaldos"}), 400
+    if index < 0 or index >= len(chain):
+        return jsonify({
+            "ok": False,
+            "message": f"El respaldo {index} no existe; hay {len(chain)}"
+        }), 400
+
+    # The backup node is shared with the session it was copied out of, so it has
+    # to be deep-copied before _apply_save starts reassigning keys on it.
+    save_game = copy.deepcopy(chain[index])
+    label = format_backup_message(save_game)
+    print("restoring backup", index, label)
+
+    create_backup(f'revert to backup "{label}"')
+    _apply_save(save_game)
+
+    return jsonify({"ok": True, "restored": index, "label": label})
 
 @app.route("/player.json")
 def player_state():
@@ -285,7 +470,7 @@ def no_debug():
     print("no debug page")
     if not validate_save(session, True):
         print("Invalid save game")
-        return make_response(redirect('/save-editor')) #todo disable save editor toggle?
+        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
     saves = get_saves()
     return render_template("nodebug.html", time=datetime.now().timestamp(), zid=str(get_zid()),
                            version=version,
@@ -320,11 +505,12 @@ def list_session():
     # get_all_sessions() returns raw SQLAlchemy rows; get_sessions_dropdown_info
     # expects decoded save dicts, so passing rows here raised AttributeError
     # ('Session' object has no attribute 'get') as soon as one save existed.
-    response = get_sessions_dropdown_info(get_saves())
-
-    dump = json.dumps(response,
-                      default=lambda o: '<not serializable>', sort_keys=False, indent=2)
-    return dump
+    #
+    # Served as JSON rather than as a bare string: the web front end reads this
+    # to render /admin/sessions, and text/html for a JSON document means the
+    # browser has to guess. The route is admin-gated at the proxy, which is the
+    # only layer that knows who is signed in.
+    return jsonify(get_sessions_dropdown_info(get_saves()))
 
 
 def get_sessions_dropdown_info(saves):
@@ -512,74 +698,15 @@ def remove_quest(value):
     return ("Nope! You don't have a game session yet", 403)
 
 
-@app.route("/save-editor", methods=['GET'])
+@app.route("/save-editor")
 def save_editor():
-    backups = []
-    s = session
-    backup_count = 0
-    while "backup" in s:
-        backups.append(format_backup_message(s["backup"]))
-        s = s["backup"]
-        backup_count += 1
-    print("Backups present", backup_count)
+    """The 2013 editor is gone; /admin/editor replaced it.
 
-    incomplete_quests = [e["name"] for e in session['quests'] if not e["complete"]]
-    complete_quests = [e["name"] for e in session['quests'] if e["complete"]]
-
-    return render_template("save-editor.html", savegame=json.dumps(
-        {
-            'user_object': session['user_object'] if 'user_object' in session else None,
-            'profilePic': session['profilePic'] if 'profilePic' in session else None,
-            'quests': session['quests'] if 'quests' in session else None,
-            'battle': session['battle'] if 'battle' in session else None,
-            'last_battle': session['last_battle'] if 'last_battle' in session else None,
-            'fleets': session['fleets'] if 'fleets' in session else None,
-            'population': session['population'] if 'population' in session else None,
-            'saved': session['saved'] if 'saved' in session else None,
-            'save_version': session['save_version'] if 'save_version' in session else None,
-            'original_save_version': session['original_save_version'] if 'original_save_version' in session else None,
-        }, default=lambda o: '<not serializable>', sort_keys=False, indent=2), uid=get_zid(), backups=backups,
-                           valid=validate_save(session, False),
-                           quest_names={q: v for q, v in quest_titles.items() if q not in complete_quests and q not in incomplete_quests},
-                           incomplete_quest_names={q: v for q, v in quest_titles.items() if q in incomplete_quests},
-                           complete_quest_names={q: v for q, v in quest_titles.items() if q in complete_quests}
-                           )
-
-
-@app.route("/save-editor", methods=['POST'])
-def save_savegame():
-    print("Going to save:")
-    restores = [int(key[7:]) for key in request.form if "restore" in key]
-
-    if restores:
-        save_game = session["backup"]
-        for _i in range(restores[0]):
-            save_game = save_game["backup"]
-        save_game = copy.deepcopy(save_game)
-        print("restoring backup")
-        message = "Revert to backup \"" + format_backup_message(save_game) + "\""
-    else:
-        save_game = json.loads(request.form['savegame'])
-        message = "before " + request.form.get("message")
-
-    print(repr(save_game))
-
-    create_backup(message)
-    session['saved'] = str(session.get('saved', "")) + "edit"
-    session['user_object'] = save_game['user_object']
-    if 'profilePic' in session and 'profilePic' in save_game :
-        session['profilePic'] = save_game['profilePic']
-    else:
-        pass
-    session['quests'] = save_game['quests']
-    session['battle'] = save_game['battle']
-    session['fleets'] = save_game['fleets']
-    session['population'] = save_game['population']
-    session['save_version'] = save_game.get('save_version')
-
-    response = make_response(redirect('/home.html'))
-    return response
-    # return ('', 400)
+    Kept as a redirect so an old bookmark, a post on a forum or a muscle-memory
+    URL lands on the current page instead of a 404. The proxy still gates this
+    path as admin-only, which is what stops anyone discovering the move.
+    """
+    return redirect('/admin/editor')
 
 
 def format_backup_message(backup):
