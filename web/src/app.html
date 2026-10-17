@@ -1,9 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="text-scale" content="scale" />
+		<!--
+			The favicon lives here, not in +layout.svelte: %sveltekit.assets% is
+			only substituted in this file, so a component asking for it produces a
+			literal request to /%sveltekit.assets%/favicon.png and a 404.
+		-->
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

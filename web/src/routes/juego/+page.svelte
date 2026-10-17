@@ -13,13 +13,12 @@
 		PLAYER_WIDTH,
 		SWF_PATH,
 		loadRuffle,
-		type RufflePlayerHandle,
+		type RufflePlayerHandle
 	} from '#lib/ruffle';
 
 	let { data } = $props();
 
 	let mount = $state<HTMLDivElement | null>(null);
-	let player = $state<RufflePlayerHandle | null>(null);
 	// Not `state`: a variable named `state` shadows the `$state` rune for the
 	// whole scope and the compiler rejects it.
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
@@ -42,6 +41,18 @@
 				handle.height = PLAYER_HEIGHT;
 				handle.style = `width: ${PLAYER_WIDTH}px; height: ${PLAYER_HEIGHT}px; background-color: ${PLAYER_BACKGROUND};`;
 
+				/*
+				 * Attach before loading, never after.
+				 *
+				 * Ruffle calls play() on a connected element. Loading into a
+				 * detached node leaves it suspended, and the console fills with
+				 * "Ignoring attempt to play a disconnected or suspended Ruffle
+				 * element" while the game silently never starts. The mount point
+				 * is rendered unconditionally for the same reason: putting it
+				 * behind an {#if} would mean it does not exist yet at this point.
+				 */
+				mount?.appendChild(element);
+
 				await handle.load({
 					url: SWF_PATH,
 					backgroundColor: PLAYER_BACKGROUND,
@@ -51,13 +62,11 @@
 					allowFullscreen: true,
 					quality: 'high',
 					autoplay: true,
-					parameters: data.flashVars,
+					parameters: data.flashVars
 				});
 
 				if (cancelled) return;
-				player = handle;
 				phase = 'ready';
-				mount?.appendChild(element);
 			} catch (cause) {
 				if (cancelled) return;
 				failure = cause instanceof Error ? cause.message : String(cause);
@@ -67,11 +76,10 @@
 
 		return () => {
 			cancelled = true;
-			// Tear the player out of the DOM rather than calling a method on it:
-			// RufflePlayerHandle exposes no documented teardown, and removing
-			// the node is what actually stops the render loop.
+			// Remove the node rather than calling a method: RufflePlayerHandle
+			// exposes no documented teardown, and detaching is what stops the
+			// render loop.
 			mount?.replaceChildren();
-			player = null;
 		};
 	});
 </script>
@@ -81,28 +89,28 @@
 </svelte:head>
 
 <div class="flex flex-col items-center gap-4">
-	{#if phase === 'loading'}
-		<div
-			class="flex items-center justify-center bg-empire-900 text-slate-300"
-			style="width: {PLAYER_WIDTH}px; height: {PLAYER_HEIGHT}px;"
-		>
-			<p>Cargando Ruffle…</p>
-		</div>
-	{:else if phase === 'error'}
-		<div
-			class="flex flex-col items-center justify-center gap-2 border border-red-800 bg-red-950/40 p-8 text-red-200"
-			style="width: {PLAYER_WIDTH}px;"
-		>
-			<p class="text-lg font-semibold">No se pudo iniciar el juego</p>
-			<p class="text-sm">{failure}</p>
-			<p class="text-sm text-red-300/70">
-				Revisa que el gateway AMF0 esté corriendo en 127.0.0.1:5005.
-			</p>
-		</div>
-	{:else}
-		<!-- The player is inserted here on mount; Svelte must not manage it. -->
-		<div bind:this={mount}></div>
-	{/if}
+	<div class="relative" style="width: {PLAYER_WIDTH}px; height: {PLAYER_HEIGHT}px;">
+		<!-- Always in the DOM: the player is appended here before it loads. -->
+		<div bind:this={mount} class="absolute inset-0"></div>
+
+		{#if phase === 'loading'}
+			<div
+				class="absolute inset-0 flex items-center justify-center bg-empire-900 text-slate-300"
+			>
+				<p>Cargando Ruffle…</p>
+			</div>
+		{:else if phase === 'error'}
+			<div
+				class="absolute inset-0 flex flex-col items-center justify-center gap-2 border border-red-800 bg-red-950/40 p-8 text-red-200"
+			>
+				<p class="text-lg font-semibold">No se pudo iniciar el juego</p>
+				<p class="text-sm">{failure}</p>
+				<p class="text-sm text-red-300/70">
+					Revisa que el gateway AMF0 esté corriendo en 127.0.0.1:5005.
+				</p>
+			</div>
+		{/if}
+	</div>
 
 	<p class="text-sm text-slate-400">
 		zid <code class="text-slate-300">{data.zid ?? '—'}</code>

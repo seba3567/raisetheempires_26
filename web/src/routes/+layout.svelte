@@ -10,7 +10,6 @@
 <svelte:head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<link rel="icon" href="%sveltekit.assets%/favicon.png" />
 </svelte:head>
 
 <div class="flex min-h-dvh flex-col bg-empire-950 text-slate-200">
