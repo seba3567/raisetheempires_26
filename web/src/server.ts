@@ -5,10 +5,11 @@
  * else to the Python AMF0 gateway on loopback. The gateway is never exposed
  * directly, so the Flask development server never has to be production-ready.
  */
+import { accessDenied } from "./access.ts";
 import { config } from "./config.ts";
 import { db, migrate } from "./db/client.ts";
 import { proxyToGateway } from "./proxy.ts";
-import { handle, ownsPath } from "./router.ts";
+import { checkAdminAccess, handle, ownsPath } from "./router.ts";
 
 db();
 console.log(`[web] database ready at ${config.database.file}`);
@@ -23,6 +24,13 @@ const server = Bun.serve({
 
     try {
       if (ownsPath(path)) return await handle(req);
+
+      // The gateway's cheat and editing routes are admin-only. This is the only
+      // layer that knows who is signed in, so the check has to happen here.
+      if (accessDenied(path)) {
+        const denial = await checkAdminAccess(req);
+        if (denial) return denial;
+      }
 
       const result = await proxyToGateway(req);
       if (result === "websocket-unsupported") {

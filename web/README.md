@@ -92,10 +92,40 @@ La contraseña se lee del entorno, nunca de un argumento, para que no quede en e
 historial de la shell ni en un log. El último admin no se puede degradar ni
 borrar.
 
+## El editor de imperio es solo de admins
+
+El gateway es más viejo que las cuentas: `/gazillionaire`, `/patch/...` y
+`/save-editor`reachable para cualquiera con una sesión de juego, y `/list_session`
+entrega el session id de todos los jugadores. Con cuentas reales, el chequeo de
+rol va en `src/access.ts`, que es la única capa que sabe quién está conectado.
+
+| Ruta | Qué hace |
+| --- | --- |
+| `/save-editor` | Editor de imperio: recursos, nivel, quests, editor raw |
+| `/gazillionaire` | +10.000 Empire Points |
+| `/deprogress` | Rebobina el progreso |
+| `/patch/…` | Parchea cualquier campo del save |
+| `/seed/…`, `/unlock_quest/…`, `/complete_quest/…`, `/remove_quest/…` | manipulating quests |
+| `/list_session` | Lista todas las sesiones guardadas |
+| `/language_editor` | Editor de traducciones |
+
+Sin sesión: **401**. Con cuenta normal: **403**, y la respuesta no dice qué hay
+detrás del muro. Con `role = admin`: pasa al gateway tal cual.
+
+El criterio es estrecho a propósito: se cierra lo que cambia el estado del juego
+o expone datos de otro jugador, y se deja todo lo demás. Una lista negra
+amplia sobre las rutas del gateway rompería al cliente la primera vez que pide una
+ruta que nadie pensó en permitir.
+
+> **Esto solo funciona si Flask sigue en loopback.** El candado está en Bun, no
+> en Python. Si expones `empires-server.py` en `0.0.0.0`, cualquiera alcanza el
+> editor saltándoselo por completo. El servicio de Bun es la única puerta, y
+> `--host` del gateway debería quedar en `127.0.0.1`.
+
 ## Comandos
 
 ```powershell
-bun test          # 78 tests
+bun test          # 87 tests
 bun run typecheck # tsc --noEmit, sin errores
 bun run dev       # con --watch
 ```
@@ -105,6 +135,7 @@ bun run dev       # con --watch
 | Archivo | Qué hace |
 |---|---|
 | `src/server.ts` | `Bun.serve`, rutea entre este servicio y el proxy |
+| `src/access.ts` | Qué rutas del gateway exigen rol admin |
 | `src/router.ts` | Rutas propias: landing, login, registro, cuenta, amigos |
 | `src/proxy.ts` | Proxy inverso. El `Host` es lo importante: ver abajo |
 | `src/ids.ts` | CRC-64/GO-ISO y el `zid` |

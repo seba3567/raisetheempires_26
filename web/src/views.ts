@@ -182,6 +182,7 @@ export function registerPage(error: string | null): string {
 interface DashboardData {
   username: string;
   zid: string;
+  role: string;
   level: number;
   xp: number;
   worldName: string;
@@ -214,11 +215,23 @@ export function accountPage(data: DashboardData, notice: string | null): string 
           )
           .join("");
 
+  const adminBlock =
+    data.role === "admin"
+      ? `<h2>Administración <span class="tag">${esc(data.role)}</span></h2>
+<div class="panel">
+  <p>Estas herramientas cambian el estado del juego o exponen datos de otros
+  jugadores, así que solo una cuenta con rol <code>admin</code> puede abrirlas.</p>
+  <p><a class="btn" href="/save-editor">Abrir el editor de imperio</a></p>
+  <p style="margin-top:1rem"><a href="/gazillionaire">Añadir 10.000 Empire Points a mi partida</a>
+  &nbsp;·&nbsp; <a href="/list_session">Ver sesiones guardadas</a></p>
+</div>`
+      : "";
+
   return layout({
     title: `Mi cuenta — Raise the Empires`,
     user: { username: data.username },
     body: `
-<h1>${esc(data.username)}</h1>
+<h1>${esc(data.username)}${data.role === "admin" ? ' <span class="tag">admin</span>' : ""}</h1>
 ${notice ? `<p class="ok">${esc(notice)}</p>` : ""}
 <div class="grid" style="margin-bottom:2rem">
   <div class="panel"><div style="color:var(--muted);font-size:.8rem;text-transform:uppercase">Nivel</div>
@@ -230,6 +243,8 @@ ${notice ? `<p class="ok">${esc(notice)}</p>` : ""}
     <div style="color:var(--muted);font-size:.8rem;margin-top:.5rem">zid ${esc(data.zid)}</div></div>
 </div>
 <p><a class="btn" href="/home.html">Entrar al juego</a></p>
+
+${adminBlock}
 
 <h2>Amigos</h2>
 <table>

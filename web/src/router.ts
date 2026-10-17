@@ -10,6 +10,7 @@ import {
   findById,
   findByUsername,
   getProgress,
+  isAdmin,
   listFriends,
   publicUser,
   recordActivity,
@@ -21,7 +22,8 @@ import {
   UsernameTaken,
 } from "./models/accounts.ts";
 import { clearSessionCookie, isSecureRequest, readSession, sessionCookie } from "./session.ts";
-import { accountPage, homePage, loginPage, registerPage } from "./views.ts";
+import { accountPage, homePage, layout, loginPage, registerPage } from "./views.ts";
+import { esc } from "./views.ts";
 
 function html(body: string, status = 200, headers: HeadersInit = {}): Response {
   return new Response(body, {
@@ -144,6 +146,7 @@ export async function handle(req: Request): Promise<Response> {
         {
           username: user.username,
           zid: String(user.zid),
+          role: user.role,
           level: progress?.level ?? 1,
           xp: progress?.xp ?? 0,
           worldName: progress?.world_name ?? user.username,
@@ -192,3 +195,47 @@ export async function handle(req: Request): Promise<Response> {
 
 /** Response used when a logged-in visitor hits the landing page. */
 export { publicUser, updateProgress };
+
+/**
+ * Gate the gateway's admin-only routes.
+ *
+ * Returns a 403 when the visitor is not an admin, and null when the request may
+ * proceed to the gateway. Three outcomes, deliberately distinct: an
+ * anonymous visitor is told to log in, a signed-in player is told they lack
+ * the role, and neither leaks whether the route exists behind the wall.
+ */
+export async function checkAdminAccess(req: Request): Promise<Response | null> {
+  const userId = await readSession(req);
+  const user = userId === null ? null : findById(userId);
+
+  if (!user) {
+    return html(
+      layout({
+        title: "Se necesita una cuenta — Raise the Empires",
+        body: `
+<h1>Se necesita una cuenta</h1>
+<p>Esta sección es solo para administradores del servidor. Entra con tu cuenta e
+intenta de nuevo.</p>
+<p><a class="btn" href="/entrar">Entrar</a></p>`,
+      }),
+      401,
+    );
+  }
+
+  if (!isAdmin(user)) {
+    return html(
+      layout({
+        title: "Sin permisos — Raise the Empires",
+        user: { username: user.username },
+        body: `
+<h1>Sin permisos</h1>
+<p class="error">Tu cuenta <strong>${esc(user.username)}</strong> no tiene rol de administrador,
+así que no puede abrir las herramientas de edición del imperio.</p>
+<p>Si crees que es un error, escríbele a quien administra este servidor.</p>`,
+      }),
+      403,
+    );
+  }
+
+  return null;
+}
