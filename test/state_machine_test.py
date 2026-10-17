@@ -1,7 +1,8 @@
 #TO RUN TESTS RUN empires_test.py
 
-import state_machine
 from flask import Flask, session
+
+import state_machine
 
 app = Flask(__name__)
 app.secret_key = 'test'

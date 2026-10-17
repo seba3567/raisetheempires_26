@@ -1,6 +1,6 @@
-import copy
 import configparser
-import json
+import copy
+import logging
 import os
 import shutil
 import sys
@@ -10,12 +10,11 @@ from pathlib import Path
 
 import daiquiri
 import editor
-from flask import session,current_app
-import logging
-
+from flask import current_app, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
 from itsdangerous import want_bytes
+
 try:
     import cPickle as pickle
 except ImportError:
@@ -75,6 +74,15 @@ def save_database_uri(root_path, instance_path):
                 print("WARNING: You have a save.db in both the root as the instance folder (when running from source), only the instance one will be used!")
         save_db_path = new_save_db_path
 
+    # SQLite does not create the folder that holds the database file. On a fresh
+    # clone there is no save.db in the project root, so the instance folder was
+    # never created above and the first connection failed with
+    # "unable to open database file".
+    save_db_dir = os.path.dirname(os.path.abspath(save_db_path))
+    if save_db_dir and not os.path.isdir(save_db_dir):
+        print("Creating save database folder", save_db_dir)
+        os.makedirs(save_db_dir, exist_ok=True)
+
     print("SQLITE", f"sqlite:///{save_db_path}")
 
     return f"sqlite:///{save_db_path}"
@@ -95,9 +103,8 @@ def base_path():
 def log_path():
     if os.path.exists(my_games_path()):
         return my_games_path()
-    else:
-        print("Warning: folder in My games missing, falling back to install folder.")
-        return "."
+    print("Warning: folder in My games missing, falling back to install folder.")
+    return "."
 
 
 def set_crash_log(toggle):
@@ -106,14 +113,31 @@ def set_crash_log(toggle):
     crash_log = toggle
 
 
+def _crash_editor_allowed():
+    """Whether an unhandled exception may pop up the log editor.
+
+    ``editor.edit()`` blocks until the window is closed, so a single unhandled
+    error freezes the whole server. It must never do that in an automated
+    context, where an exception is an expected observation and nothing is
+    watching the screen.
+    """
+    if os.environ.get("RTE_NO_CRASH_EDITOR"):
+        return False
+    return "pytest" not in sys.modules
+
+
 def exception_handler(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
 
     logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    log_file = os.path.join(log_path(), "log.txt")
     if crash_log:
-        text = editor.edit(filename=os.path.join(log_path(), "log.txt"))
+        if _crash_editor_allowed():
+            editor.edit(filename=log_file)
+        else:
+            logger.error("Crash log editor suppressed (automated run); see %s", log_file)
 
 # logger = logging.getLogger(__name__)
 # handler = logging.StreamHandler(stream=sys.stdout)
@@ -190,5 +214,4 @@ def get_dict(*args):
 
 class InvalidSaveException(Exception):
     """Exception when save is invalid while loading."""
-    pass
 

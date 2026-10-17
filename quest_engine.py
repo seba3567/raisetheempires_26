@@ -3,10 +3,18 @@ from functools import reduce
 
 from flask import session
 
-from game_settings import game_settings, lookup_item_by_code, lookup_state_machine, replenish_energy, lookup_yield, \
-    allies, get_sessions_friends, lookup_items_by_unit_class
-from quest_settings import quest_settings, prequels
-from save_engine import lookup_objects_by_item_name, create_backup, get_saves
+from game_settings import (
+    allies,
+    game_settings,
+    get_sessions_friends,
+    lookup_item_by_code,
+    lookup_items_by_unit_class,
+    lookup_state_machine,
+    lookup_yield,
+    replenish_energy,
+)
+from quest_settings import prequels, quest_settings
+from save_engine import create_backup, get_saves, lookup_objects_by_item_name
 
 
 def merge_quest_progress(qc, output_list, label):
@@ -61,30 +69,29 @@ def prepopulate_task(task):
                  int(e.get('state', 0)) >= (int(state_machine['-builtState']) if state_machine else 0)]
         number_built = len(built_objects)
         return min(number_built, int(task["_total"])), number_built >= int(task["_total"])
-    elif task["_action"] == 'countPlaced' and "_unitClass" in task:
+    if task["_action"] == 'countPlaced' and "_unitClass" in task:
         items = lookup_items_by_unit_class(task["_unitClass"])
         number_placed = 0
         for item in items:
             objects = lookup_objects_by_item_name(item['-name'])
             number_placed += len(objects)
         return min(number_placed, int(task["_total"])), number_placed >= int(task["_total"])
-    elif task["_action"] == 'countPlacements':
+    if task["_action"] == 'countPlacements':
         item = lookup_item_by_code(task.get("_item", task.get('_code')))
         objects = lookup_objects_by_item_name(item['-name'])
         number_placed = len(objects)
         return min(number_placed, int(task["_total"])), number_placed >= int(task["_total"])
-    elif task["_action"] == 'inventoryCount':
+    if task["_action"] == 'inventoryCount':
         item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
         return min(item_inventory.get(task["_item"], 0), int(task["_total"])), item_inventory.get(task["_item"], 0) >= int(task["_total"])
-    elif task["_action"] == 'population':
+    if task["_action"] == 'population':
         return min(session['population'], int(task["_total"])), session['population'] >= int(task["_total"])
-    elif task["_action"] == 'neighborsAdded':
+    if task["_action"] == 'neighborsAdded':
         if task["_desc"] == "quest_1140_task_01":
             return 0, False
-        else:
-            neighbor_count = len([ally for ally in allies.values() if ally.get("friend") and ally.get("neighbor")])
-            return min(neighbor_count, int(task["_total"])), neighbor_count >= int(task["_total"])
-    elif task["_action"] == 'countUpgrades':
+        neighbor_count = len([ally for ally in allies.values() if ally.get("friend") and ally.get("neighbor")])
+        return min(neighbor_count, int(task["_total"])), neighbor_count >= int(task["_total"])
+    if task["_action"] == 'countUpgrades':
         research = session['user_object']["userInfo"]["world"]["research"]
         total = 0
         unit = task["unit"]
@@ -102,10 +109,9 @@ def prepopulate_task(task):
                     total += len(v)
 
         return min(total, int(task["_total"])), total >= int(task["_total"])
-    elif task["_action"] == 'autoComplete':
+    if task["_action"] == 'autoComplete':
         return 1, True
-    else:
-        return 0, False
+    return 0, False
 
 
 # "autoComplete","battleDamage","battleKill","build","buyExpansion","challengeCreate","clear","countPlaced","expandIsland","fight","finishBuilding","fullscreen","genericString","harvest","inventoryAdded","islandWin","marketAdd","marketBuy","move","neighborsAdded","openDialog","ownObjects","ownResource","place","population","pillage","pvpCombat","resourceAdded","seenFlag","select","socialXPAdded","startImmunity","state","tending","tendingRewardDropped","unlockTutorial","useConsumable","visit","zoom"
@@ -264,7 +270,7 @@ def progress_build(state, state_machine, game_item, step, previous_state, refere
                                   reference_item.split(":")) > 1 else "")
                               )(task, progress, i, *args)
         ) \
-        and previous_reference_item == None
+        and previous_reference_item is None
 
 
 def progress_harvest(state, state_machine, game_item, step, previous_state, reference_item, previous_reference_item, *state_args):
@@ -277,7 +283,7 @@ def progress_harvest(state, state_machine, game_item, step, previous_state, refe
                                  progress_nested_parameter_implies("unit", "_subtype", lookup_item_by_code(previous_reference_item.split(":")[1]).get("-subtype","") if len(previous_reference_item.split(":")) > 1 else "")
                                  )(task, progress, i, *args)
                         ) \
-        and reference_item == None
+        and reference_item is None
 
 
 def progress_auto_complete():
@@ -305,7 +311,7 @@ def progress_state(state, state_machine, game_item, step, *state_args):
 
 
 def all_lambda(*lambdas):
-    return lambda *args: all([l(*args) for l in lambdas])
+    return lambda *args: all(fn(*args) for fn in lambdas)
 
 
 def progress_action(action):
@@ -317,26 +323,26 @@ def progress_parameter_equals(key, value):
 
 
 def progress_parameter_implies(key, value):
-    return lambda task, *args: task.get(key) == None or task.get(key, "_NO_MATCH_") == value
+    return lambda task, *args: task.get(key) is None or task.get(key, "_NO_MATCH_") == value
 
 
 def progress_nested_parameter_implies(key, key2, value):
-    return lambda task, *args: task.get(key) == '' or task.get(key, {}).get(key2) == None or task.get(key, {}).get(key2, "_NO_MATCH_") == value
+    return lambda task, *args: task.get(key) == '' or task.get(key, {}).get(key2) is None or task.get(key, {}).get(key2, "_NO_MATCH_") == value
 
 
 def progress_nested_parameter_implies_contains(key, key2, value):
-    return lambda task, *args: task.get(key) == '' or task.get(key, {}).get(key2) == None or any(i in task.get(key, {}).get(key2, "_NO_MATCH_").split(",") for i in value.split(","))
+    return lambda task, *args: task.get(key) == '' or task.get(key, {}).get(key2) is None or any(i in task.get(key, {}).get(key2, "_NO_MATCH_").split(",") for i in value.split(","))
 
 
 def progress_parameter_implies_contains(key, value):
-    return lambda task, *args: task.get(key) == None or any(
+    return lambda task, *args: task.get(key) is None or any(
         i in task.get(key, "_NO_MATCH_").split(",") for i in value.split(","))
 
 
 # deprogress functions?
 def handle_quest_progress(meta, progress_function):
     replenish_energy()
-    incomplete_quests = [e for e in session['quests'] if e["complete"] == False]
+    incomplete_quests = [e for e in session['quests'] if not e["complete"]]
     for session_quest in incomplete_quests:
         new_quests = []
         report_quest = False
@@ -408,9 +414,9 @@ def new_quest_with_sequels(name, new_quests, meta, force=False):
 
 
 def activate_unlocked_quests(new_quests, meta):
-    open_quests = [e["name"] for e in session["quests"] if e["complete"] == False]
+    open_quests = [e["name"] for e in session["quests"] if not e["complete"]]
     if len(open_quests) <= 20:
-        completed_quests = [e["name"] for e in session["quests"] if e["complete"] == True]
+        completed_quests = [e["name"] for e in session["quests"] if e["complete"]]
         quests = [e["name"] for e in session["quests"]]
         sc = 0
         quest_selection = []
@@ -547,8 +553,8 @@ def do_rewards(label, raw_rewards, meta, inc_modifier=lambda a: a, item_modifier
 def roll_random():
     world = session['user_object']["userInfo"]["world"]
     prev_seed = str(world["randSeedW"]) + ', ' +  str(world["randSeedZ"])
-    world["randSeedZ"] = 36969 * (world["randSeedZ"] & 65535)  + (world["randSeedZ"] >> 16 & 65535) & 4294967295;
-    world["randSeedW"] = 18000 * (world["randSeedW"] & 65535)  + (world["randSeedW"] >> 16 & 65535) & 4294967295;
+    world["randSeedZ"] = 36969 * (world["randSeedZ"] & 65535)  + (world["randSeedZ"] >> 16 & 65535) & 4294967295
+    world["randSeedW"] = 18000 * (world["randSeedW"] & 65535)  + (world["randSeedW"] >> 16 & 65535) & 4294967295
     print("Seed", prev_seed, "=>", str(world["randSeedW"]) + ', ' + str(world["randSeedZ"]))
     return (world["randSeedZ"] << 16) +  world["randSeedW"] & 4294967295
 
@@ -577,8 +583,8 @@ def get_seed_z():
 
 def roll_reward_random():
     world = session['user_object']["userInfo"]["world"]
-    world["rewardRandSeedZ"] = 36969 * (world["rewardRandSeedZ"] & 65535)  + (world["rewardRandSeedZ"] >> 16 & 65535) & 4294967295;
-    world["rewardRandSeedW"] = 18000 * (world["rewardRandSeedW"] & 65535)  + (world["rewardRandSeedW"] >> 16 & 65535) & 4294967295;
+    world["rewardRandSeedZ"] = 36969 * (world["rewardRandSeedZ"] & 65535)  + (world["rewardRandSeedZ"] >> 16 & 65535) & 4294967295
+    world["rewardRandSeedW"] = 18000 * (world["rewardRandSeedW"] & 65535)  + (world["rewardRandSeedW"] >> 16 & 65535) & 4294967295
     print( (world["rewardRandSeedZ"] << 16) +  world["rewardRandSeedW"] & 4294967295)
     return (world["rewardRandSeedZ"] << 16) +  world["rewardRandSeedW"] & 4294967295
 
@@ -629,7 +635,7 @@ def progress_useAOA_consumable(item):
 
 
 def progress_useGeneral_consumable(item,enemy_turn): #DONT USE THIS FUNCTION FOR SOMETHING ELSE
-    if enemy_turn == False:
+    if not enemy_turn:
         item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
         if item["-subtype"] == "secondary":
             session['user_object']["userInfo"]["player"]["mana"]["value"]-=int(item["consumable"]["-mana"])
@@ -637,7 +643,7 @@ def progress_useGeneral_consumable(item,enemy_turn): #DONT USE THIS FUNCTION FOR
              session['user_object']["userInfo"]["player"]["tutorialProgress"] != "tut_step_powerUpPowerSelected":
                 item_inventory[item["-code"]] -= 1
     return lambda task, progress, i, *args: \
-        task["_action"] == "useConsumable"  and item is not None and enemy_turn == False and \
+        task["_action"] == "useConsumable"  and item is not None and not enemy_turn and \
         progress_parameter_implies("_type", item.get("-type", ""))(task, progress, i, *args) and \
         progress_parameter_implies("_subtype", item.get("-subtype", ""))(task, progress, i, *args) and \
         progress_parameter_implies_contains("_item", item["-code"])(task, progress, i, *args)

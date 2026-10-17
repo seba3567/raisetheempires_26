@@ -12,8 +12,8 @@ if not os.environ.get('EDITOR'):
 
 import editor
 from tendo import singleton
-import init_settings as settings
 
+import init_settings as settings
 
 if __name__ == '__main__':
     settings.read_ops()
@@ -24,38 +24,71 @@ if not settings.debug:
 if os.name == 'nt':
     os.system('color')
 
-from save_engine import db, save_database_uri, log_path, lookup_objects_save_by_position, get_all_sessions, \
-    store_session, validate_save, InvalidSaveException, set_crash_log, my_games_path, install_path, base_path
-from save_migration import migrate, is_0_08a_preview
 from builtins import print
-from time import sleep
 from datetime import timedelta
+from time import sleep
 
-from flask import Flask, render_template, send_from_directory, request, Response, make_response, redirect
+from flask import Flask, Response, make_response, redirect, render_template, request, send_from_directory
+
+from save_engine import (
+    InvalidSaveException,
+    base_path,
+    db,
+        install_path,
+    log_path,
+    lookup_objects_save_by_position,
+    my_games_path,
+    save_database_uri,
+    set_crash_log,
+    store_session,
+    validate_save,
+)
+from save_migration import is_0_08a_preview, migrate
+
 try:
-    from flask import safe_join # flask 2.1.0 : safe_join is removed, use werkzeug.utils.safe_join instead."
+    from flask import safe_join  # flask 2.1.0 : safe_join is removed, use werkzeug.utils.safe_join instead."
 except ImportError:
     from werkzeug.utils import safe_join
+import copy
+import json
+import random
+import threading  #, webbrowaser
+import xml.etree.ElementTree as ET
+
+import pyamf
+import pyamf.amf0
 from flask_session import Session
 from pyamf import remoting
-import pyamf
 
 import mod_engine
-from battle_engine import battle_complete_response, spawn_fleet, next_campaign_response, assign_consumable_response, \
-    get_active_island_by_map, set_active_island_by_map, format_player_fleet, \
-    cancel_unstarted_invasions, register_fleetname_fleet, get_last_fleet_name, is_shielded, decode_unit_count_list, \
-    encode_unit_strings, get_survival_player_fleet, encode_unit_string, BattleContext, StaleBattleReference
-from game_settings import get_zid, initial_island, random_image, randomReward, get_sessions_id, unlock_expansion, \
-    lookup_wave, lookup_crew_template
-import threading #, webbrowaser
-import pyamf.amf0
-import json
-import xml.etree.ElementTree as ET
+from battle_engine import (
+    BattleContext,
+    StaleBattleReference,
+    assign_consumable_response,
+    battle_complete_response,
+    cancel_unstarted_invasions,
+    decode_unit_count_list,
+    encode_unit_strings,
+    format_player_fleet,
+    get_active_island_by_map,
+    get_survival_player_fleet,
+    next_campaign_response,
+    register_fleetname_fleet,
+    set_active_island_by_map,
+    spawn_fleet,
+)
+from game_settings import (
+    get_sessions_id,
+    get_zid,
+    initial_island,
+    lookup_crew_template,
+    lookup_wave,
+    randomReward,
+    unlock_expansion,
+)
+from logger import report_other_log, report_tutorial_step, report_world_log, socketio
 from quest_engine import *
 from state_machine import *
-from logger import socketio, report_tutorial_step, report_world_log, report_other_log
-import copy
-import random
 
 try:
     from flask_compress import Compress
@@ -198,7 +231,10 @@ def wipe_session():
 
 @app.route("/list_session", methods=['GET', 'POST'])
 def list_session():
-    response = get_sessions_dropdown_info(get_all_sessions())
+    # get_all_sessions() returns raw SQLAlchemy rows; get_sessions_dropdown_info
+    # expects decoded save dicts, so passing rows here raised AttributeError
+    # ('Session' object has no attribute 'get') as soon as one save existed.
+    response = get_sessions_dropdown_info(get_saves())
 
     dump = json.dumps(response,
                       default=lambda o: '<not serializable>', sort_keys=False, indent=2)
@@ -254,8 +290,7 @@ def more_money():
         session['saved'] = str(session.get('saved', "")) +  "gazillionaire"
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/deprogress", methods=['GET', 'POST'])
@@ -278,8 +313,7 @@ def deprogress_battle_map():
             set_active_island_by_map(map, island - 1)
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/seed/w/<int:w>/z/<int:z>", methods=['GET', 'POST'])
@@ -295,8 +329,7 @@ def change_seed(w, z):
         session['saved'] = str(session.get('saved', "")) +  "seed"
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/patch/<path:path>/empty-dict", methods=['GET', 'POST'])
@@ -329,10 +362,8 @@ def patch_user(path, value):
             session['saved'] = str(session.get('saved', "")) + "patch"
             response = make_response(redirect('/home.html'))
             return response
-        else:
-            return ("Nope! Disallowed patch root", 403)
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+        return ("Nope! Disallowed patch root", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/patch/<path:path>/list/index/<int:i>/int/<int:value>", methods=['GET', 'POST'])
@@ -350,10 +381,8 @@ def patch_user_list(path, i, value):
             session['saved'] = str(session.get('saved', "")) + "patch"
             response = make_response(redirect('/home.html'))
             return response
-        else:
-            return ("Nope! Disallowed patch root", 403)
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+        return ("Nope! Disallowed patch root", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/unlock_quest/<value>", methods=['GET', 'POST'])
@@ -368,8 +397,7 @@ def unlock_quest(value):
 
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/complete_quest/<value>", methods=['GET', 'POST'])
@@ -383,8 +411,7 @@ def complete_quest(value):
 
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/remove_quest/<value>", methods=['GET', 'POST'])
@@ -396,8 +423,7 @@ def remove_quest(value):
 
         response = make_response(redirect('/home.html'))
         return response
-    else:
-        return ("Nope! You don't have a game session yet", 403)
+    return ("Nope! You don't have a game session yet", 403)
 
 
 @app.route("/save-editor", methods=['GET'])
@@ -411,7 +437,7 @@ def save_editor():
         backup_count += 1
     print("Backups present", backup_count)
 
-    incomplete_quests = [e["name"] for e in session['quests'] if e["complete"] == False]
+    incomplete_quests = [e["name"] for e in session['quests'] if not e["complete"]]
     complete_quests = [e["name"] for e in session['quests'] if e["complete"]]
 
     return render_template("save-editor.html", savegame=json.dumps(
@@ -437,11 +463,11 @@ def save_editor():
 @app.route("/save-editor", methods=['POST'])
 def save_savegame():
     print("Going to save:")
-    restores = [int(key[7:]) for key in request.form.keys() if "restore" in key]
+    restores = [int(key[7:]) for key in request.form if "restore" in key]
 
     if restores:
         save_game = session["backup"]
-        for i in range(restores[0]):
+        for _i in range(restores[0]):
             save_game = save_game["backup"]
         save_game = copy.deepcopy(save_game)
         print("restoring backup")
@@ -1498,7 +1524,7 @@ def user_response():
 
         user["neighbors"] = get_allies_info()
 
-        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if e["complete"] == False]}
+        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if not e["complete"]]}
 
     else:
         user = copy.deepcopy(init_user())
@@ -1510,7 +1536,7 @@ def user_response():
         session['save_version'] = version
         session['original_save_version'] = version
         session['saved_on'] = datetime.now().timestamp()
-        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if e["complete"] == False]}
+        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if not e["complete"]]}
         new_quest_with_sequels("Q0516", new_quests, meta)
 
     # session['user_object']["userInfo"]["player"]["tutorialProgress"] = "tut_step_krunsch1Battle2Speeech" #'tut_step_inviteFriendsViral'
@@ -1582,10 +1608,9 @@ def user_response():
     # Set level 21 (1881 xp) for all players to get Titan Lab in inventory
     if mechLab_inventory_req > 1880:
         # every session should only get once
-        if not any(i["itemName"] == "MechLab" for i in session['user_object']["userInfo"]["world"]["objects"]):
-            if item_inventory.get("TL01", 0) < 1:
-                item_inventory["TL01"] = 1
-                print("Level 21 has been reached, Titan Lab unlocked at inventory")
+        if not any(i["itemName"] == "MechLab" for i in session['user_object']["userInfo"]["world"]["objects"]) and item_inventory.get("TL01", 0) < 1:
+            item_inventory["TL01"] = 1
+            print("Level 21 has been reached, Titan Lab unlocked at inventory")
 
     handle_quest_progress(meta, progress_inventory_count())
     handle_quest_progress(meta, progress_neighbor_count())
@@ -1605,7 +1630,7 @@ def user_response():
 
     # for e in session['user_object']["userInfo"]["world"]["objects"]:
     #     e['lastUpdated'] = 1308211628  #1 minute earlier to test
-    user["completedQuests"] = [e["name"] for e in session['quests'] if e["complete"] == True]
+    user["completedQuests"] = [e["name"] for e in session['quests'] if e["complete"]]
 
     merge_quest_progress(new_quests, meta['QuestComponent'], "output quest")
     merge_quest_progress(new_quests, session['quests'], "session quest")

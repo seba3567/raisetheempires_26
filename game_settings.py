@@ -2,12 +2,12 @@ import copy
 import json
 import os
 import random
-
-import libscrc
-from flask import session
 from datetime import datetime
 
+from flask import session
+
 import mod_engine
+from crc64_go_iso import zid_from_sid
 from save_engine import my_games_path, validate_save
 
 game_settings_path = os.path.join(my_games_path(), "gamesettings-converted.json")
@@ -15,12 +15,12 @@ initial_island_path = os.path.join(my_games_path(), "allies/initial-island.json"
 cached_urls = []
 
 def read_games_settings():
-    with open(game_settings_path, 'r') as f:
+    with open(game_settings_path) as f:
         return json.load(f)
 
 
 def read_initial_island():
-    with open(initial_island_path, 'r') as f:
+    with open(initial_island_path) as f:
         return json.load(f)
 
 
@@ -32,13 +32,19 @@ print("Initial island template", len(initial_island["objects"]), "objects loaded
       "roads loaded")
 # game_objects = [o for o in game_objects_2 if int(o["position"].split(",")[0]) > 62 and int(o["position"].split(",")[1]) > 58]
 
+def read_island_file(file_path):
+    with open(file_path) as island_file:
+        return json.load(island_file)
+
+
 allies = {str(e["info"]["uid"] if e["info"] else e["friend"]["uid"]): e for e in
-          [json.load(open(os.path.join(root, file_name), 'r')) for root, _, file_names in os.walk(os.path.join(my_games_path() ,"allies")) for
+          [read_island_file(os.path.join(root, file_name)) for root, _, file_names in
+           os.walk(os.path.join(my_games_path(), "allies")) for
            file_name in
            file_names if 'island.json' in file_name and file_name != "initial-island.json"]}
 print("Ally islands")
 print("-", len(allies.keys()), "allies loaded")
-for key in allies.keys():
+for key in allies:
     ally = allies[key]
     try:
         wName = ally["worldName"]
@@ -91,7 +97,7 @@ def lookup_items_by_unit_class(unit_class):
 
 def lookup_yield():  #TODO buildstate
     yields = {e['-name']: int(e['yield']['-workers']) for e in lookup_items_with_workers_yield()}
-    return sum([yields[e['itemName']] for e in session['user_object']["userInfo"]["world"]["objects"] if e['itemName'] in yields.keys()])
+    return sum([yields[e['itemName']] for e in session['user_object']["userInfo"]["world"]["objects"] if e['itemName'] in yields])
 
 
 def lookup_visitor_reward(reward_name):
@@ -113,9 +119,9 @@ def randomReward(item_name):
     reward_list = reward_list[0]["reward"]
 
     for item in range(len(reward_list)):
-        if not reward_list[item].get("-type") == "item" and reward_list[item].get("-item") == None:
+        if reward_list[item].get("-type") != "item" and reward_list[item].get("-item") is None:
             item_list.append(reward_list[item].get("-type"))
-        if not reward_list[item].get("-item") == None and reward_list[item].get("-type") == "item":
+        if reward_list[item].get("-item") is not None and reward_list[item].get("-type") == "item":
             item_list.append(reward_list[item].get("-item"))
         weight_list.append(reward_list[item].get("-weight"))
         ammount.append(reward_list[item].get("-count"))
@@ -164,7 +170,7 @@ def lookup_raw_state_machine(state_machine_name):
 def lookup_crew_template(building_name):
     item = lookup_item_by_name(building_name)
     crew_template_name = item["-crewTemplate"]
-    return [x for x in game_settings['settings']['crewTemplates']['crewTemplate'] if x['-crew'] == crew_template_name][0]
+    return next(x for x in game_settings['settings']['crewTemplates']['crewTemplate'] if x['-crew'] == crew_template_name)
 
 def repl_dict(d, replacements):
     for k, v in d.items():
@@ -220,7 +226,7 @@ def relock_expansion(index):
     expansions[i] = expansions[i] & ~(1 << e)
 
 def random_image():
-    return random.choice(list(set([u for u in fetch_urls() if u.endswith('.png')])))
+    return random.choice(list({u for u in fetch_urls() if u.endswith('.png')}))
 
 def fetch_urls():
     global cached_urls
@@ -230,7 +236,7 @@ def fetch_urls():
 
 def fetch_url_dict(d):
     urls =  [v for k, v in d.items() if k == '-url']
-    for k, v in d.items():
+    for v in d.values():
         if isinstance(v, dict):
             urls.extend(fetch_url_dict(v))
         elif isinstance(v, list):
@@ -238,9 +244,9 @@ def fetch_url_dict(d):
     return urls
 
 
-def fetch_url_list(l):
+def fetch_url_list(url_list):
     urls = []
-    for v in l:
+    for v in url_list:
         if isinstance(v, dict):
             urls.extend(fetch_url_dict(v))
         elif isinstance(v, list):
@@ -254,7 +260,7 @@ def simple_list(raw_list):
 
 
 def get_zid():
-    return libscrc.iso(session.sid.encode()) // 2048
+    return zid_from_sid(session.sid)
 
 
 def get_sessions_friends(saves):

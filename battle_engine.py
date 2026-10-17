@@ -3,19 +3,33 @@ import math
 import msgspec
 from flask import session
 
-from game_settings import lookup_item_by_code, game_settings, get_zid, lookup_items_by_type_and_subtype
+from game_settings import game_settings, get_zid, lookup_item_by_code, lookup_items_by_type_and_subtype
 from logger import report_battle_log
-from quest_engine import lookup_quest, get_tasks, simple_list, get_seed_w, get_seed_z, roll_random_between, \
-    handle_quest_progress, progress_action, roll_random_float, all_lambda, progress_parameter_equals, do_rewards, \
-    roll_reward_random_float, progress_battle_damage_count, progress_useAOA_consumable, progress_useGeneral_consumable, \
-    progress_parameter_implies
+from quest_engine import (
+    all_lambda,
+    do_rewards,
+    get_seed_w,
+    get_seed_z,
+    get_tasks,
+    handle_quest_progress,
+    lookup_quest,
+    progress_action,
+    progress_battle_damage_count,
+    progress_parameter_equals,
+    progress_parameter_implies,
+    progress_useAOA_consumable,
+    progress_useGeneral_consumable,
+    roll_random_between,
+    roll_random_float,
+    roll_reward_random_float,
+    simple_list,
+)
 from save_engine import get_saves, store_session
 
 
 class StaleBattleReference(Exception):
     """Raised when a request references a fleet/battle the server no longer has
     (e.g. a queued client request replayed after the battle/session was reset)."""
-    pass
 
 
 def battle_complete_response(params):
@@ -113,7 +127,7 @@ def battle_complete_response(params):
             doBattleRewards(hit_type, baddie_max_strength, damage, friendly_max_strength)
             handle_quest_progress(meta, progress_battle_damage_count("battleDamage", damage, friendlies[player_unit_id], baddies[enemy_unit_id]))
 
-        elif damage > 0 and is_shielded(ally_target, active_consumables) == True:
+        elif damage > 0 and is_shielded(ally_target, active_consumables):
             consume_shield(ally_target, active_consumables)
 
         else:
@@ -153,7 +167,7 @@ def battle_complete_response(params):
 
 def process_consumable_end_turn(active_consumables, baddie_strengths, friendly_strengths, player_turn):
     for consumable_tuple in active_consumables:
-        (consumable, target, tries) = consumable_tuple
+        (consumable, target, _tries) = consumable_tuple
 
         if not player_turn: # enemy dot after enemy turn
             if target[0] == "enemy" and target[1] is None:
@@ -261,7 +275,7 @@ def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
                 print("repel won")
                 del session['user_object']["pvp"]["invaders"]["u" + session["fleets"]["FleetName"]["uid"]]
         elif params.get('name') == "FleetName":
-            [(fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if isinstance(v, dict) and v.get('name') == "FleetName"]
+            [(_fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if isinstance(v, dict) and v.get('name') == "FleetName"]
             if enemy_fleet["invader"]:
                 if enemy_fleet.get("invaded_uid"):
                     print("neighbor repel with consumable won")
@@ -381,7 +395,7 @@ def init_battle(params):
                                for baddy, count in sub_fleet.items()
                                for i in range(int(count))]
                 else:
-                    [(fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if
+                    [(_fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if
                                                    isinstance(v, dict) and v.get('name') == "FleetName"]
                     print("Survival AI fleet" if enemy_fleet["status"] == 4096 else "Invader AI fleet")
                     baddies = [lookup_item_by_code(baddy.split(',')[0])
@@ -390,7 +404,7 @@ def init_battle(params):
                                   session['fleets'][get_last_fleet_name()]]
             elif params['name'] == "FleetName":
                 print("Invader target consumable")
-                [(fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if isinstance(v, dict) and v.get('name') == "FleetName"]
+                [(_fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if isinstance(v, dict) and v.get('name') == "FleetName"]
                 baddies = [lookup_item_by_code(baddy.split(',')[0])
                            for baddy in enemy_fleet["units"]]
                 friendlies = [lookup_item_by_code(friendly.split(',')[0]) for friendly in
@@ -415,7 +429,7 @@ def init_battle(params):
                 friendlies = [lookup_item_by_code(friendly.split(',')[0]) for friendly in
                               session['fleets'][get_previous_fleet_name(fleet_or_name)]]
             else:
-                open_quests = [e["name"] for e in session["quests"] if e["complete"] == False]
+                open_quests = [e["name"] for e in session["quests"] if not e["complete"]]
                 task = None
                 friendlies = None
                 for q in open_quests:
@@ -454,7 +468,7 @@ def init_battle(params):
             friendlies = [lookup_item_by_code(friendly.split(',')[0]) for friendly in
                           session['fleets'][params['fleet']]]
         else:
-            open_quests = [e["name"] for e in session["quests"] if e["complete"] == False]
+            open_quests = [e["name"] for e in session["quests"] if not e["complete"]]
             task = None
             friendlies = None
             for q in open_quests:
@@ -499,9 +513,9 @@ def init_battle(params):
         # ex.add_note(f"Battle: { repr(session.get('battle')) }")
         # ex.add_note(f"Params: { repr(params) }")
 
-        print(f"Registered fleets: { repr(session.get('fleets')) }")
-        print(f"Battle: { repr(session.get('battle')) }")
-        print(f"Params: { repr(params) }")
+        print(f"Registered fleets: { session.get('fleets') !r}")
+        print(f"Battle: { session.get('battle') !r}")
+        print(f"Params: { params !r}")
         raise
 
 def get_previous_fleet_name(name):
@@ -536,7 +550,7 @@ def decode_unit_count_list(raw_units):
 
 
 def encode_unit_string(code, hp='', shield=''):
-    return '%s,%s,%s,,' % (code, hp, shield)
+    return f'{code},{hp},{shield},,'
 
 
 def encode_unit_strings(codes):
@@ -554,10 +568,9 @@ def decode_unit_strings(unit_strings):
 def unit_roll(attacker_weak, defender_weak):
     if attacker_weak:
         return -2
-    elif defender_weak:
+    if defender_weak:
         return 2
-    else:
-        return roll_random_between(0, 1)
+    return roll_random_between(0, 1)
 
 
 def get_hit_value(type, defender_type):
@@ -635,7 +648,7 @@ def next_campaign_response(params):
     # island = session['campaign'][map["map"]]["island"]
     #
 
-    map_name, island, map_item = get_current_island(params)
+    _map_name, island, map_item = get_current_island(params)
 
     if island is None:
         island = 0
@@ -783,8 +796,7 @@ def get_reward_multiplier():
         factor = combat_replay_reward_span - min(int(lead_map_item["island"][lead_island_id]["-globalIslandIndex"]) -
             int(current_map_item["island"][battle_context.island]["-globalIslandIndex"]), combat_replay_reward_span)
         return factor * (1/combat_replay_reward_span) if factor > 0 else 0.01
-    else:
-        return 1
+    return 1
 
 def get_lead_map():
     initial_map = "C001"
@@ -794,7 +806,7 @@ def get_lead_map():
 
     while True:
         map_item = lookup_item_by_code(lead_map)
-        _, island = get_active_island_by_map(lead_map) if lead_map in campaign['active'].keys() else (None, 0)
+        _, island = get_active_island_by_map(lead_map) if lead_map in campaign['active'] else (None, 0)
         if island < len(map_item.get("island", [])):
             return lead_map
         if "-unlocks" not in map_item:
@@ -852,7 +864,7 @@ def get_survival_player_fleet():
     "ransomRandom": None,
     "ransomResource": None,
     "ransomAmount": None,
-    "units": ["%s,%d,%d,," % (p.split(',')[0], session["last_battle"][0][i], is_shielded(("ally", i), session["last_battle"][2])) for i, p in enumerate(player_units) if session["last_battle"][0][i] != 0],
+    "units": [f"{p.split(',')[0]},{session['last_battle'][0][i]},{int(is_shielded(('ally', i), session['last_battle'][2]))},," for i, p in enumerate(player_units) if session["last_battle"][0][i] != 0],
     "store": [0],  # [0, 0, 0],
     "fleets": [],
     "upgrades": {p.split(',')[0]: ",".join(research.get(p.split(',')[0])) for i, p in enumerate(player_units) if session["last_battle"][0][i] != 0 and research.get(p.split(',')[0])},
@@ -875,7 +887,7 @@ def assign_consumable_response(params):
 
     consumables = lookup_items_by_type_and_subtype("consumable", "consumable")
     if params["code"] == "A0A":   # Ally / merc
-        damaged = any([strength < get_unit_max_strength(unit, True) for unit, strength in zip(friendlies, friendly_strengths)])
+        damaged = any(strength < get_unit_max_strength(unit, True) for unit, strength in zip(friendlies, friendly_strengths))
         if params.get('name') == "-1":
             level = session["user_object"]["userInfo"]["player"]["level"] + 5  #steele = player level + 5
         else:
@@ -1039,15 +1051,13 @@ def apply_consumable_direct_impact(meta, selected_consumable, targeted_unit, uni
     for a in against:
         if a['-type'] in (get_unit_type(units[targeted_unit]), get_unit_terrain(units[targeted_unit])):
             damage *= float(a['-mod'])
-    if damage > 0 and is_shielded(("ally" if ally else "enemy",targeted_unit), active_consumables) == True:
+    if damage > 0 and is_shielded(("ally" if ally else "enemy",targeted_unit), active_consumables):
         consume_shield(("ally" if ally else "enemy",targeted_unit), active_consumables)
 
     elif units_strengths[targeted_unit] > 0: #can't damage/heal dead units
 
-        if selected_consumable["consumable"].get("-type") == "all" and selected_consumable["-subtype"] == "secondary":
-            if "-percent" in selected_consumable["consumable"]:
-                if roll_random_float() > int(selected_consumable["consumable"]["-percent"])/100:
-                   damage =0
+        if selected_consumable["consumable"].get("-type") == "all" and selected_consumable["-subtype"] == "secondary" and "-percent" in selected_consumable["consumable"] and roll_random_float() > int(selected_consumable["consumable"]["-percent"])/100:
+            damage = 0
 
         units_strengths[targeted_unit] -= damage
         if not ally and 1 >= units_strengths[targeted_unit] > 0:
@@ -1098,14 +1108,17 @@ def get_adjacent_factor(unit_1, unit_2, count):
     print(type(unit_2))
     if unit_1 == unit_2 or count == 1:
         return 0
-    elif count == 2:
+    if count == 2:
         return 4
-    elif count == 3:
+    if count == 3:
         return [[0,4,3],[4,0,3],[3,4,0]][unit_1][unit_2]
-    elif count == 4:
+    if count == 4:
         return [[0,4,0,0],[4,0,3,0],[0,4,0,3],[0,0,4,0]][unit_1][unit_2]
-    elif count == 5:
+    if count == 5:
         return [[0,4,3,0,0],[4,0,3,2,0],[4,3,0,2,1],[0,4,3,0,2],[0,0,4,3,0]][unit_1][unit_2]
+    # No matrix for a larger board. The single caller multiplies the result, so an
+    # implicit None would surface as a TypeError deep inside the battle loop.
+    return 0
 
 
 def consumable_target_matches(consumable_target, target):
@@ -1118,13 +1131,13 @@ def consumable_target_matches(consumable_target, target):
 
 
 def is_stunned(target, active_consumables):
-    for consumable, consumable_target, tries in active_consumables:
+    for consumable, consumable_target, _tries in active_consumables:
         if consumable_target_matches(consumable_target, target) and consumable["consumable"].get("-disable") == "stun":
             return True
     return False
 
 def is_affected_by_consumable(target, used_consumable, active_consumables):
-    for consumable, consumable_target, tries in active_consumables:
+    for consumable, consumable_target, _tries in active_consumables:
         if consumable_target_matches(consumable_target, target) and consumable == used_consumable:
             return True
     return False
@@ -1147,7 +1160,7 @@ def get_consumable_evasion(target, active_consumables):
 
 def get_consumable_int(target, active_consumables, field):
     damage = 0
-    for consumable, consumable_target, tries in active_consumables:
+    for consumable, consumable_target, _tries in active_consumables:
         if consumable_target_matches(consumable_target, target):
             damage += int(consumable["consumable"].get(field, "0"))
     return damage
@@ -1212,8 +1225,7 @@ def ai_best_unit(first_units, first_units_strengths, second_unit, random, active
         random_roll = round(random * (len(best_units) - 1))
         print(best_units[random_roll])
         return best_units[random_roll], best_grade
-    else:
-        return None, -1
+    return None, -1
 
 
 def get_unit_type(unit):
@@ -1233,7 +1245,7 @@ def get_unit_max_strength(unit, ally, params=None):
     _, island, map_item = get_current_island(params)
     if has_battle_context() and session["battle"][3].replaying:
         island = session["battle"][3].island
-    if not ally and island != None and "strength" in map_item["island"][island]:
+    if not ally and island is not None and "strength" in map_item["island"][island]:
         strengths = simple_list(map_item["island"][island]["strength"])
         strength = apply_map_mod_strength(unit, strength, strengths)
         # print("Mod strenghts",repr(strengths))
@@ -1263,7 +1275,7 @@ def get_current_island(params):
 
 def get_active_island_by_map(map_name, index=-1):
     campaign = session['user_object']['userInfo']['world']['campaign']
-    if map_name not in campaign['active'].keys():
+    if map_name not in campaign['active']:
         campaign['active'][map_name] = {"status": 0, "fleets": []}
 
     status = campaign['active'][map_name]["status"]
@@ -1272,7 +1284,7 @@ def get_active_island_by_map(map_name, index=-1):
 
 def set_active_island_by_map(map_name, island_id):
     campaign = session['user_object']['userInfo']['world']['campaign']
-    if map_name not in campaign['active'].keys():
+    if map_name not in campaign['active']:
         campaign['active'][map_name] = {"status": island_id << 20, "fleets": []}
     else:
         status = campaign['active'][map_name]["status"]
@@ -1397,7 +1409,7 @@ def consume_shield(hit_target, active_consumables):
 
 
 def is_shielded(target, active_consumables):
-    for consumable, consumable_target, tries in active_consumables:
+    for consumable, consumable_target, _tries in active_consumables:
         if consumable_target_matches(consumable_target, target) and consumable.get("consumable",{}).get("-givesAbility") == "shield":
             return True
     return False

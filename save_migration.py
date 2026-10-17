@@ -1,5 +1,5 @@
 from flask import session
-from save_engine import lookup_object
+
 from game_settings import unlock_expansion
 from quest_engine import handle_quest_progress
 from save_engine import create_backup
@@ -100,7 +100,7 @@ def govt_fixer():
         if "crewInfo" not in decoration and decoration["itemName"] in govt_staff \
             and int(decoration.get("state")) >= 8 :
 
-            for reapet_number in range(govt_staff.get(decoration["itemName"])):
+            for _reapet_number in range(govt_staff.get(decoration["itemName"])):
                 decoration["crewInfo"] = decoration.get("crewInfo", []) + [-1]
 
 def crew_fixer():

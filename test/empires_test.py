@@ -1,12 +1,13 @@
 import json
 
 import pytest
-from flask import Flask, session, request
+from flask import Flask, request, session
 from pyamf import remoting
 
 empires_server = __import__('empires-server')
-import quest_engine
 from pathlib import Path
+
+import quest_engine
 
 app = Flask(__name__)
 app.secret_key = 'test'
@@ -331,7 +332,7 @@ def test_init_user(monkeypatch):
         session['profilePic'] = "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"
         user = empires_server.init_user()
 
-        with open(TEST_DIR / 'init_user.json', 'r') as f:
+        with open(TEST_DIR / 'init_user.json') as f:
             user["userInfo"]["player"]["lastEnergyCheck"] = 0
             user["neighbors"].sort(key=lambda x: x["uid"])
             expected_json = json.load(f)
@@ -361,7 +362,7 @@ def test_post_gateway(monkeypatch):
     with app.test_request_context():
         session["fleets"] = {}
 
-        envelope = remoting.Envelope(3);
+        envelope = remoting.Envelope(3)
         req = remoting.Request('BaseService.dispatchBatch', body=[{'flashRevision': None}, [
             {'transaction': None, 'sequence': 22, 'stamp': 1641513847112.56, 'params': [
                 {'status': 104, 'allies': ['-1'], 'name': 'fleet16_3398563345700246', 'type': 'air',

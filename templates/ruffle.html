@@ -216,7 +216,12 @@
 													player.load({ // https://ruffle.rs/js-docs/master/interfaces/Config.URLLoadOptions.html
 														url: "/files/empire-s.assets.zgncdn.com/assets/109338/ZGame.109338.swf",
 														backgroundColor: "#333399",
-														allowScriptAccess: false,
+														// The game registers ExternalInterface callbacks (MOTDManager::MessageOfTheDayManager
+														// calls ExternalInterface.addCallback during config load). Without this the SWF throws
+														// "Error #2067: The ExternalInterface is not available in this container" and aborts
+														// init::GameSettingsInit/onConfigXmlLoaded, leaving the game stuck loading.
+														// Safe here: the SWF is served by this server from /files/... , not third-party content.
+														allowScriptAccess: true,
 														allowFullscreen: true,
 														quality: "high",
 														//autoplay: true,

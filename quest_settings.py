@@ -5,8 +5,9 @@ import mod_engine
 from language_settings import language_strings
 from save_engine import my_games_path
 
+
 def read_quest_settings():
-    with open(quest_settings_path, 'r') as f:
+    with open(quest_settings_path) as f:
         return json.load(f)
 
 

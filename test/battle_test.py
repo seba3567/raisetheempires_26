@@ -1,12 +1,12 @@
 #TO RUN TESTS RUN empires_test.py
 
 import json
-
-import battle_engine
-import pytest
-from flask import Flask, session
 from pathlib import Path
 
+import pytest
+from flask import Flask, session
+
+import battle_engine
 
 app = Flask(__name__)
 app.secret_key = 'test'
@@ -203,10 +203,10 @@ def assert_result(active_consumables, baddie_strengths, baddies, friendlies, fri
 def assert_dynamic_result(active_consumables, baddie_strengths, baddies, friendlies, friendly_strengths,
                           expected_friendlies_json, expected_friendly_strengths, expected_baddies_json,
                           expected_baddie_strengths, expected_active_consumables):
-    with open(TEST_DIR / expected_friendlies_json, 'r') as f:
+    with open(TEST_DIR / expected_friendlies_json) as f:
         assert friendlies == json.load(f)
     assert friendly_strengths == expected_friendly_strengths
-    with open(TEST_DIR / expected_baddies_json, 'r') as f:
+    with open(TEST_DIR / expected_baddies_json) as f:
         assert baddies == json.load(f)
     assert baddie_strengths == expected_baddie_strengths
     assert active_consumables == expected_active_consumables
@@ -353,7 +353,7 @@ def run_assign_consumable_response(monkeypatch, params, expected_player_unit_id,
 
     def report_battle_log_mock(a, b, c, d, e, f):
         nonlocal friendly_strengths, baddie_strengths, player_turn, player_unit_id, enemy_unit_id, active_consumables
-        (friendly_strengths, baddie_strengths, player_turn, player_unit_id, enemy_unit_id, active_consumables) = (a, b, c, d, e, f);
+        (friendly_strengths, baddie_strengths, player_turn, player_unit_id, enemy_unit_id, active_consumables) = (a, b, c, d, e, f)
 
     monkeypatch.setattr(battle_engine, "report_battle_log", report_battle_log_mock)
     with app.test_request_context():

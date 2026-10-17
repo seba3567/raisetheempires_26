@@ -1,10 +1,25 @@
-from quest_engine import handle_world_state_change, roll_reward_random_float, handle_quest_progress, \
-    progress_upgrades_count, progress_resource_added_count, activate_unlocked_quests, merge_quest_progress
 from datetime import datetime
+
 from flask import session
-from game_settings import game_settings, lookup_item_by_name, lookup_state_machine, lookup_reference_item, \
-    lookup_item_by_code, lookup_visitor_reward
-from save_engine import lookup_object, create_backup, lookup_object_save
+
+from game_settings import (
+    game_settings,
+    lookup_item_by_code,
+    lookup_item_by_name,
+    lookup_reference_item,
+    lookup_state_machine,
+    lookup_visitor_reward,
+)
+from quest_engine import (
+    activate_unlocked_quests,
+    handle_quest_progress,
+    handle_world_state_change,
+    merge_quest_progress,
+    progress_resource_added_count,
+    progress_upgrades_count,
+    roll_reward_random_float,
+)
+from save_engine import create_backup, lookup_object, lookup_object_save
 
 
 # TODO add new reference item from clicknext step, use old one for first autostep, new one for 2nd autonext,
@@ -55,7 +70,9 @@ def click_next_state(do_click, id, meta, step, reference_item, speed_up=False, t
         if (do_click or tend):
             try:
                next_state_id = state['-clickNext'] if not cancel else state['-cancelNext']
-            except:
+            except KeyError:
+                # '-cancelNext' is optional in the quest data; fall back to the
+                # normal click transition.
                 next_state_id = state['-clickNext']
             if reference_item != cur_object.get('referenceItem'):
                 state_machine = lookup_state_machine(game_item['stateMachineValues']['-stateMachineName'],
@@ -132,18 +149,17 @@ def parse_duration(duration):
     # ["ms", "m", "s", "h", "d"];
     if duration == 'rand:1d,4d':
         return 86400 # 1d
-    elif "ms" in duration:
+    if "ms" in duration:
         return float(duration[:-2]) / 1000
-    elif "s" in duration:
+    if "s" in duration:
         return float(duration[:-1])
-    elif "m" in duration:
+    if "m" in duration:
         return float(duration[:-1]) * 60
-    elif "h" in duration:
+    if "h" in duration:
         return float(duration[:-1]) * 3600
-    elif "d" in duration:
+    if "d" in duration:
         return float(duration[:-1]) * 86400
-    else:
-        return float(duration)
+    return float(duration)
 
 
 def do_state_rewards(state, reference_item, meta, playback_tend=False):
@@ -151,14 +167,14 @@ def do_state_rewards(state, reference_item, meta, playback_tend=False):
     player['xp'] += int(state.get('-xp', 0))
     energy = int(state.get('-energy', 0))
     if playback_tend:
-        energy = max(energy, 0);
+        energy = max(energy, 0)
     player['energy'] += energy
     player['cash'] += int(state.get('-cash', 0))
     player['socialXpGood'] += int(state.get('-socialXpGood', 0))
     player['socialXpBad'] += int(state.get('-socialXpBad', 0))
 
     if  str(state.get('-elementZ',0)) != '0':
-        if not state.get('-elementZ',0) in player["inventory"]["items"]:
+        if state.get('-elementZ',0) not in player["inventory"]["items"]:
             player["inventory"]["items"][state.get('-elementZ',0)] = 1
         else:
             player["inventory"]["items"][state.get('-elementZ', 0)] +=1

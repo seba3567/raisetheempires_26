@@ -1,6 +1,7 @@
-import xml.etree.ElementTree as ET
-from save_engine import install_path
 import os
+import xml.etree.ElementTree as ET
+
+from save_engine import install_path
 
 
 def language_strings():

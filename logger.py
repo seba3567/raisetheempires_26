@@ -5,7 +5,6 @@ from flask_socketio import SocketIO
 from game_settings import game_settings
 from quest_settings import quest_settings
 
-
 socketio = SocketIO()
 
 
@@ -40,7 +39,7 @@ def report_battle_log(friendly_strengths, baddie_strengths, player_turn, player_
         mark_array_element(friendly_strengths_, player_unit_id)
     if enemy_unit_id is not None:
         mark_array_element(baddie_strengths_, enemy_unit_id)
-    for consumable, consumable_target, tries in active_consumables:
+    for _consumable, consumable_target, tries in active_consumables:
         if consumable_target[1] is None:
             for i in range(len(baddie_strengths_ if consumable_target[0] == "enemy" else friendly_strengths_)):
                 mark_consumable_array_element(baddie_strengths_ if consumable_target[0] == "enemy" else friendly_strengths_, i, tries)

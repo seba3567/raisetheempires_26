@@ -10,7 +10,7 @@ empires-server.exe --host <host_IP> --port <port_number>
  ```bash
  git clone https://github.com/AcidCaos/raisetheempires
  cd raisetheempires
- pip install -r requirements.txt
+ pip install -e ".[dev]"
  ```
 and run the server:
 ```

@@ -15,31 +15,32 @@ on:
 jobs:
   run_tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.14
-      uses: actions/setup-python@v3
+    - uses: actions/checkout@v5
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
       with:
-        python-version: "3.14"
+        python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 pytest pytest-cov
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install -e ".[dev]"
 
-    - name: Set PYTHONPATH
-      run: echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+    - name: Lint with ruff
+      run: ruff check .
 
-      #    - name: Lint with flake8
-      #      run: |
-      #        # stop the build if there are Python syntax errors or undefined names
-      #        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-      #        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-      #        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    - name: Type-check with mypy
+      run: mypy
 
     - name: Test with pytest
-      run: pytest -rPA -vv --junitxml=test-results.xml --cov=.. --cov-report=xml
+      run: pytest -rPA -vv --junitxml=test-results.xml --cov=. --cov-report=xml
 
     - name: Display structure of files
       if: always()
@@ -85,14 +86,14 @@ jobs:
       pull-requests: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # This is optional since by default it's to true. The git
           # operations in python-coverage-comment-action utilize the token
           # stored by actions/checkout.
           persist-credentials: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download
         with:
           name: coverage-xml
@@ -119,18 +120,17 @@ jobs:
     runs-on: windows-latest
     needs: run_tests
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v3
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.13"
           architecture: "x64"
 
       - name: build exe
         run: |
-          pip install -r requirements.txt
-          pip install --upgrade pyinstaller
-          copy build-tools\empires-server.spec . 
+          pip install ".[build]"
+                    copy build-tools\empires-server.spec . 
           pyinstaller empires-server.spec --distpath dist_mini_x64 --clean
 
       - name: Display structure of files
@@ -149,18 +149,17 @@ jobs:
     runs-on: windows-latest
     needs: run_tests
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v3
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.13"
           architecture: "x86"
 
       - name: build exe
         run: |
-          pip install -r requirements.txt
-          pip install --upgrade pyinstaller
-          copy build-tools\empires-server.spec . 
+          pip install ".[build]"
+                    copy build-tools\empires-server.spec . 
           pyinstaller empires-server.spec --distpath dist_mini_x86 --clean
 
       - name: Display structure of files
@@ -181,7 +180,7 @@ jobs:
       - build_windows_x86
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up workspace
         run: |
@@ -191,13 +190,13 @@ jobs:
           rmdir /s /q assets\sol_assets_unknown
         shell: cmd
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download_x64
         with:
           name: binary_windows_x64
           path: dist_mini_x64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download_x86
         with:
           name: binary_windows_x86
@@ -240,10 +239,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download_installer
         with:
           name: binary_windows_installer

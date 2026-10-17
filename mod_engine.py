@@ -1,17 +1,16 @@
+import configparser
 import os
+import sys
+from base64 import b32encode
 from pathlib import Path
 
-from save_engine import my_games_path, install_path
-from xmldiff.main import patch_text
 from jsonpatch import apply_patch
-import init_settings as settings
-import sys
 from tqdm import tqdm
-from base64 import b32encode
+from xmldiff.main import patch_text
 
-import xmldiff
+import init_settings as settings
+from save_engine import install_path, my_games_path
 
-import configparser
 config = configparser.ConfigParser()
 
 def read_file(file_name):
@@ -39,10 +38,9 @@ def is_json_patch(file_name):
 def apply_mod(source, mod_file, name):
     if is_xml_diff(name):
         return lambda: patch_text(read_file(mod_file), source())
-    elif is_json_patch(name):
+    if is_json_patch(name):
         return lambda: apply_patch(read_file(mod_file), source())
-    else:
-        return lambda: read_file(mod_file)
+    return lambda: read_file(mod_file)
 
 
 def get_cache_filename(original_path):
@@ -61,7 +59,8 @@ print("Loading mods...")
 for mod_folder in mod_folders:
     if os.path.isfile(os.path.join(mod_folder, "mods.conf")):
         # config.read(.../mods.conf)
-        config.read_string(open(os.path.join(mod_folder, "mods.conf"), 'r').read())
+        with open(os.path.join(mod_folder, "mods.conf")) as mods_conf:
+            config.read_string(mods_conf.read())
         if "mods" in config:
             #for mod_name in os.listdir(mod_folder):
             #for mod_name in mod_folders:
@@ -82,11 +81,11 @@ for mod_folder in mod_folders:
                                 print(" | - source_file " + source_file)
                                 print(" | - mod_file " + mod_file)
 
-                                source = mod.get(source_file, lambda: read_file(source_file))  # lambda chaining
+                                source = mod.get(source_file, lambda p=source_file: read_file(p))  # lambda chaining
                                 mod[source_file] = apply_mod(source, mod_file, name)
 
                                 stats = os.stat(mod_file)
-                                mod_stats.append("%s: %i %i %i" % (mod_file, stats.st_size,stats.st_ctime_ns, stats.st_mtime_ns))
+                                mod_stats.append(f"{mod_file}: {stats.st_size} {stats.st_ctime_ns} {stats.st_mtime_ns}")
     else:
         print("mods.conf not found.")
 
@@ -122,7 +121,7 @@ if settings.caching:
                 if os.path.isfile(file_path):
                     os.unlink(file_path)
             except Exception as e:
-                print('ERROR: Failed to delete %s. Reason: %s' % (filename, e))
+                print(f'ERROR: Failed to delete {filename}. Reason: {e}')
                 print("Cache can't update, caching deactivated, this may decrease performance and increase loading times.")
                 settings.caching = False
         # Write cache
@@ -131,7 +130,7 @@ if settings.caching:
                 try:
                     write_file(os.path.join(cache_path, get_cache_filename(path)), mod[path]())
                 except Exception as e:
-                    print('ERROR: Failed to write cache file %s. Reason: %s' % (get_cache_filename(path), e))
+                    print(f'ERROR: Failed to write cache file {get_cache_filename(path)}. Reason: {e}')
                     print("Cache can't update, caching deactivated, this may decrease performance and increase loading times.")
                     settings.caching = False
             if settings.caching:
@@ -144,9 +143,12 @@ if settings.caching:
     if settings.caching:
         for path in sorted(mod):
             if os.path.exists(os.path.join(cache_path, get_cache_filename(path))):
-                mod[path] = lambda: read_file(os.path.join(cache_path, get_cache_filename(path)))
+                # `path` is bound as a default argument on purpose: without it the
+                # closure would capture the loop variable and every entry would
+                # read the cache file of the *last* iterated path.
+                mod[path] = lambda p=path: read_file(os.path.join(cache_path, get_cache_filename(p)))
             else:
-                print('ERROR: Cache miss, Cache file %s missing for original %s. ' % (get_cache_filename(path), path))
+                print(f'ERROR: Cache miss, Cache file {get_cache_filename(path)} missing for original {path}. ')
                 print("This may decrease performance and increase loading times.")
 
 
