@@ -36,6 +36,7 @@ skip building payloads when nothing is listening -- see that module.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 def _run_granian(app, host: str, port: int) -> bool:
@@ -62,7 +63,10 @@ def _run_granian(app, host: str, port: int) -> bool:
         workers=1,
         runtime_threads=8,
         blocking_threads=64,
-        working_dir=os.path.dirname(os.path.abspath(__file__)),
+        # A Path, not a str: granian calls .resolve() on it, and a string takes
+        # the worker down with "'str' object has no attribute 'resolve'".
+        # Also the directory granian imports "wsgi:app" from.
+        working_dir=Path(__file__).resolve().parent,
     ).serve()
 
     return True

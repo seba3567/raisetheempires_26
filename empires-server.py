@@ -18,8 +18,17 @@ import init_settings as settings
 if __name__ == '__main__':
     settings.read_ops()
 
-if not settings.debug:
-    me = singleton.SingleInstance()
+if not settings.debug and __name__ == '__main__':
+    # Only the launcher takes this lock. A production server imports this
+    # module by name in every worker (see wsgi.py), and each of those workers
+    # would otherwise contend for a lockfile the parent already holds and die
+    # on startup -- granian reports it as "Unexpected exit from worker-1".
+    #
+    # Flavour the lock by port, so "one instance" means one per port rather
+    # than one per machine. Two gateways on different ports are two different
+    # services -- useful for a staging instance, and for driving a throwaway
+    # copy of this server without stopping the real one.
+    me = singleton.SingleInstance(flavor_id=str(settings.port))
 
 if os.name == 'nt':
     os.system('color')
@@ -101,6 +110,7 @@ from game_settings import (
 )
 from logger import init_socketio, report_other_log, report_tutorial_step, report_world_log, socketio
 from quest_engine import *
+from serve import serve
 from state_machine import *
 
 try:
