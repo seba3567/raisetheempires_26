@@ -82,27 +82,42 @@ def main():
 
     checks = []
 
-    status, _ = http_get("/")
-    checks.append(("front door answers", status in (200, 302), status))
+    def check(name, call, expect=lambda status: status == 200):
+        """Run one check, reporting a failure rather than raising.
 
-    status, body = amf_call("ZlingshotService.presence")
-    ok = status == 200 and body is not None
-    checks.append(("AMF call answered", ok, f"{status} {str(body)[:60]}"))
+        The point of this script is to be legible when it fails in CI. A raw
+        ConnectionRefusedError traceback for a gateway that is not up yet says
+        less than "FAIL ... connection refused", and it aborts the remaining
+        checks, so one early problem hides every later one.
 
-    status, _ = amf_call("SomeService.doesNotExist")
-    checks.append(("unknown service does not crash", status == 200, status))
+        ``call`` returns ``(status, body)``; the body is only shown when there
+        is something short and interesting to say about it.
+        """
+        try:
+            status, body = call()
+        except Exception as error:
+            checks.append((name, False, f"{type(error).__name__}: {error}"))
+            return
+        detail = f"{status} {str(body)[:56]}" if body else str(status)
+        checks.append((name, expect(status), detail.strip()))
 
-    status, _ = amf_call("WorldService.addFleet", [{"name": "fleet1_1", "units": "a,b,c"}])
-    checks.append(("addFleet with no registry", status == 200, status))
+    check("front door answers",
+          lambda: http_get("/"),
+          expect=lambda status: status in (200, 302))
 
-    status, _ = http_get("/list_session")
-    checks.append(("save list answers", status == 200, status))
+    check("AMF call answered",
+          lambda: amf_call("ZlingshotService.presence"))
 
-    status, _ = http_get("/avatar.json")
-    checks.append(("avatar catalogue answers", status == 200, status))
+    check("unknown service does not crash",
+          lambda: amf_call("SomeService.doesNotExist"))
 
-    status, _ = http_get("/motd.json")
-    checks.append(("motd catalogue answers", status == 200, status))
+    check("addFleet with no registry",
+          lambda: amf_call("WorldService.addFleet",
+                           [{"name": "fleet1_1", "units": "a,b,c"}]))
+
+    check("save list answers", lambda: http_get("/list_session"))
+    check("avatar catalogue answers", lambda: http_get("/avatar.json"))
+    check("motd catalogue answers", lambda: http_get("/motd.json"))
 
     failed = 0
     for name, ok, detail in checks:
@@ -111,6 +126,10 @@ def main():
 
     print()
     print(f"{len(checks) - failed}/{len(checks)} passed")
+    if failed:
+        print()
+        print("Every check failing at once usually means the gateway is not up on "
+              f"{HOST}:{PORT}, not that it is broken in seven ways.")
     return 1 if failed else 0
 
 
