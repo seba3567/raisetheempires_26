@@ -32,6 +32,18 @@ export const PLAYER_HEIGHT = 750;
 /** The blue the original frame used behind the movie. */
 export const PLAYER_BACKGROUND = '#333399';
 
+export interface RuffleConfig {
+	preferredRenderer?: 'wgpu' | 'webgl' | 'canvas';
+	quality?: 'low' | 'medium' | 'high';
+	letterbox?: 'on' | 'off' | 'fullscreen';
+	warnOnUnsupportedContent?: boolean;
+	logLevel?: 'error' | 'warn' | 'info' | 'debug';
+	autoplay?: 'on' | 'off' | 'auto';
+	splashScreen?: boolean;
+	openUrlMode?: 'allow' | 'confirm' | 'deny';
+	[key: string]: unknown;
+}
+
 export interface RufflePlayerApi {
 	version: string;
 	createPlayer(): HTMLElement & RufflePlayerHandle;
@@ -47,17 +59,26 @@ export interface RufflePlayerHandle {
 		autoplay?: boolean;
 		parameters?: string;
 	}): Promise<unknown>;
-	width: number;
-	height: number;
-	style: string;
+	enterFullscreen(): void;
+	setIsMuted?(isMuted: boolean): void;
+	setVolume?(volume: number): void;
+	pause?(): void;
+	play?(): void;
+	isPlaying?(): boolean;
+	width: number | string;
+	height: number | string;
+	style: string | CSSStyleDeclaration;
+}
+
+export interface RufflePlayerGlobal {
+	config?: RuffleConfig;
+	newest?: () => RufflePlayerApi;
+	[key: string]: unknown;
 }
 
 declare global {
 	interface Window {
-		RufflePlayer?: {
-			config?: Record<string, unknown>;
-			newest(): RufflePlayerApi;
-		};
+		RufflePlayer?: RufflePlayerGlobal;
 	}
 }
 
@@ -72,6 +93,21 @@ let rufflePromise: Promise<void> | null = null;
 
 export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 	if (rufflePromise) return rufflePromise;
+
+	// Configure Ruffle runtime options before script loads.
+	// We prioritize WebGPU ('wgpu') with seamless fallback to WebGL.
+	if (typeof window !== 'undefined') {
+		window.RufflePlayer = window.RufflePlayer || {};
+		window.RufflePlayer.config = {
+			preferredRenderer: 'wgpu',
+			letterbox: 'on',
+			warnOnUnsupportedContent: false,
+			logLevel: 'error',
+			autoplay: 'on',
+			openUrlMode: 'confirm',
+			...(window.RufflePlayer.config || {})
+		};
+	}
 
 	rufflePromise = new Promise<void>((resolve, reject) => {
 		const existing = document.querySelector<HTMLScriptElement>(`script[src="${url}"]`);

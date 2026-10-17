@@ -2,19 +2,13 @@
 	/**
 	 * The player page.
 	 *
-	 * The SWF is embedded in this page rather than behind a separate document: no
-	 * iframe, no second origin, and the site's own chrome stays around it. The
-	 * player options are the ones already proven in templates/ruffle.html.
-	 *
-	 * This comment has to live inside the script block. At the top level of a
-	 * Svelte component, `/** ... *\/` is not a comment -- Svelte reads it as
-	 * markup text and renders the whole thing on the page, above the player.
+	 * Embeds the original Empires & Allies SWF via Ruffle WASM (WebGPU/WebGL).
+	 * Clean, focused presentation letting the native Flash in-game controls
+	 * (sound, music, zoom, fullscreen) take center stage.
 	 */
 	import { onMount } from 'svelte';
 	import {
 		PLAYER_BACKGROUND,
-		PLAYER_HEIGHT,
-		PLAYER_WIDTH,
 		SWF_PATH,
 		loadRuffle,
 		type RufflePlayerHandle
@@ -24,15 +18,13 @@
 	let { data } = $props();
 
 	let mount = $state<HTMLDivElement | null>(null);
-	// Not `state`: a variable named `state` shadows the `$state` rune for the
-	// whole scope and the compiler rejects it.
-	//
-	// Starts at 'idle', not 'loading', on purpose. See start().
+	let container = $state<HTMLDivElement | null>(null);
+
 	let phase = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
 	let failure = $state<string | null>(null);
 
-	/** Guards against a double click starting two players. */
 	let started = false;
+	let playerHandle = $state<RufflePlayerHandle | null>(null);
 
 	async function startPlayer() {
 		try {
@@ -40,13 +32,6 @@
 
 			/*
 			 * Install the ExternalInterface bridge *before* loading the SWF.
-			 *
-			 * The client calls getUserInfo() during setup and dereferences the
-			 * result without checking it, so loading first and bridging after
-			 * kills the game with "Error #1009 ... accessing field: zid" before
-			 * anything is playable. Fetched here rather than server-side so the
-			 * request goes through the proxy exactly like the player does, and
-			 * arrives with this browser's cookies and the account's zid.
 			 */
 			const social = await fetch(SNAPI_ENDPOINT, { credentials: 'same-origin' });
 			if (!social.ok) {
@@ -54,33 +39,22 @@
 			}
 			installSnapiBridge(await social.json());
 
-			const ruffle = window.RufflePlayer?.newest();
-			if (!ruffle) throw new Error('RufflePlayer no está disponible');
+			const ruffleApi = window.RufflePlayer?.newest ? window.RufflePlayer.newest() : null;
+			if (!ruffleApi) throw new Error('RufflePlayer no está disponible');
 
-			const element = ruffle.createPlayer();
+			const element = ruffleApi.createPlayer();
 			const handle = element as RufflePlayerHandle;
+			playerHandle = handle;
 
-			handle.width = PLAYER_WIDTH;
-			handle.height = PLAYER_HEIGHT;
-			handle.style = `width: ${PLAYER_WIDTH}px; height: ${PLAYER_HEIGHT}px; background-color: ${PLAYER_BACKGROUND};`;
+			handle.width = '100%';
+			handle.height = '100%';
+			handle.style = `width: 100%; height: 100%; background-color: ${PLAYER_BACKGROUND}; display: block;`;
 
-			/*
-			 * Attach before loading, never after.
-			 *
-			 * Ruffle calls play() on a connected element. Loading into a detached
-			 * node leaves it suspended, and the console fills with "Ignoring
-			 * attempt to play a disconnected or suspended Ruffle element" while
-			 * the game silently never starts. The mount point is rendered
-			 * unconditionally for the same reason: behind an {#if} it would not
-			 * exist yet at this point.
-			 */
 			mount?.appendChild(element);
 
 			await handle.load({
 				url: SWF_PATH,
 				backgroundColor: PLAYER_BACKGROUND,
-				// Without this the SWF throws Error #2067 and never finishes
-				// loading. See #lib/ruffle for the full explanation.
 				allowScriptAccess: true,
 				allowFullscreen: true,
 				quality: 'high',
@@ -95,25 +69,6 @@
 		}
 	}
 
-	/**
-	 * Start on a click, not on mount.
-	 *
-	 * Chrome's autoplay policy refuses to start an AudioContext without a user
-	 * gesture, and Ruffle creates its audio context while the SWF boots. Loading
-	 * from onMount therefore gave a game that ran silent and logged
-	 *
-	 *   The AudioContext was not allowed to start. It must be resumed (or
-	 *   created) after a user gesture on the page.
-	 *
-	 * once per sound, each with a full Rust stack trace.
-	 *
-	 * One click fixes it at the root: Chrome grants the document *sticky
-	 * activation* after any interaction, so the AudioContext Ruffle creates
-	 * afterwards is allowed to start and the error never happens at all.
-	 * Resuming the context afterwards would be a patch over an error already
-	 * thrown, and would still leave the game silent until the player happened to
-	 * click something.
-	 */
 	function start() {
 		if (started) return;
 		started = true;
@@ -122,11 +77,16 @@
 	}
 
 	onMount(() => {
+		// Register service worker for offline game assets caching
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker.register('/service-worker.js').catch((err) => {
+				console.debug('ServiceWorker no disponible:', err);
+			});
+		}
+
 		return () => {
-			// Remove the node rather than calling a method: RufflePlayerHandle
-			// exposes no documented teardown, and detaching is what stops the
-			// render loop.
 			mount?.replaceChildren();
+			playerHandle = null;
 		};
 	});
 </script>
@@ -135,48 +95,61 @@
 	<title>Juego — Raise the Empires</title>
 </svelte:head>
 
-<div class="flex flex-col items-center gap-4">
-	<div class="relative" style="width: {PLAYER_WIDTH}px; height: {PLAYER_HEIGHT}px;">
-		<!-- Always in the DOM: the player is appended here before it loads. -->
-		<div bind:this={mount} class="absolute inset-0"></div>
+<div class="flex flex-col items-center gap-3 w-full">
+	<!-- Main Game Display Frame - Scaled cleanly to viewport -->
+	<div
+		bind:this={container}
+		class="relative flex items-center justify-center overflow-hidden rounded-lg border border-empire-800 bg-empire-950 shadow-2xl"
+		style="width: 100%; max-width: 1024px; aspect-ratio: 4/3; min-height: 480px; max-height: 85vh;"
+	>
+		<!-- Mount element for Ruffle -->
+		<div bind:this={mount} class="w-full h-full flex items-center justify-center"></div>
 
 		{#if phase === 'idle'}
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-empire-900 text-slate-300"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-empire-900/95 text-slate-300 p-6 text-center"
 			>
-				<p class="text-lg font-semibold text-slate-100">Empires &amp; Allies</p>
+				<h2 class="text-2xl font-bold text-slate-100">Empires &amp; Allies</h2>
+				<p class="max-w-md text-sm text-slate-300">
+					Aceleración por hardware WebGPU/WebGL con soporte completo de controles nativos.
+				</p>
 				<button
 					type="button"
 					onclick={start}
-					class="rounded bg-gold-500 px-6 py-3 text-lg font-semibold text-empire-950 hover:bg-gold-400"
+					class="rounded bg-gold-500 px-8 py-3.5 text-lg font-bold text-empire-950 shadow-lg hover:bg-gold-400 hover:scale-105 transition-all duration-150 cursor-pointer"
 				>
-					Jugar
+					▶ Jugar ahora
 				</button>
-				<p class="max-w-md px-6 text-center text-sm text-slate-400">
-					El navegador no deja sonar el juego hasta que interactúas con la página, así que hace
-					falta este clic para que se escuche.
+				<p class="max-w-md text-xs text-slate-400">
+					Requiere interacción para activar el sonido del navegador.
 				</p>
 			</div>
 		{:else if phase === 'loading'}
 			<div
-				class="absolute inset-0 flex items-center justify-center bg-empire-900 text-slate-300"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-empire-900/95 text-slate-300"
 			>
-				<p>Cargando Ruffle…</p>
+				<div class="h-8 w-8 animate-spin rounded-full border-4 border-gold-400 border-t-transparent"></div>
+				<p class="font-medium text-slate-200">Iniciando Ruffle WASM…</p>
+				<p class="text-xs text-slate-400">Cargando shaders WebGPU y assets del cliente</p>
 			</div>
 		{:else if phase === 'error'}
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-2 border border-red-800 bg-red-950/40 p-8 text-red-200"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-2 border border-red-800 bg-red-950/80 p-8 text-red-200 text-center"
 			>
-				<p class="text-lg font-semibold">No se pudo iniciar el juego</p>
-				<p class="text-sm">{failure}</p>
-				<p class="text-sm text-red-300/70">
-					Revisa que el gateway AMF0 esté corriendo en 127.0.0.1:5005.
+				<p class="text-lg font-bold text-red-100">No se pudo iniciar el juego</p>
+				<p class="text-sm font-mono bg-red-950/60 p-2 rounded border border-red-900 max-w-lg">{failure}</p>
+				<p class="text-xs text-red-300/80 mt-2">
+					Asegúrate de que el gateway AMF0 esté activo en <code>127.0.0.1:5005</code>.
 				</p>
 			</div>
 		{/if}
 	</div>
 
-	<p class="text-sm text-slate-400">
-		zid <code class="text-slate-300">{data.zid ?? '—'}</code>
-	</p>
+	<!-- Status Bar -->
+	<div class="flex items-center justify-between w-full text-xs text-slate-400 px-2" style="max-width: 1024px;">
+		<span>ID de cuenta (zid): <code class="text-gold-400">{data.zid ?? '—'}</code></span>
+		{#if data.role === 'admin'}
+			<a href="/admin/editor" class="text-gold-400 hover:underline">🛠️ Editor de Imperio</a>
+		{/if}
+	</div>
 </div>

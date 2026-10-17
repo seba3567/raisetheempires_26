@@ -13,7 +13,7 @@ from game_settings import (
     lookup_yield,
     replenish_energy,
 )
-from quest_settings import prequels, quest_settings
+from quest_settings import prequels, quest_settings, simple_list
 from save_engine import create_backup, get_saves, lookup_objects_by_item_name
 
 
@@ -382,8 +382,6 @@ def get_tasks(quest):
     tasks = raw_tasks if isinstance(raw_tasks, list) else [raw_tasks]
     return tasks
 
-def simple_list(raw_list):
-    return (raw_list if isinstance(raw_list, list) else [raw_list]) if raw_list != '' else []
 
 def activate_sequels(session_quest, new_quests, meta):
     raw_sequels = lookup_quest(session_quest['name'])['sequels']

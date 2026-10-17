@@ -11,6 +11,7 @@ export const load: PageServerLoad = async ({ url, locals, parent }) => {
 	return {
 		// Same origin the proxy puts in the Host header. See #lib/flashvars.
 		flashVars: buildFlashVars(process.env['PUBLIC_ORIGIN'] ?? url.origin),
-		zid: locals.user.zid
+		zid: locals.user.zid,
+		role: locals.user.role
 	};
 };

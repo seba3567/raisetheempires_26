@@ -13,6 +13,25 @@ on:
     branches: [ "master" ]
 
 jobs:
+  run_web_tests:
+    name: Test and Check SvelteKit Frontend
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    - name: Install web dependencies
+      working-directory: web
+      run: bun install --frozen-lockfile
+    - name: Check types with svelte-check
+      working-directory: web
+      run: bun run check
+    - name: Run unit & integration tests
+      working-directory: web
+      run: bun test
+
   run_tests:
     runs-on: ubuntu-latest
     strategy:

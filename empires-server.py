@@ -150,7 +150,7 @@ MAX_ADMIN_ID = 123
 
 @app.route("/")
 def index():
-    return render_template("index.html", version=version, release_date=release_date)
+    return make_response(redirect("/juego"))
 
 
 @app.route("/home.html")
@@ -1141,8 +1141,8 @@ def post_gateway():
         elif reqq.functionName == 'WorldService.resolveBattle':
             try:
                 resps.append(battle_complete_response(reqq.params[0]))
-            except StaleBattleReference as error:
-                print('Ignoring stale resolveBattle request:', error)
+            except (StaleBattleReference, IndexError) as error:
+                print('Ignoring stale or out-of-range resolveBattle request:', error)
                 resps.append(dummy_response())
         elif reqq.functionName == 'WorldService.genericString':
             resps.append(generic_string_response(reqq.params[0]))

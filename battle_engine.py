@@ -43,7 +43,12 @@ def battle_complete_response(params):
         player_turn = False
         enemy_unit_id, _, player_unit_id = ai_best_attack(friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables)
 
-    if enemy_unit_id is not None and player_unit_id is not None:
+    if (
+        enemy_unit_id is not None
+        and player_unit_id is not None
+        and 0 <= enemy_unit_id < len(baddies)
+        and 0 <= player_unit_id < len(friendlies)
+    ):
         ally_target = ("ally", player_unit_id)
         enemy_target = ("enemy", enemy_unit_id)
         first_target = ally_target if player_turn else enemy_target

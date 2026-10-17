@@ -12,7 +12,6 @@ from save_engine import my_games_path, validate_save
 
 game_settings_path = os.path.join(my_games_path(), "gamesettings-converted.json")
 initial_island_path = os.path.join(my_games_path(), "allies/initial-island.json")
-cached_urls = []
 
 # Header used by the SvelteKit front door to hand over the signed-in account's
 # identity. See get_zid().
@@ -225,44 +224,6 @@ def unlock_expansion(index):
     #expansions = expansions + [0 for t in range(i + 1 - len(expansions))]
     e = index - (i << 5)
     expansions[i] = expansions[i] | 1 << e
-
-
-def relock_expansion(index):
-    expansions = session['user_object']["userInfo"]["player"]["expansions"]["data"]
-
-    i = index >> 5
-    #expansions = expansions + [0 for t in range(i + 1 - len(expansions))]
-    e = index - (i << 5)
-    expansions[i] = expansions[i] & ~(1 << e)
-
-def random_image():
-    return random.choice(list({u for u in fetch_urls() if u.endswith('.png')}))
-
-def fetch_urls():
-    global cached_urls
-    if not cached_urls:
-        cached_urls = fetch_url_dict(game_settings)
-    return cached_urls
-
-def fetch_url_dict(d):
-    urls =  [v for k, v in d.items() if k == '-url']
-    for v in d.values():
-        if isinstance(v, dict):
-            urls.extend(fetch_url_dict(v))
-        elif isinstance(v, list):
-            urls.extend(fetch_url_list(v))
-    return urls
-
-
-def fetch_url_list(url_list):
-    urls = []
-    for v in url_list:
-        if isinstance(v, dict):
-            urls.extend(fetch_url_dict(v))
-        elif isinstance(v, list):
-            urls.extend(fetch_url_list(v))
-    return urls
-
 
 
 def simple_list(raw_list):
