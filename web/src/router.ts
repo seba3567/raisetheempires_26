@@ -118,7 +118,9 @@ export async function handle(req: Request): Promise<Response> {
       }
 
       touchLastSeen(userId);
-      return redirect("/home.html", {
+      // ruffle.html is the player. home.html is the 2012 Facebook/Zynga frame
+      // with a dead Adobe Flash embed, and it must never be the landing point.
+      return redirect("/ruffle.html", {
         "set-cookie": await sessionCookie(userId, isSecureRequest(req)),
       });
     } catch (error) {

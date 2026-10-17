@@ -99,9 +99,26 @@ describe("registration", () => {
     );
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/home.html");
+    // The player, never home.html: that one is the 2012 Facebook frame with a
+    // dead Flash embed.
+    expect(res.headers.get("location")).toBe("/ruffle.html");
     expect(cookieValue(res.headers.get("set-cookie"))).toBeTruthy();
     expect(findByUsername("ana")).not.toBeNull();
+  });
+
+  test("no page in this service links to the legacy Facebook frame", async () => {
+    // home.html still exists in the gateway and is still reachable, but the
+    // site must never send a player there.
+    const user = await createUser("ana", "hunter2hunter2");
+    const cookie = `rte_session=${await createSessionValue(user.id)}`;
+
+    for (const path of ["/", "/cuenta"]) {
+      const html = await (
+        await handle(new Request(`${ORIGIN}${path}`, { headers: { cookie } }))
+      ).text();
+      expect(`${path}: ${html.includes('href="/home.html"')}`).toBe(`${path}: false`);
+      expect(`${path}: ${html.includes('href="/ruffle.html"')}`).toBe(`${path}: true`);
+    }
   });
 
   test("omits Secure over plain HTTP so the browser keeps the cookie", async () => {
@@ -166,7 +183,7 @@ describe("login", () => {
     );
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/home.html");
+    expect(res.headers.get("location")).toBe("/ruffle.html");
   });
 
   test("is case-insensitive on the username", async () => {

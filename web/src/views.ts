@@ -102,7 +102,7 @@ ${body}
 
 export function homePage(user: { username: string } | null): string {
   const action = user
-    ? `<a class="btn" href="/home.html">Entrar al juego</a>`
+    ? `<a class="btn" href="/ruffle.html">Entrar al juego</a>`
     : `<a class="btn" href="/registro">Crear cuenta gratis</a>`;
 
   return layout({
@@ -242,7 +242,7 @@ ${notice ? `<p class="ok">${esc(notice)}</p>` : ""}
     <div style="font-size:1.2rem;font-weight:600">${esc(data.worldName)}</div>
     <div style="color:var(--muted);font-size:.8rem;margin-top:.5rem">zid ${esc(data.zid)}</div></div>
 </div>
-<p><a class="btn" href="/home.html">Entrar al juego</a></p>
+<p><a class="btn" href="/ruffle.html">Entrar al juego</a></p>
 
 ${adminBlock}
 
