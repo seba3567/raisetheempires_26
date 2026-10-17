@@ -13,9 +13,10 @@
 		loadRuffle,
 		type RufflePlayerHandle
 	} from '#lib/ruffle';
+	import { avatarUrl, DEFAULT_AVATAR } from '#lib/avatar';
 	import { SNAPI_ENDPOINT, installSnapiBridge } from '#lib/snapi';
 
-	let { data } = $props();
+	let { data, form } = $props();
 
 	let mount = $state<HTMLDivElement | null>(null);
 	let container = $state<HTMLDivElement | null>(null);
@@ -25,6 +26,20 @@
 
 	let started = false;
 	let playerHandle = $state<RufflePlayerHandle | null>(null);
+
+	/*
+	 * The avatar grid from the 2013 /new.html page, which nothing linked to
+	 * any more once the player became the front door.
+	 *
+	 * `data.avatar` is null when the gateway could not be read, so the grid is
+	 * hidden and the default avatar is used -- a player who already has an
+	 * empire is never blocked from pressing play by an unreachable endpoint.
+	 * `?? 'blank.png'` is also what the gateway serves for a save with no
+	 * `profilePic`, so "not chosen yet" looks the same in both places.
+	 */
+	const avatarCatalog = $derived(data.avatar?.avatars ?? []);
+	const chosenAvatar = $derived(data.avatar?.current ?? DEFAULT_AVATAR);
+	const canChooseAvatar = $derived(avatarCatalog.length > 0);
 
 	async function startPlayer() {
 		try {
@@ -107,9 +122,53 @@
 
 		{#if phase === 'idle'}
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-empire-900/95 text-slate-300 p-6 text-center"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-empire-900/95 text-slate-300 p-6 text-center overflow-y-auto"
 			>
 				<h2 class="text-2xl font-bold text-slate-100">Empires &amp; Allies</h2>
+
+				{#if canChooseAvatar}
+					<!--
+						The picker. Selecting posts to the `pick` action, which writes
+						`profilePic` on the save and redirects back here, so the choice
+						survives a reload and travels with the account rather than with
+						this browser.
+					-->
+					<form method="POST" action="?/pick" class="flex flex-col items-center gap-2">
+						<p class="text-sm text-slate-300">Elige tu avatar</p>
+						<div
+							class="grid grid-cols-8 gap-1.5 max-h-40 overflow-y-auto p-2 rounded bg-empire-950/60 border border-empire-800"
+						>
+							{#each avatarCatalog as avatar (avatar)}
+								<button
+									type="submit"
+									name="avatar"
+									value={avatar}
+									title={avatar}
+									aria-label={`Elegir avatar ${avatar}`}
+									aria-pressed={avatar === chosenAvatar}
+									class="rounded p-0.5 border-2 transition-colors
+										{avatar === chosenAvatar
+											? 'border-gold-400 bg-gold-500/20'
+											: 'border-transparent hover:border-slate-500'}"
+								>
+									<img src={avatarUrl(avatar)} alt="" height="44" loading="lazy" />
+								</button>
+							{/each}
+						</div>
+						<button
+							type="submit"
+							name="avatar"
+							value={chosenAvatar}
+							class="text-xs text-gold-400 hover:underline"
+						>
+							Guardar cambio
+						</button>
+						{#if form?.message}
+							<p class="text-xs text-red-300">{form.message}</p>
+						{/if}
+					</form>
+				{/if}
+
 				<p class="max-w-md text-sm text-slate-300">
 					Aceleración por hardware WebGPU/WebGL con soporte completo de controles nativos.
 				</p>
@@ -147,7 +206,10 @@
 
 	<!-- Status Bar -->
 	<div class="flex items-center justify-between w-full text-xs text-slate-400 px-2" style="max-width: 1024px;">
-		<span>ID de cuenta (zid): <code class="text-gold-400">{data.zid ?? '—'}</code></span>
+		<span class="flex items-center gap-2">
+			<img src={avatarUrl(chosenAvatar)} alt="" height="22" class="rounded-sm" />
+			ID de cuenta (zid): <code class="text-gold-400">{data.zid ?? '—'}</code>
+		</span>
 		{#if data.role === 'admin'}
 			<a href="/admin/editor" class="text-gold-400 hover:underline">🛠️ Editor de Imperio</a>
 		{/if}

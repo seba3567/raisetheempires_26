@@ -979,12 +979,40 @@ def new_player_page():
     saves = get_saves()
     return render_template("new.html", version=version, release_date=release_date, avatars=get_avail_avatars())
 
+@app.route("/avatar.json")
+def avatar_state():
+    """The avatar catalogue and the one this player picked, for the web front end.
+
+    The 2013 picker was ``/new.html``, a Jinja page that only the old launcher
+    linked to. The player now starts at /juego, so nothing pointed at it and the
+    choice became unreachable. This is the same data as JSON so /juego can show
+    the grid without a Jinja template in the way.
+    """
+    return jsonify({
+        "avatars": get_avail_avatars(),
+        # null means "never chose one", which the picker shows as the default.
+        "current": session.get('profilePic'),
+        "picture": get_avatar_pic(),
+    })
+
+
 @app.route("/chooseavatar/<path:path>", methods=['GET', 'POST'])
 def choose_avatar(path):
-    avatar = path
-    session['profilePic'] = avatar
-    response = make_response(redirect('/home.html'))
-    return response
+    """Pick an avatar, as /new.html's grid did.
+
+    The value used to be stored verbatim. It is a path parameter, so anything
+    reaching this route became ``profilePic`` and was handed straight back out
+    as ``img/avatars/<that>`` by ``get_avatar_pic`` and the friend lists. The
+    serving routes are safe on their own, but a save should never carry a
+    caller-supplied path, so it is checked against the catalogue first and the
+    request is refused when it is not one of the files we ship.
+    """
+    if path not in get_avail_avatars():
+        print("Rejecting unknown avatar", path)
+        return make_response(jsonify({"ok": False, "message": "Ese avatar no existe"}), 400)
+    session['profilePic'] = path
+    return make_response(redirect('/home.html'))
+
 
 def get_avatar_pic():
     avatar_pic = "img/avatars/" + (session['profilePic'] if 'profilePic' in session and session['profilePic'] is not None else "blank.png")
