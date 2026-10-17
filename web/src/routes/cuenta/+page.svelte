@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 
+	import { avatarUrl, DEFAULT_AVATAR } from '#lib/avatar';
 	import {
 		EMPIRE_POINTS_ICON,
 		RESOURCES,
@@ -8,12 +9,21 @@
 		formatAmount
 	} from '#lib/resources';
 
-	let { data } = $props();
+	let { data, form } = $props();
 
 	const level = $derived(data.progress.level);
 	const xp = $derived(data.progress.xp);
 	const empirePoints = $derived(data.progress.empirePoints);
 	const hasSave = $derived(data.state?.hasSave ?? false);
+
+	/*
+	 * The picture the game shows. It comes from the save, not from the account
+	 * row, because that is where the client reads it from -- so changing it here
+	 * changes what the game draws, with no second copy to keep in step.
+	 */
+	const chosenAvatar = $derived(data.avatar?.current ?? DEFAULT_AVATAR);
+	const canChooseAvatar = $derived((data.avatar?.avatars.length ?? 0) > 0);
+	let editingAvatar = $state(false);
 </script>
 
 <svelte:head>
@@ -23,13 +33,80 @@
 <div class="py-6">
 	<!-- Empire header -->
 	<div class="panel flex flex-wrap items-center gap-5">
-		{#if data.progress.picture}
-			<img
-				src={data.progress.picture}
-				alt=""
-				class="size-20 rounded-lg border border-empire-700 object-cover"
-			/>
-		{/if}
+		<!--
+			`use:enhance` keeps the page from reloading, so the avatar header stays
+			where it is while the new one is chosen. Without it every pick is a full
+			page load and the grid closes under the cursor.
+		-->
+		<form
+			method="POST"
+			action="?/pickAvatar"
+			use:enhance={() => {
+				return async ({ update }) => {
+					await update({ reset: false });
+					editingAvatar = false;
+				};
+			}}
+			class="shrink-0"
+		>
+			<!--
+				Always a plain button: it opens the grid. Submitting here would post
+				the avatar that is already chosen, which is a pointless write to the
+				save every time the header is clicked.
+			-->
+			<button
+				type="button"
+				onclick={() => (editingAvatar = !editingAvatar)}
+				disabled={!canChooseAvatar}
+				class="relative block rounded-lg border border-empire-700 disabled:cursor-default {editingAvatar
+					? 'border-gold-500'
+					: 'hover:border-gold-600/60'}"
+				title={canChooseAvatar ? 'Cambiar avatar' : 'El servidor del juego no respondió'}
+				aria-expanded={editingAvatar}
+			>
+				<img
+					src={avatarUrl(chosenAvatar)}
+					alt="Avatar de {data.user.username}"
+					class="size-20 rounded-lg object-cover"
+				/>
+				{#if canChooseAvatar}
+					<span
+						class="absolute -bottom-1 -right-1 rounded-full border border-empire-700 bg-empire-900 px-1.5 py-0.5 text-[10px] font-medium text-gold-400"
+					>
+						cambiar
+					</span>
+				{/if}
+			</button>
+
+			{#if editingAvatar}
+				<div
+					class="panel mt-3 grid w-80 grid-cols-5 gap-1.5 p-2 shadow-xl"
+					role="group"
+					aria-label="Elegir avatar"
+				>
+					{#each data.avatar?.avatars ?? [] as avatar (avatar)}
+						<button
+							type="submit"
+							name="avatar"
+							value={avatar}
+							title={avatar}
+							aria-label={`Elegir avatar ${avatar}`}
+							aria-pressed={avatar === chosenAvatar}
+							class="rounded border-2 p-0.5 transition-colors {avatar === chosenAvatar
+								? 'border-gold-400 bg-gold-500/20'
+								: 'border-transparent hover:border-slate-500'}"
+						>
+							<img src={avatarUrl(avatar)} alt="" height="40" loading="lazy" />
+						</button>
+					{/each}
+				</div>
+			{/if}
+
+			{#if form?.avatarMessage}
+				<p class="mt-2 max-w-80 text-xs text-red-300">{form.avatarMessage}</p>
+			{/if}
+		</form>
+
 		<div class="min-w-0">
 			<h1 class="flex flex-wrap items-center gap-3 text-3xl font-bold">
 				{data.user.username}
@@ -45,6 +122,9 @@
 				{data.progress.worldName}
 				<span class="text-slate-600">·</span>
 				<span class="font-mono text-xs">zid {data.user.zid}</span>
+			</p>
+			<p class="mt-1 text-xs text-slate-500">
+				El avatar es el que ve el juego y tu lista de amigos.
 			</p>
 		</div>
 		<a href="/juego" class="btn-primary ml-auto">Entrar al juego</a>
