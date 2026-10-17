@@ -31,9 +31,9 @@ from __future__ import annotations
 import pytest
 from pyamf import AMF0, remoting
 
-empires_server = __import__("empires-server")
-
 from battle_engine import BattleContext
+
+empires_server = __import__("empires-server")
 
 
 @pytest.fixture(scope="module")
@@ -41,15 +41,21 @@ def client(gateway_app):
     return gateway_app.test_client()
 
 
-def serializer():
+@pytest.fixture(scope="module")
+def serializer(gateway_app):
     """The live serializer on the configured app.
 
     Reached through the session interface rather than by rebuilding one, so
     this is the object the running gateway actually encodes and decodes with,
-    including the ``enc_hook`` and decode patch applied in empires-server.
+    including the ``enc_hook`` and the decode patch from empires-server.
+
+    It comes from the shared ``gateway_app`` fixture rather than by importing
+    ``wsgi``: importing that module configures a *second* app, and with it a
+    second SQLAlchemy engine pointed at the real save database, which nothing
+    ever disposes.
     """
-    with empires_server.app.app_context():
-        return empires_server.app.session_interface.serializer
+    with gateway_app.app_context():
+        return gateway_app.session_interface.serializer
 
 
 class TestClientToGateway:
@@ -111,13 +117,13 @@ class TestClientToGateway:
 class TestGatewayToSaveStore:
     """Seam 2: a BattleContext must survive the session round trip."""
 
-    def test_a_battle_context_survives_encode_and_decode(self):
+    def test_a_battle_context_survives_encode_and_decode(self, serializer):
         context = BattleContext(map_name="C037", island=42, replaying=True)
         # flask-session encodes the whole session dict, never a bare value --
         # encode() treats its argument as the session, so a lone struct raises.
-        encoded = serializer().encode({"battle": [None, None, None, context]})
+        encoded = serializer.encode({"battle": [None, None, None, context]})
 
-        restored = serializer().decode(encoded)["battle"][3]
+        restored = serializer.decode(encoded)["battle"][3]
 
         assert isinstance(restored, BattleContext), (
             "the save came back as "
@@ -127,11 +133,11 @@ class TestGatewayToSaveStore:
         assert restored.island == 42
         assert restored.replaying is True
 
-    def test_it_survives_being_nested_in_a_save(self):
+    def test_it_survives_being_nested_in_a_save(self, serializer):
         """The real shape: inside session['battle'] at index 3."""
         save = {"user_object": {"level": 9}, "battle": [[300, 300], [1, 2], [], BattleContext()]}
 
-        restored = serializer().decode(serializer().encode(save))
+        restored = serializer.decode(serializer.encode(save))
 
         assert isinstance(restored["battle"][3], BattleContext)
 
@@ -150,10 +156,10 @@ class TestGatewayToSaveStore:
         assert stored.island == 7
         assert stored.replaying is True
 
-    def test_a_save_without_one_comes_back_as_plain_data(self):
+    def test_a_save_without_one_comes_back_as_plain_data(self, serializer):
         save = {"user_object": {"level": 9}, "battle": [[300, 300], [1, 2], [], None]}
 
-        restored = serializer().decode(serializer().encode(save))
+        restored = serializer.decode(serializer.encode(save))
 
         assert restored == save
 
@@ -161,38 +167,38 @@ class TestGatewayToSaveStore:
 class TestDecoderFastPath:
     """Seam 3: the marker check must skip only when there is nothing to do."""
 
-    def test_the_marker_is_present_when_a_battle_is_saved(self):
+    def test_the_marker_is_present_when_a_battle_is_saved(self, serializer):
         """If this ever fails the fast path silently breaks real battles."""
-        encoded = serializer().encode({"battle": [None, None, None, BattleContext()]})
+        encoded = serializer.encode({"battle": [None, None, None, BattleContext()]})
 
         assert empires_server.BATTLE_CONTEXT_MARKER in encoded
 
-    def test_the_marker_is_absent_when_there_is_no_battle(self):
-        encoded = serializer().encode({"user_object": {"level": 9}, "fleets": {}})
+    def test_the_marker_is_absent_when_there_is_no_battle(self, serializer):
+        encoded = serializer.encode({"user_object": {"level": 9}, "fleets": {}})
 
         assert empires_server.BATTLE_CONTEXT_MARKER not in encoded
 
-    def test_a_payload_without_the_marker_skips_the_walk(self):
+    def test_a_payload_without_the_marker_skips_the_walk(self, serializer):
         """Nothing to convert, so the decode is handed over as msgspec made it."""
         save = {"user_object": {"level": 9}, "fleets": {"f1": ["a,b,c"]}}
 
-        restored = serializer().decode(serializer().encode(save))
+        restored = serializer.decode(serializer.encode(save))
 
         assert restored == save
 
-    def test_a_payload_with_the_marker_still_walks(self):
+    def test_a_payload_with_the_marker_still_walks(self, serializer):
         """The other half of the assumption: presence means the walk runs."""
-        encoded = serializer().encode({"battle": [None, None, None, BattleContext()]})
+        encoded = serializer.encode({"battle": [None, None, None, BattleContext()]})
 
-        restored = serializer().decode(encoded)
+        restored = serializer.decode(encoded)
 
         assert isinstance(restored["battle"][3], BattleContext)
 
-    def test_a_marker_in_an_unrelated_string_does_not_break_anything(self):
+    def test_a_marker_in_an_unrelated_string_does_not_break_anything(self, serializer):
         """The check is on the bytes, so a literal mention counts as a false
         positive. It must cost a walk, not a wrong answer."""
         save = {"user_object": {"level": 9}, "banner": "BattleContext rules the sea"}
 
-        restored = serializer().decode(serializer().encode(save))
+        restored = serializer.decode(serializer.encode(save))
 
         assert restored == save

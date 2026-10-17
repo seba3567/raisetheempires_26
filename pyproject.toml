@@ -104,6 +104,17 @@ filterwarnings = [
     # unmaintained; it is the main source of DeprecationWarnings.
     "ignore::DeprecationWarning:pyamf.*",
     "ignore::DeprecationWarning:defusedxml.*",
+    # flask-session 0.8.0 calls datetime.utcnow() in its sqlalchemy backend --
+    # 121 of the suite's warnings came from those two lines. 0.8.0 is the
+    # latest release, so there is no version to upgrade to and nothing in this
+    # repo can change it. It still works: utcnow() is deprecated, not removed,
+    # and the value is only used to expire session rows.
+    #
+    # Narrow on purpose, so a DeprecationWarning from our own code still shows
+    # up. Remove this when flask-session ships a release that uses
+    # datetime.now(datetime.UTC); `pip index versions flask-session` is the
+    # check.
+    "ignore:datetime.datetime.utcnow.*:DeprecationWarning:flask_session.sqlalchemy.sqlalchemy",
 ]
 
 [tool.ruff]

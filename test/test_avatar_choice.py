@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import save_engine
+from conftest import asset_status
 
 empires_server = __import__("empires-server")
 get_avail_avatars = empires_server.get_avail_avatars
@@ -154,4 +155,4 @@ class TestTheGameSeesIt:
         """The images are served under /img/, which the loader's cache list matches."""
         avatar = get_avail_avatars()[0]
 
-        assert bare.get(f"/img/avatars/{avatar}").status_code == 200
+        assert asset_status(bare, f"/img/avatars/{avatar}") == 200

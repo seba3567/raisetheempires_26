@@ -40,4 +40,27 @@ def gateway_app(tmp_path_factory):
     with app.app_context():
         empires_server.db.create_all()
 
-    return app
+    yield app
+
+    # The engine holds a pooled sqlite connection for the whole session. Nothing
+    # else will close it, so without this every run ends with
+    # "ResourceWarning: unclosed database in <sqlite3.Connection>".
+    with app.app_context():
+        empires_server.db.engine.dispose()
+
+
+def asset_status(client, path):
+    """GET a static asset and return its status, with the handle released.
+
+    Flask's ``send_file`` registers a close on the response and a WSGI server
+    runs it after every request. The Flask *test client* does not, so a test
+    that only reads the status leaves the file open until the collector gets to
+    it -- which is where the "unclosed file" warnings in the suite came from.
+    Measured both ways: five requests unclosed produce five warnings, and none
+    with this.
+    """
+    response = client.get(path)
+    try:
+        return response.status_code
+    finally:
+        response.close()

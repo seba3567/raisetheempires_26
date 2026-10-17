@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 import save_engine
+from conftest import asset_status
 
 empires_server = __import__("empires-server")
 
@@ -67,13 +68,13 @@ class TestMotdCatalogue:
 class TestArtIsServed:
     def test_the_frame_is_still_served(self, bare):
         """The remastered EA border the page layers over the art."""
-        assert bare.get("/img/loading_frame_remastered.png").status_code == 200
+        assert asset_status(bare, "/img/loading_frame_remastered.png") == 200
 
     def test_a_motd_file_is_served(self, bare):
         name = bare.get("/motd.json").get_json()["current"]
 
-        assert bare.get(f"/img/motds/{name}").status_code == 200
+        assert asset_status(bare, f"/img/motds/{name}") == 200
 
     def test_a_name_outside_the_folder_is_not(self, bare):
         """The route stays a send_from_directory, not a file server."""
-        assert bare.get("/img/motds/../save.db").status_code != 200
+        assert asset_status(bare, "/img/motds/../save.db") != 200
