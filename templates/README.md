@@ -14,10 +14,10 @@ El frontend principal y moderno del proyecto está completamente migrado y desac
 
 | Archivo / Carpeta | Estado | Propósito |
 |-------------------|--------|-----------|
-| `ruffle.html` | **Fallback Activo** | Reproductor standalone directo en Flask (sin SvelteKit). Se mantiene para pruebas de integración automatizadas de bajo nivel (`test/test_gateway_e2e.py`). |
-| `nodebug.html` | **Legacy / Referencia** | Contenedor original ActiveX / NPAPI de Flash Player 11. Se conserva como referencia histórica de incrustación de plugins. |
-| `new.html` | **Deprecado** | Antigua cuadrícula Jinja de avatares. Reemplazada por la cuadrícula reactiva de Svelte en `/juego` y el endpoint JSON `/avatar.json`. |
+| `ruffle.html` | **Fallback de Diagnóstico** | Reproductor standalone directo en Flask (sin SvelteKit). Redirige a `/juego` por defecto; se renderiza con `?raw=1` o `?fallback=1` para tests automatizados de integración (`test/test_gateway_e2e.py`). |
+| `nodebug.html` | **Eliminado** | Eliminado por obsolescencia técnica (Flash NPAPI ya no está soportado en navegadores modernos). La ruta `/nodebug.html` redirige automáticamente a `/juego`. |
+| `new.html` | **Deprecado** | Antigua cuadrícula Jinja de avatares. La ruta `/new.html` redirige automáticamente a `/juego`. |
 | `changelog.txt` | **Histórico** | Registro de cambios y parches históricos de la emulación de servidor. |
-| `css/`, `img/`, `js/` | **Compatibilidad** | Recursos estáticos servidos por Flask (`/css`, `/img`, `/js`) para soportar la visualización del reproductor de respaldo `ruffle.html`. |
+| `css/`, `img/`, `js/` | **Compatibilidad** | Recursos estáticos servidos por Flask (`/css`, `/img`, `/js`) para soportar la visualización del reproductor de respaldo `ruffle.html?raw=1`. |
 
-> **Nota:** Las rutas web en [`empires-server.py`](../empires-server.py) (`/`, `/game`, `/play`, `/home.html`, `/new.html`) redirigen automáticamente al cliente web moderno en `/juego`.
+> **Nota:** Todas las rutas web históricas en [`empires-server.py`](../empires-server.py) (`/`, `/game`, `/play`, `/home.html`, `/new.html`, `/nodebug.html`, `/ruffle.html`) redirigen limpiamente al cliente web moderno en `/juego`.

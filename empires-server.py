@@ -189,21 +189,29 @@ def home():
 
 @app.route("/ruffle.html")
 def ruffle():
-    print("ruffle")
-    if not validate_save(session, True):
-        print("Invalid save game")
-        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
-    saves = get_saves()
-    return render_template("ruffle.html", time=datetime.now().timestamp(), zid=str(get_zid()),
-                           version=version,
-                           allies=json.dumps(get_allies_friend(saves),
-                                             default=lambda o: '<not serializable>', sort_keys=False, indent=2),
-                           app_friends=json.dumps(get_allies_id(saves)),
-                           worldname=session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor",
-                           picture=get_avatar_pic(),
-                           dropdown_items=get_sessions_dropdown_info(saves),
-                           motd=get_motd()
-                           )
+    """Legacy fallback player.
+
+    Redirects to the modern SvelteKit player at /juego by default.
+    If requested with ?raw=1 or ?fallback=1, renders templates/ruffle.html
+    for headless diagnostics and integration tests.
+    """
+    if request.args.get("raw") == "1" or request.args.get("fallback") == "1":
+        if not validate_save(session, True):
+            return make_response(redirect('/admin/editor'))
+        saves = get_saves()
+        return render_template(
+            "ruffle.html",
+            time=datetime.now().timestamp(),
+            zid=str(get_zid()),
+            version=version,
+            allies=json.dumps(get_allies_friend(saves), default=lambda o: '<not serializable>', sort_keys=False, indent=2),
+            app_friends=json.dumps(get_allies_id(saves)),
+            worldname=session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor",
+            picture=get_avatar_pic(),
+            dropdown_items=get_sessions_dropdown_info(saves),
+            motd=get_motd(),
+        )
+    return make_response(redirect('/juego'))
 
 @app.route("/snapi.json")
 def snapi_bridge():
@@ -571,21 +579,8 @@ def get_allies_info():
 
 @app.route("/nodebug.html")
 def no_debug():
-    print("no debug page")
-    if not validate_save(session, True):
-        print("Invalid save game")
-        return make_response(redirect('/admin/editor')) # an unusable save needs fixing
-    saves = get_saves()
-    return render_template("nodebug.html", time=datetime.now().timestamp(), zid=str(get_zid()),
-                           version=version,
-                           allies=json.dumps(get_allies_friend(saves),
-                                             default=lambda o: '<not serializable>', sort_keys=False, indent=2),
-                           app_friends=json.dumps(get_allies_id(saves)),
-                           worldname=session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor",
-                           picture=get_avatar_pic(),
-                           dropdown_items=get_sessions_dropdown_info(saves),
-                           motd=get_motd()
-                           )
+    """NPAPI Flash container is obsolete; redirect to modern player."""
+    return make_response(redirect('/juego'))
 
 
 @app.route("/wipe_session", methods=['GET', 'POST'])

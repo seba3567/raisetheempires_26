@@ -301,28 +301,19 @@ class TestPlayerPages:
     browser console, so assert the page contract here.
     """
 
-    @pytest.mark.parametrize("path", ["/ruffle.html", "/nodebug.html"])
-    def test_page_renders(self, client, path):
-        response = client.get(path)
+    def test_legacy_pages_redirect_to_real_player(self, client):
+        """Legacy players redirect to /juego by default."""
+        for path in ("/ruffle.html", "/nodebug.html", "/new.html", "/home.html"):
+            response = client.get(path)
+            assert response.status_code in (301, 302, 303, 307, 308)
+            assert response.headers["Location"].endswith("/juego")
 
+    def test_ruffle_fallback_renders_when_requested(self, client):
+        response = client.get("/ruffle.html?raw=1")
         assert response.status_code == 200
         body = response.get_data(as_text=True)
         assert body.strip()
-        # No template expression leaked into the output.
         assert "{{" not in body
-
-    def test_home_html_sends_the_browser_to_the_real_player(self, client):
-        """/home.html is a redirect now, not the 2012 launcher.
-
-        Eight gateway routes finish by redirecting here -- gazillionaire,
-        deprogress, seed, patch, the three quest routes and chooseavatar -- and
-        every one of them used to drop the admin on a page whose only embed was
-        an ``<object>`` pointing at download.macromedia.com.
-        """
-        response = client.get("/home.html")
-
-        assert response.status_code in (301, 302, 303, 307, 308)
-        assert response.headers["Location"].endswith("/juego")
 
     def test_ruffle_page_pins_and_verifies_the_emulator(self, client):
         """Ruffle must stay version-pinned and integrity-checked.
@@ -330,7 +321,7 @@ class TestPlayerPages:
         An unpinned CDN tag means a future Ruffle release could break this
         archived game with no way to roll the change back.
         """
-        body = client.get("/ruffle.html").get_data(as_text=True)
+        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
 
         assert "@ruffle-rs/ruffle@" in body, "Ruffle must be pinned to a version"
         assert "integrity=\"sha256-" in body, "Ruffle must be loaded with SRI"
@@ -339,7 +330,7 @@ class TestPlayerPages:
         assert 'src="https://unpkg.com/@ruffle-rs/ruffle"' not in body
 
     def test_ruffle_page_config_is_complete(self, client):
-        body = client.get("/ruffle.html").get_data(as_text=True)
+        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
 
         # allowScriptAccess must stay on or the SWF throws Error #2067 and
         # aborts GameSettingsInit.onConfigXmlLoaded.
@@ -360,7 +351,7 @@ class TestPlayerPages:
         Error #2126. Note it is ``app_url``; ``sn_app_url`` feeds a different
         constant and does not affect the gateway.
         """
-        body = client.get("/ruffle.html").get_data(as_text=True)
+        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
 
         assert "app_url=http://" in body, "app_url must be an absolute http URL"
         assert "app_url=" in body and "app_url=\\" not in body.replace("&sn_app_url=\\", "")
@@ -371,7 +362,7 @@ class TestPlayerPages:
         That is a SyntaxError which blanks the player entirely, and it is easy
         to introduce while editing the FlashVars block.
         """
-        body = client.get("/ruffle.html").get_data(as_text=True)
+        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
 
         start = body.index("parameters:")
         line = body[start:body.index("\n", start)]
