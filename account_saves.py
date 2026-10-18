@@ -204,6 +204,8 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         return payload
 
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
+        from flask import has_request_context, request
+
         from save_store import WriteConflict
 
         private = (self.REVISION_KEY, self.REASON_KEY)
@@ -233,6 +235,9 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             # the lost update this whole change exists to stop.
             print(f"Save for {store_id} was written by someone else: {conflict}")
             session.modified = False
+            # Read-only requests should never 500 if a background save moved the row.
+            if has_request_context() and request.method in ("GET", "HEAD"):
+                return
             raise
 
     def _delete_session(self, session_id: str, app: Flask | None = None) -> None:

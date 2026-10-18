@@ -25,12 +25,12 @@ PLAYER_ZID_HEADER = "x-player-zid"
 MAX_SAFE_ZID = 2**53 - 1
 
 def read_games_settings():
-    with open(game_settings_path) as f:
+    with open(game_settings_path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def read_initial_island():
-    with open(initial_island_path) as f:
+    with open(initial_island_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -43,7 +43,7 @@ print("Initial island template", len(initial_island["objects"]), "objects loaded
 # game_objects = [o for o in game_objects_2 if int(o["position"].split(",")[0]) > 62 and int(o["position"].split(",")[1]) > 58]
 
 def read_island_file(file_path):
-    with open(file_path) as island_file:
+    with open(file_path, encoding="utf-8") as island_file:
         return json.load(island_file)
 
 

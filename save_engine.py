@@ -1,3 +1,4 @@
+import atexit
 import configparser
 import logging
 import os
@@ -242,6 +243,7 @@ logging.basicConfig(
         logging.FileHandler(str(Path(log_path()) / "log.txt"), encoding="utf-8")
     ]
 )
+atexit.register(logging.shutdown)
 logger = logging.getLogger(__name__)
 
 sys.excepthook = exception_handler
