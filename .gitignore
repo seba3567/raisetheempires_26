@@ -18,6 +18,12 @@
 /_peek.err
 /_verify.log
 /_verify.err
+# Gateway logs from the runs started by hand, the mysqld console redirect, and
+# the one-off probe scripts those runs left in the root.
+/gw.out.log
+/gw.err.log
+/_mysqld.*.log
+/_*.py
 /chromium
 /chromium-profile
 /cache
