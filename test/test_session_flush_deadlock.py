@@ -113,10 +113,77 @@ class TestOnlyLockCollisionsAreRetried:
         assert double.calls == 1
 
 
+class TestTheResponseSurvivesAFailedFlush:
+    """The rule, and the reason it is a rule rather than a list of errnos.
+
+    `_upsert_session` runs during response finalisation. The player is about to be
+    sent bytes that already exist, so an exception here converts a good answer
+    into a 500 -- and because flask-session flushes on *every* request, that
+    includes requests that never intended to write anything. Serving
+    /questSettings.xml is exactly that: a static file that 500'd, which cost the
+    game its quest catalogue and produced an Error #1009 two frames away in the
+    client.
+    """
+
+    class Recorder:
+        def __init__(self, error):
+            self.error = error
+
+        def store(self, *a, **k):
+            raise self.error
+
+        def load(self, *a, **k):
+            return None
+
+        def delete(self, *a, **k):
+            return None
+
+    def _flush_with(self, gateway_app, error):
+        interface = gateway_app.session_interface
+        original = type(interface).save_store
+        type(interface).save_store = property(lambda self: self.Recorder(error))
+        try:
+            from flask import session as flask_session
+
+            with gateway_app.test_request_context("/"):
+                flask_session.sid = "deadlock-browser"
+                session = gateway_app.session_interface.open_session(
+                    gateway_app, _request()
+                )
+                session["user_object"] = {"level": 9}
+                # No exception may escape: that is the whole point.
+                interface._upsert_session(None, session, "session:deadlock-browser")
+                assert session.modified is False
+        finally:
+            type(interface).save_store = original
+
+    def test_an_unknown_database_error_still_lets_the_response_out(self, gateway_app):
+        """Not a retry, not a conflict -- just a failure during the flush."""
+        self._flush_with(gateway_app, DriverError(1020, "Record has changed"))
+
+    def test_a_collision_that_outlived_its_retry_lets_the_response_out(self, gateway_app):
+        self._flush_with(gateway_app, DriverError(1213, "Deadlock"))
+
+    def test_something_that_is_not_a_database_error_at_all(self, gateway_app):
+        self._flush_with(gateway_app, ValueError("something nobody predicted"))
+
+
+def _request():
+    from flask import request
+
+    return request
+
+
 class TestWhatCountsAsTransient:
-    def test_the_two_lock_errors(self):
+    def test_the_retryable_errnos(self):
+        # 1020 is here because it arrived in the log while serving a static file:
+        # writing the snapshot of a replaced row aborts under REPEATABLE READ if
+        # anyone touched the history table in between. It is not even a lock.
         assert is_transient_store_error(DriverError(1213, "Deadlock"))
         assert is_transient_store_error(DriverError(1205, "Lock wait timeout"))
+        assert is_transient_store_error(
+            DriverError(1020, "Record has changed since last read in table 'save_backups'")
+        )
 
     def test_everything_else(self):
         assert not is_transient_store_error(DriverError(1062, "Duplicate entry"))

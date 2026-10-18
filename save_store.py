@@ -179,27 +179,36 @@ class UnknownSave(Exception):
     """No row for that store id."""
 
 
-# MariaDB errno for the two errors that mean "somebody else had the lock, try
-# again" rather than "this statement is wrong":
+# MariaDB errno for the errors that mean "somebody else was in here at the same
+# time, run it again" rather than "this statement is wrong":
+#   1020 Record has changed since last read in table X; try restarting transaction
 #   1205 Lock wait timeout exceeded
 #   1213 Deadlock found when trying to get lock; try restarting transaction
-TRANSIENT_LOCK_ERRNOS = frozenset({1205, 1213})
+#
+# 1020 earns its place here for a reason worth writing down. It is not even a lock
+# failure: under REPEATABLE READ, writing a snapshot of the row that is being
+# replaced aborts if anyone touched the history table in between. It arrived
+# while serving /questSettings.xml -- a static file -- because flask-session
+# flushes the session at the end of every request, so one unrepeatable write
+# turned an asset download into a 500, and the game silently lost its quest
+# catalogue. The error was a long way from anything that looked like quests.
+TRANSIENT_STORE_ERRNOS = frozenset({1020, 1205, 1213})
 
 
 def is_transient_store_error(error: BaseException) -> bool:
-    """True for a lock collision worth retrying, false for anything else.
+    """True for a collision worth retrying, false for anything else.
 
-    A deadlock means MariaDB rolled this transaction back and picked it as the
-    victim so the other one could finish. Nothing was half-written and the
-    statement was not wrong, so running it again is the correct response -- and
-    almost always works, because whatever collided has moved on.
+    None of these is a lost write: the transaction was rolled back, nothing was
+    half-applied, and the statement was not wrong. Running it again is the
+    correct response, and almost always works, because whatever collided has
+    moved on.
 
     Everything else must *not* be retried. A duplicate key, a missing column or a
     bad parameter will fail identically every time, and retrying those just turns
     a clear error into a slow one.
     """
     code = error.args[0] if error.args else None
-    return isinstance(code, int) and code in TRANSIENT_LOCK_ERRNOS
+    return isinstance(code, int) and code in TRANSIENT_STORE_ERRNOS
 
 
 class TransientStoreError(Exception):

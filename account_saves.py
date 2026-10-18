@@ -347,9 +347,26 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         except TransientStoreError as error:
             # Same reasoning as above: the response is already built and the
             # player cannot read anything we could put in an error body. A
-            # deadlock that survived its retry is worth shouting about in the
+            # collision that survived its retry is worth shouting about in the
             # log, and not worth a 500.
             print("Session save dropped after a retry:", error)
+            session.modified = False
+            return
+        except Exception as error:
+            # The general rule, because enumerating driver errnos never finishes.
+            #
+            # This runs during response finalisation. Whatever went wrong here,
+            # the bytes the player gets are already built, and an exception turns
+            # them into a 500 -- including for requests that had nothing to do
+            # with saving anything. flask-session flushes at the end of *every*
+            # request, so one unrepeatable write turned the download of
+            # /questSettings.xml into a 500, the game silently lost its quest
+            # catalogue, and the quest manager then dereferenced null on the next
+            # transaction. An asset fetch failing as a side effect of a background
+            # write is the part that hid it for so long.
+            #
+            # Log loudly, let the response out. The next request tries again.
+            print("Session save failed during response finalisation:", repr(error))
             session.modified = False
             return
 
