@@ -48,6 +48,10 @@ dependencies = [
     # Windows wheels; waitress is the pure-Python fallback with no dependencies.
     "granian>=2.8,<3",
     "waitress>=3.0,<4",
+    # Driver for the save store when SAVE_STORE_PATH is a mariadb:// URL.
+    # save_store picks the engine from that one config key, so SQLite stays the
+    # default and MariaDB is a deployment change rather than a code change.
+    "pymysql>=1.1,<2",
 ]
 
 [project.optional-dependencies]

@@ -149,10 +149,19 @@ class TestWhereTheRowEndsUp:
 
 
 def stored_rows(app) -> set:
-    from save_engine import get_all_sessions
+    """Every store id that currently holds a row.
 
+    Reads the ``saves`` table directly rather than through ``get_saves``. The
+    two answer different questions: get_saves returns *usable* saves and skips
+    one whose user_object is empty, and these tests write exactly that on
+    purpose -- ``{"user_object": null}`` creates the row without needing a real
+    empire. What is being asked here is which key the row landed under.
+    """
     with app.app_context():
-        return {record.session_id for record in get_all_sessions()}
+        store = app.session_interface.save_store
+        with store._connect() as connection:
+            return {row["store_id"]
+                    for row in connection.execute("SELECT store_id FROM saves")}
 
 
 def write_save(app, headers=None, cookie="session=brand-new-browser", body='{"user_object": null}') -> None:
@@ -180,9 +189,6 @@ class TestFirstRequestFromANewBrowser:
         cannot be used to observe an account-bound read.
         """
         import json
-        import sqlite3
-
-        import msgspec
 
         seeded = json.dumps(
             {"user_object": {"userInfo": {"player": {"level": 47, "uid": ACCOUNT_ZID}}}}
@@ -190,8 +196,8 @@ class TestFirstRequestFromANewBrowser:
         write_save(app, {"x-player-zid": str(ACCOUNT_ZID)}, body=seeded)
 
         # A client that has never carried a game cookie at all. The POST both
-        # loads and writes, so if it started from the account's row, what it
-        # backs up is the seeded empire.
+        # loads and writes, so what it snapshots is the seeded empire -- if it
+        # had started from an empty session, the snapshot would say so.
         fresh = app.test_client()
         fresh.post(
             "/editor/save",
@@ -199,16 +205,19 @@ class TestFirstRequestFromANewBrowser:
             headers={"x-player-zid": str(ACCOUNT_ZID)},
         )
 
-        blob = sqlite3.connect(app.config["SQLALCHEMY_DATABASE_URI"].replace("sqlite:///", "")) \
-            .execute(
-                "SELECT data FROM sessions WHERE session_id = ?",
-                ("session:" + account_store_id(ACCOUNT_ZID),),
-            ).fetchone()[0]
-        save = msgspec.msgpack.Decoder().decode(blob)
+        # History lives in save_backups now, not in a "backup" key inside the
+        # row. The newest snapshot is what that cookieless write replaced, which
+        # is the seeded empire if it loaded the account's row first.
+        with app.app_context():
+            store = app.session_interface.save_store
+            history = store.history("session:" + account_store_id(ACCOUNT_ZID))
 
-        backup = save.get("backup")
-        assert backup is not None, "a cookieless request started an empty session"
-        seen = ((backup.get("user_object") or {}).get("userInfo") or {}).get("player") or {}
+        assert history, "a cookieless request started an empty session"
+
+        snapshot = store.read_backup(
+            "session:" + account_store_id(ACCOUNT_ZID), history[0].revision)
+        seen = (((snapshot or {}).get("user_object") or {})
+                .get("userInfo") or {}).get("player") or {}
         assert seen.get("uid") == ACCOUNT_ZID, "it did not load the account's empire"
         assert seen.get("level") == 47
 

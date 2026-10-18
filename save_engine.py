@@ -13,7 +13,8 @@ import editor
 from flask import current_app, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
-from itsdangerous import want_bytes
+
+from save_store import WriteConflict
 
 crash_log = True
 
@@ -272,7 +273,35 @@ def decode_save(serialized_save):
 
 
 def get_saves():
-    return [enrich_save(save, record) for record in get_all_sessions() for save in [decode_save(want_bytes(record.data))] if save is not None and 'user_object' in save]
+    """Every save in the database, each stamped with the revision it was read at.
+
+    Reads through the interface, which now persists into ``save_store`` rather
+    than the sessions table -- so this no longer queries ``sql_session_model``
+    directly, because nothing writes there any more. The revision comes back
+    with the save so :func:`store_session` can guard its write; without it the
+    write is a blind overwrite, which is the lost update the rebuild removed.
+
+    A row whose ``user_object`` key is present but None is skipped rather than
+    handed on: the old filter tested for the key, not for a value, and callers
+    then did ``save['user_object'][...]`` on it.
+    """
+    interface = current_app.session_interface
+    store = interface.save_store
+    saves = []
+    with store._connect() as connection:
+        rows = connection.execute(
+            "SELECT store_id, data FROM saves ORDER BY store_id").fetchall()
+
+    for row in rows:
+        loaded = store.load(row["store_id"])
+        if loaded is None or not loaded.data:
+            continue
+        if not loaded.data.get("user_object"):
+            continue
+        loaded.data["session_id"] = loaded.store_id
+        loaded.data["__save_revision"] = loaded.revision
+        saves.append(loaded.data)
+    return saves
 
 
 def enrich_save(save, record):
@@ -306,22 +335,22 @@ def store_session(save):
     was nothing to save into".
     """
     sess_int: SqlAlchemySessionInterface = current_app.session_interface
-    sess_model = sess_int.sql_session_model
     session_id = save.get("session_id")
-    record = sess_model.query.filter_by(session_id=session_id).first()
+    revision = save.get("__save_revision")
 
-    if record is None:
-        # Assigning to record.data with no row raised on None, losing the request
-        # without saying which row was missing.
-        print("WARNING: store_session found no row for session_id", repr(session_id))
+    # The store key is how the row is found, not part of the empire. The
+    # revision is bookkeeping for this write, not state either.
+    payload = {key: value for key, value in save.items()
+               if key not in ("session_id", "__save_revision")}
+
+    try:
+        sess_int.save_store.store(session_id, payload, expected_revision=revision)
+    except WriteConflict as conflict:
+        # Someone wrote between this save being read and now. Refusing is the
+        # safe half: the alternative is overwriting their turn, which is the bug
+        # this whole rebuild exists to stop.
+        print("store_session refused a stale write for", session_id, ":", conflict)
         return False
-
-    # The store key is how the row is found, not part of the empire. It used to
-    # be written into the payload too, putting a key the game never expects
-    # inside the save.
-    payload = {key: value for key, value in save.items() if key != "session_id"}
-    record.data = sess_int.serializer.encode(payload)
-    sess_int.client.session.commit()
     return True
 
 

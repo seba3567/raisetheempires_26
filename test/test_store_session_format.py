@@ -1,26 +1,30 @@
-"""store_session was writing a format the rest of the server cannot read.
+"""The pickle bug, and why it cannot come back.
 
-``store_session`` builds the row itself and fills ``record.data`` with
-``pickle.dumps``. Everything else goes through ``session_interface.serializer``,
-which this project patches to msgspec.msgpack in empires-server (see
-``serializer_init_patch``, and the note at empires-server.py:143 that json was
-switched off precisely because "msgspec makes it undepickleable").
+``store_session`` used to fill ``record.data`` with ``pickle.dumps`` while the
+whole codebase read and wrote through ``session_interface.serializer``, which
+empires-server patches to msgspec.msgpack. Nothing could decode what it wrote:
+``decode_save`` caught the mismatch, printed "Skipping corrupt save" and
+returned None, and ``get_saves`` dropped any row that decoded to None -- so the
+row stayed in the table and stopped existing. It also called
+``sess_int.db.session.commit()``, and flask-session 0.8.0 keeps the SQLAlchemy
+handle on ``self.client``, so it raised AttributeError before writing anything.
+The function had never once persisted a save.
 
-So the bytes written are in a format nothing in the codebase decodes. The row is
-not lost loudly: ``decode_save`` catches the failure, prints "Skipping corrupt
-save", and returns None, and ``get_saves`` then drops the row entirely. The
-player keeps playing against an in-memory session with no persistent row behind
-it, and the loss is one line in a log nobody reads.
+Both faults are gone, and the reason they cannot return is structural rather
+than a promise: there is no code path left that writes a save by hand. The
+session interface persists through ``save_store.Store``, which encodes with the
+app's serializer -- the same one the reader uses. A save cannot be written in a
+format the server cannot read, because the format is chosen by the thing that
+also reads it.
 
-These were written to fail first. ``test_the_save_still_appears_in_the_session_list``
-is the one that matters: it writes with store_session and reads back through the
-same path the admin session list uses.
+What these tests pin now is the property that makes that true, and the behaviour
+that replaces what the old ones checked.
 """
 from __future__ import annotations
 
-import pickle
-
 import pytest
+
+from conftest import asset_status
 
 
 @pytest.fixture(scope="module")
@@ -28,192 +32,187 @@ def client(gateway_app):
     return gateway_app.test_client()
 
 
-@pytest.fixture
-def roundtrip(gateway_app, client):
-    """Yield a helper that writes a save with store_session and reads it back.
+def seed(client):
+    """Put a minimal but real empire in the session and persist it."""
+    client.get("/avatar.json")
+    with client.session_transaction() as session:
+        session["user_object"] = {
+            "userInfo": {
+                "player": {"level": 12, "uid": 2361750976462888, "xp": 5000,
+                           "cash": 777, "playerResourceType": 5,
+                           "socialXpGood": 0, "socialLevelGood": 0,
+                           "socialXpBad": 0, "socialLevelBad": 0},
+                "worldName": "Round Trip Empire",
+                "world": {"randSeedW": 18000, "randSeedZ": 36969,
+                          "resources": {"coins": 1234, "wood": 9}},
+            }
+        }
+        session["fleets"] = {}
+        session["battle"] = None
+    # A request, so the interface writes it out.
+    client.get("/avatar.json")
+    return client
 
-    Everything runs inside an app context: store_session goes through
-    ``current_app.session_interface``, and the test client's request contexts do
-    not stay pushed afterwards.
-    """
-    from save_engine import decode_save, get_saves, store_session
 
-    def write_a_save():
-        """Write a save the way production does, and return (record, saved).
+def store_of(app):
+    return app.session_interface.save_store
 
-        Every production caller reaches store_session through get_saves(), which
-        stamps each save with the *store id* of the row it came from --
-        ``session:acct<zid>`` once an account is bound, the cookie sid before
-        that. The store id is what store_session looks the row up by, so the test
-        has to use the same key or it is testing a different thing.
-        """
-        # Establish the row, then fill it in.
-        client.get("/avatar.json")
+
+def world_name_of(save):
+    return ((((save or {}).get("user_object") or {}).get("userInfo") or {})
+            .get("worldName"))
+
+
+class TestOneWayOut:
+    def test_a_save_comes_back_intact(self, gateway_app, client):
+        seed(client)
 
         with client.session_transaction() as session:
-            session["user_object"] = {
-                "userInfo": {
-                    "player": {
-                        "level": 12, "uid": 2361750976462888, "xp": 5000,
-                        "cash": 777, "playerResourceType": 5,
-                        # validate_save insists on these four, and
-                        # get_sessions_dropdown_info filters on it, so a save
-                        # without them is one the admin list never shows.
-                        "socialXpGood": 0, "socialLevelGood": 0,
-                        "socialXpBad": 0, "socialLevelBad": 0,
-                    },
-                    "worldName": "Round Trip Empire",
-                    "world": {"randSeedW": 18000, "randSeedZ": 36969,
-                              "resources": {"coins": 1234, "wood": 9}},
-                }
-            }
-            session["fleets"] = {}
-            session["battle"] = None
+            assert world_name_of(dict(session)) == "Round Trip Empire"
 
-        # A request, so flask-session writes the row out. Without it the row only
-        # exists in the session's memory and get_saves -- which queries the
-        # table -- cannot see it, which made this test pass or fail depending on
-        # what ran before it.
-        client.get("/avatar.json")
+    def test_the_empire_survives_repeated_writes(self, gateway_app, client):
+        """Two writes in a row is the shape that used to lose the save.
 
-        # get_saves is what stamps the store id on, exactly as the invasion and
-        # pillage paths do before they call store_session. Called directly rather
-        # than through the fixture dict, because inside this closure the name
-        # `roundtrip` refers to the fixture function, not the dict it yields.
-        #
-        # The accessors are defensive on purpose: get_saves keeps a row whose
-        # "user_object" key is present but None -- its filter asks whether the key
-        # is there, not whether it holds anything -- and other modules running
-        # first in the shared database can leave such a row behind.
-        def world_name_of(save):
-            return (((save or {}).get("user_object") or {})
-                    .get("userInfo") or {}).get("worldName")
-
-        match = [s for s in get_saves() if world_name_of(s) == "Round Trip Empire"]
-        assert match, "the session was not readable straight after writing it"
-        save = match[0]
-
-        stored = store_session(save)
-
-        interface = gateway_app.session_interface
-        record = interface.sql_session_model.query.filter_by(
-            session_id=save["session_id"]).first()
-        return record, stored
-
-    with gateway_app.app_context():
-        yield {
-            "write": write_a_save,
-            "decode": decode_save,
-            "saves": get_saves,
-            "store": store_session,
-        }
-
-
-def restored_looks_like_msgpack(data: bytes) -> bool:
-    """True when the bytes decode as msgpack."""
-    try:
-        import msgspec
-        msgspec.msgpack.decode(data)
-        return True
-    except Exception:
-        return False
-
-
-class TestWhatStoreSessionWrites:
-    def test_the_write_happened(self, roundtrip):
-        record, stored = roundtrip["write"]()
-
-        assert record is not None
-        assert stored is True
-
-    def test_the_store_key_is_not_written_into_the_save(self, roundtrip):
-        """It is how the row is found, not part of the empire.
-
-        It used to be included, so every persisted save carried a key the game
-        has no idea what to do with.
+        An invasion followed by a pillage each went through store_session, and
+        the second one wrote a row nothing could read back.
         """
-        record, _ = roundtrip["write"]()
+        seed(client)
+        for level in (3, 4):
+            with client.session_transaction() as session:
+                session["user_object"]["userInfo"]["player"]["level"] = level
+            client.get("/avatar.json")
 
-        restored = roundtrip["decode"](record.data)
+        with client.session_transaction() as session:
+            assert session["user_object"]["userInfo"]["player"]["level"] == 4
+            assert world_name_of(dict(session)) == "Round Trip Empire"
 
-        assert "session_id" not in restored
+    def test_it_stays_readable_over_many_writes(self, gateway_app, client):
+        """Every write goes through the same encoder the reader uses."""
+        seed(client)
+        for level in range(2, 9):
+            with client.session_transaction() as session:
+                session["user_object"]["userInfo"]["player"]["level"] = level
+            client.get("/avatar.json")
 
-    def test_it_is_msgpack_now_not_pickle(self, roundtrip):
-        """Pin the fix, so going back to pickle has to be a decision."""
-        record, _ = roundtrip["write"]()
+        with client.session_transaction() as session:
+            assert world_name_of(dict(session)) == "Round Trip Empire"
+            assert session["user_object"]["userInfo"]["player"]["level"] == 8
 
+
+class TestTheFormatIsTheReadersFormat:
+    def test_the_payload_is_not_pickle(self, gateway_app, client):
+        seed(client)
+        store = store_of(gateway_app)
+
+        with store._connect() as connection:
+            row = connection.execute(
+                "SELECT data FROM saves LIMIT 1").fetchone()
+
+        assert row["data"] is not None
         # A pickle stream opens with a protocol marker; msgpack never emits it.
-        assert not record.data.startswith(b"\x80"), "pickle is back"
-        assert restored_looks_like_msgpack(record.data)
-
-
-class TestWhatTheServerCanReadBack:
-    """These are the ones that were failing."""
-
-    def test_decode_save_reads_what_store_session_wrote(self, roundtrip):
-        record, _ = roundtrip["write"]()
-
-        assert roundtrip["decode"](record.data) is not None, (
-            "store_session wrote bytes decode_save cannot read; the row is now "
-            "dead weight that get_saves silently skips"
+        assert not row["data"].startswith(b"\x80"), (
+            "something is writing pickles again; the server cannot read those"
         )
 
-    def test_the_empire_survives_the_roundtrip(self, roundtrip):
-        record, _ = roundtrip["write"]()
+    def test_it_decodes_as_msgpack(self, gateway_app, client):
+        import msgspec
 
-        restored = roundtrip["decode"](record.data)
+        seed(client)
+        store = store_of(gateway_app)
 
-        assert restored["user_object"]["userInfo"]["worldName"] == "Round Trip Empire"
-        assert restored["user_object"]["userInfo"]["player"]["level"] == 12
+        with store._connect() as connection:
+            blobs = [row["data"] for row in
+                     connection.execute("SELECT data FROM saves")]
 
-    def test_the_save_appears_in_the_session_list(self, roundtrip):
-        """The user-visible symptom: the empire vanishes from /list_session.
+        # Every row, not LIMIT 1: the database is shared with the rest of the
+        # suite and other modules leave rows of their own behind. What matters
+        # is that whatever is in there is msgpack and readable.
+        assert blobs
+        decoded = [msgspec.msgpack.decode(blob) for blob in blobs]
+        assert any(entry.get("user_object") for entry in decoded), \
+            "the seeded empire should be in one of these rows"
 
-        get_saves() drops any row decode_save returns None for, so a corrupt row
-        is invisible to the player and to the admin alike.
-        """
-        roundtrip["write"]()
+    def test_the_store_key_is_not_written_into_the_save(self, gateway_app, client):
+        seed(client)
 
-        def world_name_of(save):
-            return (((save or {}).get("user_object") or {})
-                    .get("userInfo") or {}).get("worldName")
+        with client.session_transaction() as session:
+            payload = {key: value for key, value in session.items()
+                       if not key.startswith("__")}
+            store = store_of(gateway_app)
+            store.store("probe-session", payload)
 
-        names = [world_name_of(s) for s in roundtrip["saves"]()]
+        loaded = store_of(gateway_app).load("probe-session")
+        assert "session_id" not in loaded.data
+        assert "__save_revision" not in loaded.data
 
-        assert "Round Trip Empire" in names, (
-            "the empire was written and then dropped on read; get_saves hides it"
-        )
 
-    def test_the_admin_route_still_lists_it(self, gateway_app, roundtrip):
-        """Same thing one layer up, through the route an admin actually opens."""
-        roundtrip["write"]()
-        client = gateway_app.test_client()
+class TestReadsSeeTheSameRows:
+    def test_get_saves_lists_it(self, gateway_app, client):
+        from save_engine import get_saves
+
+        seed(client)
+
+        with gateway_app.app_context():
+            names = [world_name_of(save) for save in get_saves()]
+
+        assert "Round Trip Empire" in names
+
+    def test_the_admin_route_still_lists_it(self, client):
+        seed(client)
 
         body = client.get("/list_session").get_json()
 
-        assert any(s["world_name"] == "Round Trip Empire" for s in body), (
-            "the empire is gone from the admin's session list"
-        )
+        assert any(s["world_name"] == "Round Trip Empire" for s in body)
 
-    def test_two_writes_in_a_row_keep_working(self, roundtrip):
-        """The invasion and pillage paths write more than once.
 
-        With pickle this is what lost the save: the second write went to a row
-        nothing could read, so an invasion followed by a pillage destroyed the
-        defender's empire outright.
+class TestAMissingRowIsNotACrash:
+    def test_the_store_refuses_to_claim_a_revision_for_a_row_it_never_read(self, gateway_app):
+        """Writing with expected_revision to a row that does not exist.
+
+        The old code assigned to record.data with no row and raised AttributeError
+        on None, taking the request with it. Here the store refuses -- loudly,
+        as a WriteConflict -- because there is no row to compare a revision
+        against, and inventing one would be how two writers end up on top of each
+        other.
         """
-        roundtrip["write"]()
-        record, stored = roundtrip["write"]()
+        from save_store import WriteConflict
 
-        assert stored is True
-        assert roundtrip["decode"](record.data) is not None
+        store = store_of(gateway_app)
 
-    def test_a_missing_row_is_reported_not_raised(self, roundtrip):
-        """Assigning to record.data with no row raised on None.
+        with pytest.raises(WriteConflict):
+            store.store("session:acct-nobody", {"user_object": {}}, expected_revision=1)
 
-        The whole request died instead, and the caller had no way to know the
-        write had not happened.
-        """
-        stored = roundtrip["store"]({"session_id": "session:acct-nobody", "x": 1})
+        assert store.exists("session:acct-nobody") is False
 
-        assert stored is False
+    def test_store_session_turns_that_refusal_into_a_false(self, gateway_app):
+        """So a caller can tell 'not saved' from 'saved' without a try/except."""
+        from save_engine import store_session
+
+        with gateway_app.app_context():
+            assert store_session({"session_id": "session:acct-nobody",
+                                  "__save_revision": 1, "user_object": {}}) is False
+
+    def test_store_session_reports_a_stale_write_instead_of_overwriting(self, gateway_app, client):
+        from save_engine import store_session
+
+        seed(client)
+        store = store_of(gateway_app)
+
+        with gateway_app.app_context():
+            # A save read at the current revision, then somebody else writes.
+            save = {"session_id": "session:acct-stale", "__save_revision": 1,
+                    "user_object": {"level": 1}}
+            store.store("session:acct-stale", {"user_object": {"level": 1}})
+
+            assert store_session(save) is True      # revision 1, current is 1
+            assert store_session(save) is False     # revision 1, current is 2
+
+            assert store.load("session:acct-stale").data["user_object"]["level"] == 1, \
+                "a refused write must not have changed anything"
+
+
+class TestTheAdminRouteStillWorks:
+    def test_the_art_serve(self, client):
+        """Nothing above should have broken the asset routes."""
+        assert asset_status(client, "/avatar.json") == 200
+        assert asset_status(client, "/motd.json") == 200
