@@ -33,7 +33,7 @@ export const PLAYER_HEIGHT = 750;
 export const PLAYER_BACKGROUND = '#333399';
 
 export interface RuffleConfig {
-	preferredRenderer?: 'wgpu' | 'webgl' | 'canvas';
+	preferredRenderer?: 'webgpu' | 'wgpu-webgl' | 'webgl' | 'canvas';
 	quality?: 'low' | 'medium' | 'high';
 	letterbox?: 'on' | 'off' | 'fullscreen';
 	warnOnUnsupportedContent?: boolean;
@@ -95,11 +95,11 @@ export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 	if (rufflePromise) return rufflePromise;
 
 	// Configure Ruffle runtime options before script loads.
-	// We prioritize WebGPU ('wgpu') with seamless fallback to WebGL.
+	// We prioritize WebGPU ('webgpu') with seamless fallback to WebGL.
 	if (typeof window !== 'undefined') {
 		window.RufflePlayer = window.RufflePlayer || {};
 		window.RufflePlayer.config = {
-			preferredRenderer: 'wgpu',
+			preferredRenderer: 'webgpu',
 			letterbox: 'on',
 			warnOnUnsupportedContent: false,
 			logLevel: 'error',

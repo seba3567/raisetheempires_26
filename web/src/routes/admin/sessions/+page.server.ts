@@ -1,9 +1,9 @@
-import { error, redirect } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 
 import { findByZid } from '#lib/server/models/accounts';
 import type { SavedSession } from '#lib/sessions';
-import { fetchSessions } from '#lib/server/sessions';
-import type { PageServerLoad } from './$types';
+import { deleteSession, fetchSessions } from '#lib/server/sessions';
+import type { Actions, PageServerLoad } from './$types';
 
 /**
  * A save plus the account that owns it, if any.
@@ -42,4 +42,37 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Distinct from "no sessions": this is "could not ask the gateway".
 		reachable: rows !== null
 	};
+};
+
+export const actions: Actions = {
+	/**
+	 * Delete a saved game, so a player can start over.
+	 *
+	 * Gated here as well as at the page's own load, because a form action is
+	 * reachable by POST without ever running the load -- the load's admin check
+	 * is for rendering, not for this.
+	 *
+	 * The store id comes from the form and is checked by the gateway against the
+	 * list of saves it actually holds, so an arbitrary string cannot be used to
+	 * delete something else.
+	 */
+	delete: async ({ request, locals }) => {
+		if (!locals.user) redirect(303, '/entrar');
+		if (locals.user.role !== 'admin') {
+			return fail(403, { message: 'Solo para administradores del servidor.' });
+		}
+
+		const form = await request.formData();
+		const storeId = String(form.get('store_id') ?? '');
+		if (!storeId) {
+			return fail(400, { message: 'Falta el id de la partida' });
+		}
+
+		const result = await deleteSession(request, storeId, locals.user.zid);
+		if (!result.ok) {
+			return fail(502, { message: result.message ?? 'No se pudo borrar la partida' });
+		}
+
+		return { deleted: storeId };
+	}
 };

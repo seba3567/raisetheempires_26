@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { RESOURCES, XP_ICON, formatAmount } from '#lib/resources';
-	import { cookieValueOf, xpAsNumber } from '#lib/sessions';
+	import { enhance } from '$app/forms';
 
-	let { data } = $props();
+	import { RESOURCES, XP_ICON, formatAmount } from '#lib/resources';
+	import { cookieValueOf, xpAsNumber, type SavedSession } from '#lib/sessions';
+
+	let { data, form } = $props();
 
 	const sessions = $derived(data.sessions ?? []);
 
@@ -13,6 +15,21 @@
 
 	function copy(value: string) {
 		void navigator.clipboard?.writeText(value);
+	}
+
+	/**
+	 * Deleting takes the save with it. One confirm step, and the row is named in
+	 * it -- a list of identically-named worlds is exactly the case where a
+	 * mis-click costs somebody an afternoon.
+	 */
+	function confirmDelete(row: SavedSession & { owner: string | null }) {
+		const who = row.owner ? ` de ${row.owner}` : '';
+		const ok = window.confirm(
+			`¿Borrar la partida "${row.world_name}"${who}?\n\n` +
+				`Nivel ${formatAmount(row.level ?? 0)}, ${formatAmount(xpAsNumber(row.xp))} XP.\n` +
+				'Se elimina la partida y su historial. No se puede deshacer.'
+		);
+		if (ok) document.getElementById(`del-${CSS.escape(row.session_id)}`)?.click();
 	}
 </script>
 
@@ -50,10 +67,11 @@
 						<th class="px-4 py-3">XP</th>
 						<th class="px-4 py-3">uid</th>
 						<th class="px-4 py-3">Cookie de sesión</th>
+						<th class="px-4 py-3"><span class="sr-only">Acciones</span></th>
 					</tr>
 				</thead>
 				<tbody>
-					{#each ordered as session (session.session_id)}
+					{#each ordered as session, i (session.session_id ? `${session.session_id}-${i}` : i)}
 						<tr class="border-b border-empire-800/60 last:border-0 hover:bg-empire-800/30">
 							<td class="px-4 py-3">
 								<div class="flex items-center gap-3">
@@ -86,6 +104,27 @@
 									{cookieValueOf(session.session_id)}
 								</button>
 							</td>
+							<td class="px-4 py-3 text-right">
+								<form
+									method="POST"
+									action="?/delete"
+									use:enhance
+									id={`del-${CSS.escape(session.session_id)}`}
+								>
+									<input type="hidden" name="store_id" value={session.session_id} />
+									<button
+										type="submit"
+										onclick={(event) => {
+											event.preventDefault();
+											confirmDelete(session);
+										}}
+										class="rounded border border-red-900/70 px-2 py-1 text-xs text-red-300 hover:bg-red-950/50 hover:border-red-700"
+										title="Borrar esta partida"
+									>
+										Borrar
+									</button>
+								</form>
+							</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -95,8 +134,20 @@
 		<p class="mt-3 text-xs text-slate-500">
 			La columna de cookie muestra el session id pelado, que es lo que viaja en la cookie
 			<span class="font-mono">session</span>; la clave de la base le antepone
-			<span class="font-mono">session:</span>.
+			<span class="font-mono">session:</span>. Borrar quita la partida y su historial; la
+			cuenta y su inicio de sesión no se tocan.
 		</p>
+
+		{#if form?.deleted}
+			<p class="panel mt-4 max-w-2xl border-green-800 bg-green-950/30 text-green-200">
+				Partida <code class="font-mono">{form.deleted}</code> borrada.
+			</p>
+		{/if}
+		{#if form?.message}
+			<p class="panel mt-4 max-w-2xl border-red-800 bg-red-950/40 text-red-200">
+				No se pudo borrar: {form.message}
+			</p>
+		{/if}
 	{/if}
 
 	<!-- Resources, as a quick reference of what a world is made of. -->

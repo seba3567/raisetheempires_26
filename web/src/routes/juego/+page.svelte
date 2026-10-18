@@ -45,7 +45,7 @@
 	 * `?? 'blank.png'` is also what the gateway serves for a save with no
 	 * `profilePic`, so "not chosen yet" looks the same in both places.
 	 */
-	const avatarCatalog = $derived(data.avatar?.avatars ?? []);
+	const avatarCatalog = $derived(Array.from(new Set(data.avatar?.avatars ?? [])));
 	const chosenAvatar = $derived(data.avatar?.current ?? DEFAULT_AVATAR);
 	const canChooseAvatar = $derived(avatarCatalog.length > 0);
 
@@ -234,7 +234,7 @@
 						<div
 							class="grid grid-cols-8 gap-1.5 max-h-40 overflow-y-auto p-2 rounded bg-empire-950/60 border border-empire-800"
 						>
-							{#each avatarCatalog as avatar (avatar)}
+							{#each avatarCatalog as avatar, i (avatar ? `${avatar}-${i}` : i)}
 								<button
 									type="submit"
 									name="avatar"

@@ -617,6 +617,44 @@ def list_session():
     return jsonify(get_sessions_dropdown_info(get_saves()))
 
 
+@app.route("/save", methods=['DELETE'])
+def delete_save():
+    """Delete one saved game, so a player can start over.
+
+    Keyed by the store id that ``/list_session`` already hands out -- the same
+    ``session:acct<zid>`` the account row is filed under, so deleting here
+    removes exactly the row that row in the list refers to and no other.
+
+    Backed by ``save_store.Store.delete``, which removes the save and, by
+    cascade, its snapshots. Nothing else touches the database: the account row
+    in ``users`` is a different thing and survives, so deleting an empire does
+    not delete the login.
+    """
+    store_id = request.form.get('store_id') or request.args.get('store_id')
+    if not store_id:
+        return jsonify({"ok": False, "message": "Falta el id de la partida"}), 400
+
+    # Only a key this server issues. `get_saves` is the list of them, and it is
+    # also what stops this route being a way to delete anything else in the
+    # database by passing an arbitrary string.
+    known = {save['session_id'] for save in get_saves()}
+    if store_id not in known:
+        return jsonify({
+            "ok": False,
+            "message": "No existe esa partida"
+        }), 404
+
+    deleted = _current_save_store().delete(store_id)
+    print("Deleted save", store_id, "->", deleted)
+
+    return jsonify({"ok": True, "store_id": store_id, "deleted": deleted})
+
+
+def _current_save_store():
+    """The save store this app is configured to use."""
+    return current_app.session_interface.save_store
+
+
 def get_sessions_dropdown_info(saves):
     if saves:
         response = [{

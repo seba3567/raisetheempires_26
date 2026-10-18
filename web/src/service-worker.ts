@@ -81,7 +81,11 @@ sw.addEventListener('fetch', (event) => {
 				} catch (error) {
 					// Fallback to cache if network fails
 					if (cachedResponse) return cachedResponse;
-					throw error;
+					return new Response('Asset not available offline', {
+						status: 503,
+						statusText: 'Service Unavailable',
+						headers: { 'Content-Type': 'text/plain' }
+					});
 				}
 			})
 		);

@@ -281,7 +281,7 @@
 				{/if}
 			</p>
 			<ul class="mt-3 max-h-96 divide-y divide-empire-800 overflow-y-auto text-sm">
-				{#each shownBackups as backup (backup.revision)}
+				{#each shownBackups as backup, i (backup.revision !== undefined ? `${backup.revision}-${i}` : i)}
 					<li class="flex flex-wrap items-center gap-3 py-2">
 						<span class="w-16 shrink-0 font-mono text-xs text-slate-500">
 							r{backup.revision}

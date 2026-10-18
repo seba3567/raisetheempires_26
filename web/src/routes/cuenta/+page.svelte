@@ -84,7 +84,7 @@
 					role="group"
 					aria-label="Elegir avatar"
 				>
-					{#each data.avatar?.avatars ?? [] as avatar (avatar)}
+					{#each Array.from(new Set(data.avatar?.avatars ?? [])) as avatar, i (avatar ? `${avatar}-${i}` : i)}
 						<button
 							type="submit"
 							name="avatar"
@@ -220,7 +220,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each data.friends as friend (friend.zid)}
+				{#each data.friends as friend, i (friend.zid ? `${friend.zid}-${i}` : i)}
 					<tr class="border-t border-empire-800">
 						<td class="px-2 py-2">{friend.username}</td>
 						<td class="px-2 py-2">{formatAmount(friend.level)}</td>
@@ -244,7 +244,7 @@
 		<h2 class="mt-10 text-xl font-semibold">Sugerencias</h2>
 		<table class="panel mt-3 w-full max-w-2xl text-left text-sm">
 			<tbody>
-				{#each data.suggestions as suggestion (suggestion.zid)}
+				{#each data.suggestions as suggestion, i (suggestion.zid ? `${suggestion.zid}-${i}` : i)}
 					<tr class="border-t border-empire-800 first:border-t-0">
 						<td class="px-2 py-2">{suggestion.username}</td>
 						<td class="px-2 py-2">{formatAmount(suggestion.level)}</td>

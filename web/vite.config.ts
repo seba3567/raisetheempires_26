@@ -15,6 +15,10 @@ import { defineConfig } from 'vite';
 const origin = process.env['PUBLIC_ORIGIN'] ?? `http://localhost:${process.env['PORT'] ?? 8080}`;
 
 export default defineConfig({
+	server: {
+		port: Number(process.env['PORT'] ?? 8080),
+		strictPort: false
+	},
 	plugins: [
 		tailwindcss(),
 		sveltekit({
