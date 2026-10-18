@@ -161,6 +161,8 @@ STEELE_ID = -1
 MAX_ADMIN_ID = 123
 
 @app.route("/")
+@app.route("/game")
+@app.route("/play")
 def index():
     return make_response(redirect("/juego"))
 
@@ -1085,8 +1087,7 @@ def get_avail_motds():
 
 @app.route("/new.html")
 def new_player_page():
-    saves = get_saves()
-    return render_template("new.html", version=version, release_date=release_date, avatars=get_avail_avatars())
+    return make_response(redirect('/juego'))
 
 @app.route("/avatar.json")
 def avatar_state():
