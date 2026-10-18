@@ -14,6 +14,7 @@
  * overrides it when you want the tests to run against another server.
  */
 import { SQL } from 'bun';
+import { afterAll } from 'bun:test';
 
 process.env.RTE_DB_URL =
 	process.env.RTE_TEST_DB_URL ?? 'mysql://root:2001@127.0.0.1:3306/rte_web_test';
@@ -22,14 +23,22 @@ process.env.RTE_DB_NAME = new URL(process.env.RTE_DB_URL).pathname.replace(/^\//
 process.env.SESSION_SECRET = 'test-secret-not-for-production';
 process.env.GATEWAY_ORIGIN = 'http://127.0.0.1:5005';
 
-function dropTestDatabase(): void {
+async function dropTestDatabase(): Promise<void> {
 	try {
 		const server = new SQL(process.env.RTE_DB_URL!.replace(/\/([^/?]+)(\?|$)/, '/$2'));
-		server.unsafe(`DROP DATABASE IF EXISTS \`${process.env.RTE_DB_NAME}\``);
+		await server.unsafe(`DROP DATABASE IF EXISTS \`${process.env.RTE_DB_NAME}\``);
 		server.close();
 	} catch {
 		// No server, or already gone. The tests themselves will say so.
 	}
 }
 
-process.on('exit', dropTestDatabase);
+// Awaited, and in afterAll rather than on 'exit'.
+//
+// An exit handler is synchronous by definition, and `unsafe` is a promise. So
+// the DROP was dispatched and the process left before it ran: every `bun test`
+// left its database behind, and the server accumulated one per run. afterAll
+// can await, which is the only reason this works at all.
+afterAll(async () => {
+	await dropTestDatabase();
+});

@@ -258,6 +258,32 @@ class Store:
     def _connect(self):
         return connect(self.path)
 
+    def drop_database(self) -> bool:
+        """Drop the whole database this store points at.
+
+        The counterpart to ``_ensure_schema``, and it exists for the throwaway
+        databases the test suite makes: one per test, named with a uuid so runs
+        cannot see each other. Without this they are simply never removed, and a
+        few hundred runs later the server is carrying a database per assertion
+        that ever ran -- which is exactly what happened.
+
+        It goes through the server rather than ``_connect`` because a connection
+        cannot drop the database it is itself using, for the same reason the
+        CREATE cannot run from inside it.
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        database = urlparse(self.path).path.strip("/")
+        if not database:
+            return False
+
+        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="")))
+        try:
+            bootstrap.execute(f"DROP DATABASE IF EXISTS `{database}`")
+            return True
+        finally:
+            bootstrap.close()
+
     def _ensure_schema(self) -> None:
         """Create the database if it is missing, then apply the schema.
 

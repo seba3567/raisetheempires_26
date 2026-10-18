@@ -30,8 +30,33 @@ SERVER = os.environ.get("RTE_TEST_MARIADB",
 
 
 def a_store(name: str, **kwargs) -> Store:
-    return Store(f"{SERVER.rsplit('/', 1)[0]}/rte_trim_{name}_{uuid.uuid4().hex[:8]}",
-                 **kwargs)
+    store = Store(f"{SERVER.rsplit('/', 1)[0]}/rte_trim_{name}_{uuid.uuid4().hex[:8]}",
+                  **kwargs)
+    _MADE.append(store)
+    return store
+
+
+#: Stores built during the current test. The autouse fixture below empties it.
+#: Collecting them rather than cleaning at each call site is deliberate: two of
+#: the tests below build a store without going through the ``store`` fixture, and
+#: they leaked the same way the fixture did.
+_MADE: list[Store] = []
+
+
+@pytest.fixture(autouse=True)
+def drop_throwaway_databases():
+    """Remove every database this test created.
+
+    The store creates its database on construction and nothing else ever removed
+    it, so this file alone left one database per test on the shared server,
+    permanently: the server was carrying a database for an assertion that ran
+    once, weeks earlier. Tracking them at creation is what makes the cleanup
+    cover the tests that build their own store.
+    """
+    _MADE.clear()
+    yield
+    while _MADE:
+        _MADE.pop().drop_database()
 
 
 @pytest.fixture

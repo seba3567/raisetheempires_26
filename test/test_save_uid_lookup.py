@@ -32,7 +32,28 @@ SERVER = os.environ.get("RTE_TEST_MARIADB",
 
 def a_store() -> Store:
     base = SERVER.rsplit("/", 1)[0]
-    return Store(f"{base}/rte_uid_{uuid.uuid4().hex[:10]}")
+    store = Store(f"{base}/rte_uid_{uuid.uuid4().hex[:10]}")
+    _MADE.append(store)
+    return store
+
+
+#: Stores built during the current test, so the autouse fixture can remove them.
+_MADE: list[Store] = []
+
+
+@pytest.fixture(autouse=True)
+def drop_throwaway_databases():
+    """Remove every database this test created.
+
+    The store creates its database on construction and nothing else ever removed
+    it, so this file alone left one database per test on the shared server,
+    permanently: the server was carrying a database for an assertion that ran
+    once, weeks earlier.
+    """
+    _MADE.clear()
+    yield
+    while _MADE:
+        _MADE.pop().drop_database()
 
 
 @pytest.fixture
