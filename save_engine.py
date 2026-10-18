@@ -8,7 +8,7 @@ import sys
 from functools import reduce
 from pathlib import Path
 
-from flask import current_app, session
+from flask import current_app, has_request_context, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
 
@@ -416,13 +416,25 @@ def store_session(save):
                if key not in ("session_id", "__save_revision")}
 
     try:
-        sess_int.save_store.store(session_id, payload, expected_revision=revision)
+        written = sess_int.save_store.store(session_id, payload,
+                                           expected_revision=revision)
     except WriteConflict as conflict:
         # Someone wrote between this save being read and now. Refusing is the
         # safe half: the alternative is overwriting their turn, which is the bug
         # this whole rebuild exists to stop.
         print("store_session refused a stale write for", session_id, ":", conflict)
         return False
+
+    # The session's revision has to follow the row it just wrote.
+    #
+    # Every request ends with the session interface writing the session back, and
+    # it uses this same value as its compare-and-swap target. Left stale, that
+    # final write arrives with the revision the request *started* at, finds the
+    # row already past it -- its own write -- and raises during response
+    # finalisation, which is what answered "It went wrong" on the first turn of
+    # a game.
+    if has_request_context() and session_id == sess_int._get_store_id(session.sid):
+        session["__save_revision"] = written
     return True
 
 

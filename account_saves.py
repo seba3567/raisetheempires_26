@@ -204,7 +204,6 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         return payload
 
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
-        from flask import has_request_context, request
 
         from save_store import WriteConflict
 
@@ -226,19 +225,34 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             return
 
         try:
-            self.save_store.store(store_id, payload, reason=reason,
-                                  expected_revision=revision)
+            written = self.save_store.store(store_id, payload, reason=reason,
+                                           expected_revision=revision)
         except WriteConflict as conflict:
-            # The default policy is to refuse and say so. See the module note in
-            # save_store for why the alternatives were not taken: retrying would
-            # need the mutation to be idempotent, and accepting the last write is
-            # the lost update this whole change exists to stop.
-            print(f"Save for {store_id} was written by someone else: {conflict}")
+            # This runs during response finalisation: the response the player is
+            # getting has already been built. Raising here turned a perfectly
+            # good turn into a 500, and the front end then failed to parse "It
+            # went wrong" as JSON -- a far worse symptom than a dropped
+            # background flush.
+            #
+            # The row belongs to whoever wrote last, and the response in hand was
+            # computed from the session in hand, so this write is redundant
+            # rather than lost. Say so, and let the response through.
+            print("Session save skipped, the row moved underneath:", conflict)
             session.modified = False
-            # Read-only requests should never 500 if a background save moved the row.
-            if has_request_context() and request.method in ("GET", "HEAD"):
-                return
-            raise
+            return
+
+        # Keep the session's idea of the revision current.
+        #
+        # This is the fix for "It went wrong" on the first turn. A request that
+        # wrote explicitly -- store_session(), from an invasion or a pillage --
+        # moved the row to a new revision, but left __save_revision holding the
+        # value it had on the way in. The automatic write at the end of that same
+        # request then arrived with a revision that was already stale, and
+        # conflicted with itself.
+        session[self.REVISION_KEY] = written
+        # The reason has been spent on the write that just happened; carrying it
+        # over would label the next snapshot with it too.
+        session.pop(self.REASON_KEY, None)
 
     def _delete_session(self, session_id: str, app: Flask | None = None) -> None:
         self.save_store.delete(session_id)
