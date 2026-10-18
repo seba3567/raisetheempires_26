@@ -22,6 +22,8 @@
 # the one-off probe scripts those runs left in the root.
 /gw.out.log
 /gw.err.log
+/_gw.out.log
+/_gw.err.log
 /_mysqld.*.log
 /_*.py
 /chromium
