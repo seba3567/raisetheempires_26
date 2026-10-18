@@ -180,7 +180,7 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 | `battle_engine.py` | Combat resolution |
 | `quest_engine.py`, `state_machine.py` | Quest progression |
 | `game_settings.py` | Game data loading and lookups |
-| `save_engine.py` | SQLite session storage and save validation |
+| `save_engine.py` | Session store wiring and save validation |
 | `mod_engine.py` | Mod loading (xmldiff / jsonpatch) |
 | `crc64_go_iso.py` | `zid` checksum — typed and strict-checked |
 | `test/` | pytest suite (`*_test.py`, legacy naming) |

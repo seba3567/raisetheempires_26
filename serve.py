@@ -58,8 +58,8 @@ def _run_granian(app, host: str, port: int) -> bool:
         port=port,
         interface=Interfaces.WSGI,
         # One worker, threads inside. A battle mutates that account's session
-        # row in SQLite; several worker processes would each hold their own
-        # view of a session and race on the write. Threads share the store.
+        # row; several worker processes would each hold their own view of a
+        # session and race on the write. Threads share the store.
         workers=1,
         runtime_threads=8,
         blocking_threads=64,

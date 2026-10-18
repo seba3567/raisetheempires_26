@@ -92,8 +92,9 @@ Source: "assets\*"; DestDir: "{app}\assets"; Components: required; Flags: ignore
 Source: "templates\*"; DestDir: "{app}\templates"; Components: required; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "gamesettings-converted.json"; DestDir: "{userdocs}\My Games\{#MyAppName}"; Components: required; Flags: ignoreversion
 Source: "questsettings-converted.json"; DestDir: "{userdocs}\My Games\{#MyAppName}"; Components: required; Flags: ignoreversion
-Source: "savespack\save.db"; DestDir: "{userdocs}\My Games\{#MyAppName}"; Components: savespack; Flags: solidbreak uninsneveruninstall
-; Not needed Source: "save.db"; DestDir: "{userdocs}\My Games\{#MyAppName}"; Components: required; Flags: solidbreak onlyifdoesntexist uninsneveruninstall
+; No starter save.db any more. Saves live in MariaDB (SAVE_STORE_PATH), so
+; shipping a SQLite file to a fresh install only put a database on disk that
+; nothing ever reads.
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

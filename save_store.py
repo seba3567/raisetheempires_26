@@ -274,7 +274,7 @@ def save_uid(data) -> int | None:
 
 
 class Store:
-    """SQLite-backed save storage.
+    """MariaDB-backed save storage.
 
     Not a Flask extension and does not import one: the point is that the rules
     about atomicity and history are testable without a request context.

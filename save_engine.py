@@ -2,7 +2,6 @@ import atexit
 import configparser
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from functools import reduce
@@ -137,41 +136,33 @@ def pending_backup_reason() -> str | None:
     """The reason create_backup recorded, or None if it was not called."""
     return session.get(BACKUP_REASON_KEY)
 
-def save_database_uri(root_path, instance_path):
-    my_games = Path(my_games_path())
-    root_p = Path(root_path)
-    instance_p = Path(instance_path)
+def save_store_url():
+    """The one database URL this project stores everything in.
 
-    save_db_path = my_games / "save.db"
+    MariaDB, like the web front door. It used to build a ``sqlite:///`` URI for
+    a ``save.db`` next to the install and, when that file was missing, quietly
+    create the folder and start a *second* database nobody was looking at -- so
+    the sessions table and the saves table could disagree about which store was
+    real. That whole branch is gone: one URL, one database, and a deployment
+    change is a different value of ``SAVE_STORE_PATH`` rather than a different
+    kind of code.
 
-    try:
-        is_same = my_games.resolve() == root_p.resolve()
-    except Exception:
-        is_same = False
+    The same value configures flask-session's own ``sessions`` table. Our
+    session interface overrides reads and writes so that table is never touched,
+    but Flask-SQLAlchemy still insists on a valid URI to attach to, and pointing
+    it at MariaDB costs nothing -- except that the ``save.db`` on disk stops
+    being something the process needs in order to start.
 
-    if is_same:
-        new_save_db_path = instance_p / "save.db"
-        if save_db_path.exists():
-            if not new_save_db_path.exists():
-                print("INFORMATION: You're running from source, and because of Flask update save.db has to be moved to the instance folder. Installs out of folder should be unaffected")
-                instance_p.mkdir(parents=True, exist_ok=True)
-                backup_save_dir_path = my_games / "backup-save-db"
-                backup_save_dir_path.mkdir(parents=True, exist_ok=True)
-                shutil.copy(str(save_db_path), str(backup_save_dir_path))
-                shutil.move(str(save_db_path), str(new_save_db_path))
-                print("Moved your save.db to", instance_path, "and a backup can be found at", backup_save_dir_path)
-            else:
-                print("WARNING: You have a save.db in both the root as the instance folder (when running from source), only the instance one will be used!")
-        save_db_path = new_save_db_path
-
-    # SQLite does not create the folder that holds the database file.
-    save_db_dir = save_db_path.resolve().parent
-    if not save_db_dir.is_dir():
-        print("Creating save database folder", save_db_dir)
-        save_db_dir.mkdir(parents=True, exist_ok=True)
-
-    print("SQLITE", f"sqlite:///{save_db_path}")
-    return f"sqlite:///{save_db_path}"
+    ``mysql+pymysql`` rather than the shorter ``mariadb``: both consumers read
+    this one string, and they disagree about what to make of the scheme.
+    SQLAlchemy reads ``mariadb`` as ``mysql+mysqldb`` and then fails to import
+    MySQLdb, which is not installed -- this project uses PyMySQL. Store ignores
+    the scheme entirely and reads host, port, credentials and path. One URL,
+    named after the driver that is actually installed.
+    """
+    return os.environ.get(
+        "SAVE_STORE_PATH",
+        "mysql+pymysql://root:2001@127.0.0.1:3306/raisetheempires")
 
 
 def my_games_path():

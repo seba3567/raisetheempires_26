@@ -1,9 +1,10 @@
-"""The same store, same tests, against MariaDB.
+"""The store's behaviour, against a real MariaDB.
 
-save_store.py runs on sqlite3 and MariaDB from the same ``path``. These are not
-a parallel copy of test_save_store.py -- they are the same behaviours, run
-against the engine the project is actually going to ship on, because "the SQL is
-portable" is a claim and this is the evidence.
+MariaDB is the only engine the project ships on, so these run against it rather
+than against something portable-looking: the dialect differences are real (there
+is no ``LIMIT`` inside an ``IN`` subquery, ``OFFSET`` takes no placeholder, and
+a snapshot write aborts with errno 1020 under contention) and those are exactly
+the things a portable-SQL claim hides.
 
 Skipped, not failed, when there is no server to talk to: a missing MariaDB is a
 reason to skip a database test, not a reason to fail the suite on a machine

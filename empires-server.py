@@ -58,7 +58,7 @@ from save_engine import (
     logger,
     lookup_objects_save_by_position,
     my_games_path,
-    save_database_uri,
+    save_store_url,
     set_crash_log,
     store_session,
     validate_save,
@@ -148,7 +148,14 @@ app: Flask = Flask(__name__, root_path=app_base_path)
 print("Root folder", app.root_path)
 print("Instance folder", app.instance_path)
 app.config['SESSION_TYPE'] = 'sqlalchemy'
-app.config['SQLALCHEMY_DATABASE_URI'] = save_database_uri(app.root_path, app.instance_path)
+# Both keys get the same URL, and both point at MariaDB. The sessions table
+# belongs to flask-session and is never written to -- SaveStoreSessionInterface
+# overrides every read and write -- but Flask-SQLAlchemy still needs a valid URI
+# to attach to. Pointing it at MariaDB rather than a save.db on disk means there
+# is no second store left on the machine that can quietly disagree with the real
+# one, which is exactly what a 10 MB save.db nobody remembered was.
+app.config['SAVE_STORE_PATH'] = save_store_url()
+app.config['SQLALCHEMY_DATABASE_URI'] = save_store_url()
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # Flask-SQLAlchemy has its own event notification system that gets layered on top of SQLAlchemy. To do this, it tracks modifications to the SQLAlchemy session. This option disables the modification tracking system.
 app.config['SESSION_SQLALCHEMY'] = db
 app.config['SESSION_COOKIE_HTTPONLY'] = False

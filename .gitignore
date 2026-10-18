@@ -24,11 +24,14 @@
 /gw.err.log
 /_gw.out.log
 /_gw.err.log
+/_gw[0-9].*.log
 /_mysqld.*.log
 /_*.py
 /chromium
 /chromium-profile
 /cache
+# Saves live in MariaDB (SAVE_STORE_PATH). These only match a stray file from
+# before the move, so that one can never be committed by accident.
 /save.db
 /instance
 /backup-save-db

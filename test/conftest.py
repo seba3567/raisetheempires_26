@@ -26,15 +26,16 @@ import pytest
 #: Where the test suite points the save store. Override with
 #: RTE_TEST_MARIADB to run against another server.
 TEST_MARIADB = os.environ.get(
-    "RTE_TEST_MARIADB", "mariadb://root:2001@127.0.0.1:3306/rte_gateway_test")
+    "RTE_TEST_MARIADB", "mysql+pymysql://root:2001@127.0.0.1:3306/rte_gateway_test")
 
-#: What the tests use for the vestigial flask-session ``sessions`` table. That
-#: one is written by nothing any more -- the session interface persists through
-#: save_store -- but flask-session still creates the table at init_app, so it
-#: needs somewhere to point.
-TEST_SQLALCHEMY = os.environ.get(
-    "RTE_TEST_SQLALCHEMY",
-    "mysql+pymysql://root:2001@127.0.0.1:3306/rte_gateway_test")
+#: The vestigial flask-session ``sessions`` table. Nothing writes it any more --
+#: the session interface persists through save_store -- but flask-session still
+#: creates the table at init_app, so it needs somewhere to point.
+#:
+#: Same URL as TEST_MARIADB, and there is no reason for it to be a different
+#: string: both consumers read the same value in production, and keeping two
+#: spellings of one server is how they drift apart.
+TEST_SQLALCHEMY = os.environ.get("RTE_TEST_SQLALCHEMY", TEST_MARIADB)
 
 
 def _maria_reachable(url: str) -> bool:

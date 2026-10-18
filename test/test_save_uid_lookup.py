@@ -128,7 +128,7 @@ class TestSaveUid:
 
 
 class TestTheBackfill:
-    """rows_without_uid / set_uid, used by backfill_save_uid.py."""
+    """rows_without_uid / set_uid, the helpers the one-off uid backfill used."""
 
     def test_a_row_written_before_the_column_is_found(self, store):
         store.store("acct1", empire(303))

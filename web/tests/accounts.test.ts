@@ -1,5 +1,5 @@
 /**
- * Accounts, friendships and progress against a real SQLite file.
+ * Accounts, friendships and progress against a real MariaDB database.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
 
