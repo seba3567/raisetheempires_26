@@ -5,7 +5,7 @@
  * development (Bun on 8080 -> Flask on 5005) and in production behind a proxy.
  */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * `.env`, loaded once, for anything the process itself did not provide.
@@ -24,45 +24,85 @@ import { join } from 'node:path';
  * this only fills gaps. Production sets real environment variables and is
  * unaffected.
  *
- * The file is found by working directory rather than by walking up from this
- * module. `import.meta.dir` would have been the tidier anchor, but it is a Bun
- * extension that Vite's SSR transform does not preserve, so under `vite dev` it
- * is undefined -- and a `join(undefined, ...)` inside a try block fails in a way
- * that is indistinguishable from "there is no .env". That is exactly what the
- * first attempt looked like: code that was correct and simply never ran.
+ * The file is found by walking up from the working directory, not from this
+ * module. Two things ruled out the tidier options: `import.meta.dir` is a Bun
+ * extension that Vite's SSR transform does not preserve, and assuming the working
+ * directory is the package root is an assumption about whoever launched the
+ * server rather than about the project. Walking up finds web/.env whether the
+ * process was started from web/, from the repository root, or from anywhere else
+ * in between.
+ *
+ * The one trap: a failure here looks exactly like "there is no .env", so it has
+ * to stay silent about which candidate it tried. `bun run dev` on this package
+ * did find the file and still answered 500, and the only way to tell that apart
+ * from a missing file is to try the next candidate instead of giving up.
  */
 function loadDotEnv(): Record<string, string> {
-	for (const candidate of [process.env.RTE_ENV_FILE, join(process.cwd(), '.env')]) {
-		if (!candidate) continue;
+	// An explicit path wins outright, so a deployment can point somewhere else.
+	const explicit = process.env.RTE_ENV_FILE;
+	const candidates = explicit
+		? [explicit]
+		: [process.cwd(), ...parents(process.cwd())].map((dir) => join(dir, '.env'));
 
+	for (const candidate of candidates) {
 		let raw: string;
 		try {
 			raw = readFileSync(candidate, 'utf8');
 		} catch {
-			// Not here. Try the next candidate.
 			continue;
 		}
 
-		const values: Record<string, string> = {};
-		for (const line of raw.split('\n')) {
-			const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-			// Blank lines, `#` comments, and anything that is not a KEY=VALUE pair.
-			if (!match) continue;
-			// Strip a trailing \r from a CRLF file, and one layer of quoting.
-			let value = match[2].trim().replace(/\r$/, '');
-			if (
-				(value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
-				(value.startsWith("'") && value.endsWith("'") && value.length > 1)
-			) {
-				value = value.slice(1, -1);
-			}
-			values[match[1]] = value;
-		}
-		return values;
+		return parseDotEnv(raw);
 	}
 
-	// No .env is the normal case in production.
+	// No .env anywhere up the tree is the normal case in production.
 	return {};
+}
+
+/**
+ * Parse the text of a `.env` into key/value pairs.
+ *
+ * Split out from the file lookup so it can be tested on its own, because the
+ * line-ending detail below is exactly the kind of thing that a later edit undoes
+ * without anyone noticing.
+ */
+export function parseDotEnv(raw: string): Record<string, string> {
+	const values: Record<string, string> = {};
+	// CRLF matters more than it looks. In JavaScript `.` matches everything
+	// except a line terminator, and `\r` is one -- so a file written with Windows
+	// line endings made `(.*)$` unable to reach the end of the line, every single
+	// entry failed to match, and the file parsed as if it were empty. Not an
+	// exotic file either: PowerShell writes CRLF by default.
+	// The trailing `\r` has to be gone before the pattern sees the line.
+	for (const line of raw.split(/\r?\n/)) {
+		const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+		// Blank lines, `#` comments, and anything that is not a KEY=VALUE pair.
+		if (!match) continue;
+		// One layer of quoting, and nothing else: `.env` is not shell, so there
+		// is no expansion to do and a `#` inside a value is just a `#`.
+		let value = match[2].trim();
+		if (
+			(value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+			(value.startsWith("'") && value.endsWith("'") && value.length > 1)
+		) {
+			value = value.slice(1, -1);
+		}
+		values[match[1]] = value;
+	}
+	return values;
+}
+
+/** This directory and every parent of it, nearest first, up to the drive root. */
+function parents(start: string): string[] {
+	const chain: string[] = [];
+	let current = start;
+	for (let depth = 0; depth < 6; depth += 1) {
+		const parent = dirname(current);
+		if (parent === current) break;
+		chain.push(parent);
+		current = parent;
+	}
+	return chain;
 }
 
 const dotEnv = loadDotEnv();
