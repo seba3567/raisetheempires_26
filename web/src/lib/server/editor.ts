@@ -51,11 +51,27 @@ export interface EditorState {
 }
 
 export interface BackupEntry {
+	/**
+	 * Position in the current listing, newest first. Kept for display only --
+	 * restore is addressed by `revision`, because the list shifts as writes land
+	 * and the page can sit open long enough for an index to mean something else
+	 * by the time the button is pressed.
+	 */
 	index: number;
-	/** `format_backup_message`: replaced window, version and why it was taken. */
+	/** Names this exact state, and is what `/editor/restore` takes. */
+	revision: number;
+	/** Replaced window and reason, formatted by `format_backup_message`. */
 	label: string;
-	saveVersion: string | null;
+	/**
+	 * What `create_backup` recorded for the write that *superseded* this
+	 * snapshot -- "before Level 50", "before patch". It is the reason you would
+	 * want to undo it, which is why it belongs on the entry it belongs on.
+	 */
 	message: string;
+	saveVersion: string | null;
+	/** Payload size, so a big save is recognisable at a glance. */
+	size: number;
+	created: string;
 	/**
 	 * What this backup actually holds.
 	 *
@@ -129,7 +145,7 @@ export async function sendPatch(
  */
 export async function restoreBackup(
 	request: Request,
-	index: number,
+	revision: number,
 	playerZid?: string
 ): Promise<{ ok: boolean; message?: string; label?: string }> {
 	const headers = new Headers();
@@ -137,10 +153,13 @@ export async function restoreBackup(
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 
+	// By revision, not by position. History is trimmed as writes land and this
+	// page can sit open, so an index would restore a different save than the row
+	// the admin clicked.
 	const response = await fetch(`${config.gateway.origin}/editor/restore`, {
 		method: 'POST',
 		headers,
-		body: new URLSearchParams({ index: String(index) }),
+		body: new URLSearchParams({ revision: String(revision) }),
 		signal: AbortSignal.timeout(15_000)
 	});
 

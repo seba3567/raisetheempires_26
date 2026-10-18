@@ -152,6 +152,10 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
     #: by convention and stripped on the way out, not a game field.
     REVISION_KEY = "__save_revision"
 
+    #: Where save_engine.create_backup records *why* the next write happens.
+    #: Same deal: stripped before the payload is stored.
+    REASON_KEY = "__backup_reason"
+
     @property
     def save_store(self):
         from save_store import Store
@@ -193,9 +197,15 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
         from save_store import WriteConflict
 
+        private = (self.REVISION_KEY, self.REASON_KEY)
         payload = {key: value for key, value in session.items()
-                   if key != self.REVISION_KEY}
+                   if key not in private}
         revision = session.get(self.REVISION_KEY)
+        # What create_backup was called with, if anything. The store stamps it
+        # on the snapshot it takes of what this write replaces, which is how
+        # "Level 50" ends up next to the right entry in the editor without
+        # create_backup having to write a row of its own.
+        reason = session.get(self.REASON_KEY)
 
         # An emptied session means "delete the save", which is what flask-session
         # does with an empty one. Testing the stripped payload, not the session:
@@ -205,7 +215,8 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             return
 
         try:
-            self.save_store.store(store_id, payload, expected_revision=revision)
+            self.save_store.store(store_id, payload, reason=reason,
+                                  expected_revision=revision)
         except WriteConflict as conflict:
             # The default policy is to refuse and say so. See the module note in
             # save_store for why the alternatives were not taken: retrying would

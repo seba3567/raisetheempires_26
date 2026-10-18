@@ -1,186 +1,121 @@
-"""The backup chain has a ceiling.
+"""History is capped, and the cap is now the store's job.
 
-``create_backup`` deep-copies the save *and the backup it replaced*, so the
-chain is a nested list of full saves: it grows by a whole save per backup,
-forever. The Rising Empire save stacked 85 of them into 3029 KB, and the client
-decodes that blob over AMF on every request -- 18.7 ms per call, which is what
-made the menus feel slow. Measured: 40 backups cost 8.5 ms, 10 cost 2.3 ms.
+``trim_backups`` used to cut a chain of nested copies inside the payload: it
+walked ``session['backup']``, popped the link to the first dropped node, and
+left the row the size of the empire times however many snapshots survived. It
+did not exist anywhere else -- the cap was a property of that one walk.
 
-This file pins the ceiling: a long-playing save stops growing, the backups that
-survive are the recent ones, and trimming never touches the save.
+Now every write goes through ``save_store.Store``, which snapshots whatever it
+replaces and trims in the same transaction. So the behaviour under test is the
+same thing, reached the other way round: the history stops growing, and the
+surviving snapshots are the newest ones rather than an arbitrary tail.
+
+The tests drive the store directly. Going through the session interface would
+also work, but then each write is a request, and what is being pinned here is
+about the storage layer.
 """
-
 from __future__ import annotations
-
-import json
 
 import pytest
 
-from save_engine import (
-    MAX_BACKUPS,
-    backup_chain,
-    trim_backups,
-)
+from save_store import Store
 
 
-def _save(level: int) -> dict:
-    """A minimal but structurally valid save."""
-    return {
-        "user_object": {
-            "userInfo": {
-                "player": {"level": level, "cash": 1000, "xp": 500},
-                "world": {"resources": {"coins": level, "wood": 1}, "worldName": "Test"},
-            }
-        },
-        "quests": [],
-        "battle": {},
-        "fleets": [],
-        "population": 10,
-        "save_version": "test",
-    }
+@pytest.fixture
+def store(tmp_path):
+    return Store(str(tmp_path / "saves.db"))
 
 
-def _chain(depth: int) -> dict:
-    """A save with ``depth`` backups behind it, the newest one numbered highest."""
-    save = _save(level=depth + 1)
-    node = save
-    for i in range(depth, 0, -1):
-        node["backup"] = {**_save(level=i), "message": f"b{i}"}
-        node = node["backup"]
-    return save
+def save(level=1):
+    return {"user_object": {"userInfo": {"player": {"level": level}}}}
 
 
-class TestBackupChain:
-    def test_walks_newest_first(self):
-        chain = backup_chain(_chain(3))
+class TestHistoryStopsGrowing:
+    def test_a_fresh_store_keeps_everything_up_to_the_cap(self, store):
+        for level in range(1, 11):
+            store.store("acct1", save(level))
 
-        assert [node["message"] for node in chain] == ["b3", "b2", "b1"]
+        assert len(store.history("acct1")) == 9   # ten writes, first has nothing to snapshot
 
-    def test_a_save_without_backups_has_an_empty_chain(self):
-        assert backup_chain(_save(level=1)) == []
+    def test_the_twelfth_snapshot_drops_the_first(self, store):
+        # Twelve writes: the first creates the row and snapshots nothing, so
+        # revisions 1..11 exist. The cap of ten cuts revision 1, and what
+        # survives is revisions 2..11 -- the most recent ten.
+        for level in range(1, 13):
+            store.store("acct1", save(level))
 
-    def test_a_link_that_is_not_a_dict_ends_the_walk(self):
-        """A half-written chain must not hang the walk or the editor."""
-        for corrupt in ("corrupt", None, 42, ["nope"]):
-            save = _save(level=1)
-            save["backup"] = {**_save(level=0), "backup": corrupt}
+        history = store.history("acct1")
 
-            assert len(backup_chain(save)) == 1, corrupt
+        assert len(history) == store.keep
+        assert history[-1].revision == 2, "the oldest snapshot should be the one cut"
+        assert history[0].revision == 11
 
+    def test_eleven_writes_still_fit_under_the_cap(self, store):
+        """So the cut is not happening early."""
+        for level in range(1, 12):
+            store.store("acct1", save(level))
 
-class TestTrimBackups:
-    def test_keeps_only_the_newest(self):
-        save = _chain(50)
+        assert len(store.history("acct1")) == store.keep
 
-        assert trim_backups(save=save) == 50 - MAX_BACKUPS
+    def test_the_survivors_are_the_newest(self, store):
+        for level in range(1, 30):
+            store.store("acct1", save(level))
 
-        messages = [node["message"] for node in backup_chain(save)]
-        assert len(messages) == MAX_BACKUPS
-        assert messages[0] == "b50"
-        assert messages[-1] == f"b{50 - MAX_BACKUPS + 1}", "the wrong end was cut"
+        revisions = [row.revision for row in store.history("acct1")]
 
-    def test_the_save_itself_is_untouched(self):
-        save = _chain(50)
-        live = save["user_object"]
+        assert revisions == sorted(revisions, reverse=True)
+        # 29 writes, but the first creates the row and snapshots nothing, so the
+        # newest snapshot is of revision 28 -- the state before the last write.
+        assert max(revisions) == 28
 
-        trim_backups(save=save)
+    def test_the_cap_is_configurable(self, tmp_path):
+        generous = Store(str(tmp_path / "generous.db"), keep=25)
+        for level in range(1, 20):
+            generous.store("acct1", save(level))
 
-        assert save["user_object"] is live
-        assert save["user_object"]["userInfo"]["player"]["level"] == 51
-        assert "population" in save
+        # Nineteen writes, the first of which snapshots nothing.
+        assert len(generous.history("acct1")) == 18
 
-    def test_a_short_chain_is_left_alone(self):
-        save = _chain(3)
-        before = backup_chain(save)
+    def test_the_live_row_is_unaffected_by_trimming(self, store):
+        """The point of the rebuild: the row is the empire, not the history."""
+        for level in range(1, 30):
+            store.store("acct1", save(level))
 
-        assert trim_backups(save=save) == 0
-        assert backup_chain(save) == before, "a chain under the limit was rewritten"
+        assert store.load("acct1").data["user_object"]["userInfo"]["player"]["level"] == 29
 
-    def test_a_chain_exactly_at_the_limit_is_left_alone(self):
-        save = _chain(MAX_BACKUPS)
+    def test_trimming_one_save_leaves_another_alone(self, store):
+        for level in range(1, 15):
+            store.store("acct1", save(level))
+        store.store("acct2", save(level=100))
+        store.store("acct2", save(level=101))
 
-        assert trim_backups(save=save) == 0
-        assert len(backup_chain(save)) == MAX_BACKUPS
-
-    def test_zero_clears_every_backup(self):
-        save = _chain(50)
-
-        assert trim_backups(0, save=save) == 50
-        assert backup_chain(save) == []
-        assert "backup" not in save
-
-    def test_the_surviving_nodes_are_the_same_objects(self):
-        """The editor lists these nodes; trimming must not swap them out."""
-        save = _chain(50)
-        kept = backup_chain(save)[:MAX_BACKUPS]
-
-        trim_backups(save=save)
-
-        assert backup_chain(save) == kept
+        assert len(store.history("acct1")) == store.keep
+        assert len(store.history("acct2")) == 1
 
 
-class TestCreateBackup:
-    """The ceiling on the real path: every backup the game takes.
+class TestReclaimingSpace:
+    def test_a_higher_cap_starts_over(self, tmp_path):
+        """Raising the cap keeps more history for a save that already had some.
 
-    ``/editor/save`` posts a raw paste, which is the same ``create_backup`` call
-    every cheat, quest and level-up makes, over a real request so the session is
-    persisted the way the gateway persists it.
-    """
+        The 2013 way to reclaim a save that had grown large was to clear the
+        chain; the new one is to trim with a lower cap or delete the save, and
+        the old snapshots are rows like any other.
+        """
+        first = Store(str(tmp_path / "first.db"), keep=20)
+        for level in range(1, 21):
+            first.store("acct1", save(level))
+        assert len(first.history("acct1")) == 19
 
-    @pytest.fixture(scope="module")
-    def client(self, gateway_app):
-        return gateway_app.test_client()
+        tighter = Store(str(tmp_path / "first.db"), keep=3)
+        tighter.store("acct1", save(level=99))
 
-    def _post_save(self, client, level: int) -> None:
-        response = client.post(
-            "/editor/save",
-            data={"savegame": json.dumps(_save(level)), "message": f"save {level}"},
-        )
-        assert response.status_code == 200, response.get_data(as_text=True)
+        assert len(tighter.history("acct1")) == 3
 
-    def test_a_long_session_stops_growing(self, client):
-        with client.session_transaction() as session:
-            session.clear()
+    def test_deleting_a_save_takes_its_history_with_it(self, store):
+        for level in range(1, 8):
+            store.store("acct1", save(level))
 
-        for level in range(1, MAX_BACKUPS + 31):
-            self._post_save(client, level)
+        store.delete("acct1")
 
-        state = client.get("/editor.json").get_json()
-
-        assert state["backups"] == MAX_BACKUPS, "the chain grew past the ceiling"
-        assert state["level"] == MAX_BACKUPS + 30, "the live save was trimmed away"
-
-    def test_the_newest_backups_are_the_ones_kept(self, client):
-        with client.session_transaction() as session:
-            session.clear()
-
-        for level in range(1, MAX_BACKUPS + 6):
-            self._post_save(client, level)
-
-        state = client.get("/editor.json").get_json()
-
-        assert state["backups"] == MAX_BACKUPS
-        labels = [entry["label"] for entry in state["backupList"]]
-        assert labels[0].endswith(f"save {MAX_BACKUPS + 5}")
-        assert labels[-1].endswith("save 6"), "the wrong end of the chain was cut"
-
-    def test_the_editor_still_restores_what_is_left(self, client):
-        """Trimming must not cost the way back."""
-        with client.session_transaction() as session:
-            session.clear()
-
-        for level in range(1, MAX_BACKUPS + 4):
-            self._post_save(client, level)
-
-        # Level MAX_BACKUPS + 1 is the oldest survivor: index 0 is the one
-        # before the current save, index 1 the one before that.
-        response = client.post("/editor/restore", data={"index": "1"})
-
-        assert response.status_code == 200
-        assert client.get("/editor.json").get_json()["level"] == MAX_BACKUPS + 1
-
-    def test_the_editor_is_told_the_ceiling(self, client):
-        """The page renders the ceiling instead of hard-coding it."""
-        state = client.get("/editor.json").get_json()
-
-        assert state["maxBackups"] == MAX_BACKUPS
+        assert store.history("acct1") == []
+        assert store.load("acct1") is None

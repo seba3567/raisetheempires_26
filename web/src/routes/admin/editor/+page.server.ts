@@ -188,26 +188,27 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Roll the save back to a stacked backup.
+	 * Roll the save back to one of its snapshots.
 	 *
-	 * The 2013 editor posted `restore<n>`; this posts the index `/editor.json`
-	 * handed out, so the two cannot drift apart. The gateway range-checks it.
+	 * Addressed by revision, not by position in the list. History is trimmed as
+	 * writes land and this page can sit open long enough for an index to mean
+	 * something other than the row it was read from.
 	 */
 	restore: async ({ request, locals }) => {
 		requireAdmin(locals);
 
 		const form = await request.formData();
-		const index = Number.parseInt(String(form.get('index') ?? ''), 10);
-		if (!Number.isSafeInteger(index) || index < 0) {
-			return fail(400, { message: 'El índice del respaldo no es válido' });
+		const revision = Number.parseInt(String(form.get('revision') ?? ''), 10);
+		if (!Number.isSafeInteger(revision) || revision < 1) {
+			return fail(400, { message: 'La revisión del respaldo no es válida' });
 		}
 
-		const result = await restoreBackup(request, index, locals.user?.zid);
+		const result = await restoreBackup(request, revision, locals.user?.zid);
 		if (!result.ok) {
 			return fail(502, { message: result.message ?? 'No se pudo restaurar el respaldo' });
 		}
 
-		return redirect(303, `/admin/editor?ok=restore-${index}`);
+		return redirect(303, `/admin/editor?ok=restore-${revision}`);
 	},
 
 	/**

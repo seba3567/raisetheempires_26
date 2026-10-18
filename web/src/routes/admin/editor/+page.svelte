@@ -281,17 +281,25 @@
 				{/if}
 			</p>
 			<ul class="mt-3 max-h-96 divide-y divide-empire-800 overflow-y-auto text-sm">
-				{#each shownBackups as backup (backup.index)}
+				{#each shownBackups as backup (backup.revision)}
 					<li class="flex flex-wrap items-center gap-3 py-2">
-						<span class="w-10 shrink-0 font-mono text-xs text-slate-500">#{backup.index}</span>
+						<span class="w-16 shrink-0 font-mono text-xs text-slate-500">
+							r{backup.revision}
+						</span>
 						<span class="shrink-0 text-xs text-empire-300">
 							nivel {backup.level ?? '?'} · {formatAmount(backup.coins ?? 0)} coins
 						</span>
 						<span class="min-w-0 flex-1 truncate text-xs text-slate-500" title={backup.label}>
-							{backup.label}
+							{backup.message || backup.label}
 						</span>
 						<form method="POST" action="?/restore" use:enhance>
-							<input type="hidden" name="index" value={backup.index} />
+							<!--
+								By revision, not by position. History is trimmed as
+								writes land and the page can sit open for a while,
+								so an index would restore a different save than the
+								one the row showed.
+							-->
+							<input type="hidden" name="revision" value={backup.revision} />
 							<button class="rounded border border-empire-700 px-3 py-1 text-xs hover:bg-empire-800">
 								Restaurar
 							</button>

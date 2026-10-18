@@ -52,6 +52,7 @@ from flask import (
 from save_engine import (
     MAX_BACKUPS,
     InvalidSaveException,
+    _current_store_id,
     backup_chain,
     base_path,
     db,
@@ -281,17 +282,17 @@ def _session_snapshot():
 
 
 def _backup_chain():
-    """The stacked backups, newest first.
+    """The snapshots for this save, newest first.
 
-    ``session['backup']`` is the most recent one and each node links to the one
-    it replaced, so walking down the chain is exactly the order the 2013 editor
-    listed them in. Index 0 is the last save before the current one.
+    A table now, not a chain of nested copies inside the payload. The entries
+    are ``save_store.BackupRow`` -- revision, reason, size -- and deliberately
+    carry no payload, because the editor only needs the label and the numbers.
     """
     return backup_chain()
 
 
 def _backup_count():
-    """How many backups are stacked up, for "revert n steps back"."""
+    """How many snapshots exist, for "revert n steps back"."""
     return len(_backup_chain())
 
 
@@ -310,6 +311,16 @@ def _backup_summary(node):
         "empirePoints": player.get('cash'),
         "coins": resources.get('coins'),
     }
+
+
+def _backup_summary_payload(store_id, revision):
+    """The level/coins/empire points a snapshot held, or blanks if it is gone.
+
+    Read one snapshot at a time and only for the handful of entries actually
+    listed: selecting every blob to render a menu is the cost this removed.
+    """
+    store = current_app.session_interface.save_store
+    return _backup_summary(store.read_backup(store_id, revision) or {})
 
 
 @app.route("/editor.json")
@@ -365,15 +376,26 @@ def editor_state():
         # The editor shows the ceiling instead of hard-coding it, so raising
         # MAX_BACKUPS in save_engine is a one-line change.
         "maxBackups": MAX_BACKUPS,
+        # The snapshots themselves. Was the chain of nested copies walked into
+        # <a> tags by the 2013 page; now it is a table, and an entry is a
+        # BackupRow plus the numbers an admin picks between by.
+        #
+        # ``index`` is kept alongside ``revision`` so the editor UI and any old
+        # links keep working, but restore is addressed by revision -- an index
+        # shifts whenever the history is trimmed or a write lands between
+        # rendering the page and pressing the button.
         "backupList": [
             {
                 "index": i,
-                "label": format_backup_message(node),
-                "saveVersion": node.get('save_version'),
-                "message": node.get("message", ""),
-                **_backup_summary(node),
+                "revision": row.revision,
+                "label": format_backup_message(row),
+                "saveVersion": row.reason,
+                "message": row.reason or "",
+                "size": row.size,
+                "created": row.created_at,
+                **_backup_summary_payload(_current_store_id(), row.revision),
             }
-            for i, node in enumerate(_backup_chain())
+            for i, row in enumerate(_backup_chain())
         ],
     }
     return Response(
@@ -426,40 +448,59 @@ def editor_save():
 
 @app.route("/editor/restore", methods=['POST'])
 def editor_restore():
-    """Roll the save back to one of the stacked backups.
+    """Roll the save back to one of its snapshots.
 
     The 2013 editor had this as a row of "Restore this backup" buttons posting
-    ``restore<n>``; the index walked the same chain, newest first. It is the
-    only way back from a bad raw paste or a wipe, so it moves with the editor
-    instead of dying with the old page.
+    ``restore<n>``, walking a chain nested inside the save. It is the only way
+    back from a bad raw paste or a wipe, so it moves with the editor instead of
+    dying with the old page.
 
-    The current save is backed up before it is replaced, so restoring a backup
-    is itself undoable.
+    Takes a **revision**, not an index into a chain. An index shifts every time
+    the history is trimmed or a write happens between the page being rendered
+    and the button being pressed, so it could restore the wrong save; a revision
+    names exactly one state. The index is still accepted, and resolved against
+    the current listing, so old links keep working.
     """
-    try:
-        index = int(request.form['index'])
-    except (KeyError, ValueError):
-        return jsonify({"ok": False, "message": "Falta el índice del respaldo"}), 400
+    form = request.form
 
-    chain = _backup_chain()
-    if not chain:
-        return jsonify({"ok": False, "message": "Esta partida no tiene respaldos"}), 400
-    if index < 0 or index >= len(chain):
-        return jsonify({
-            "ok": False,
-            "message": f"El respaldo {index} no existe; hay {len(chain)}"
-        }), 400
+    revision = form.get('revision')
+    if revision is not None:
+        try:
+            revision = int(revision)
+        except ValueError:
+            return jsonify({"ok": False, "message": "Revisión inválida"}), 400
+    else:
+        try:
+            index = int(form['index'])
+        except (KeyError, ValueError):
+            return jsonify({"ok": False, "message": "Falta el respaldo a restaurar"}), 400
 
-    # The backup node is shared with the session it was copied out of, so it has
-    # to be deep-copied before _apply_save starts reassigning keys on it.
-    save_game = copy.deepcopy(chain[index])
-    label = format_backup_message(save_game)
-    print("restoring backup", index, label)
+        chain = _backup_chain()
+        if not chain:
+            return jsonify({"ok": False, "message": "Esta partida no tiene respaldos"}), 400
+        if index < 0 or index >= len(chain):
+            return jsonify({
+                "ok": False,
+                "message": f"El respaldo {index} no existe; hay {len(chain)}"
+            }), 400
+        revision = chain[index].revision
 
+    store = current_app.session_interface.save_store
+    payload = store.read_backup(_current_store_id(), revision)
+    if payload is None:
+        return jsonify({"ok": False, "message": "Ese respaldo ya no existe"}), 400
+
+    row = next((r for r in _backup_chain() if r.revision == revision), None)
+    label = format_backup_message(row) if row else f"revision {revision}"
+    print("restoring revision", revision, label)
+
+    # store.restore snapshots the current state before replacing it, so the
+    # rollback is undoable -- which is what the old chain could not offer once
+    # it started trimming.
     create_backup(f'revert to backup "{label}"')
-    _apply_save(save_game)
+    _apply_save(payload)
 
-    return jsonify({"ok": True, "restored": index, "label": label})
+    return jsonify({"ok": True, "restored": revision, "label": label})
 
 @app.route("/player.json")
 def player_state():
@@ -776,10 +817,15 @@ def save_editor():
 
 
 def format_backup_message(backup):
-    return datetime.fromtimestamp(backup.get('saved_on', 0)).strftime("%d %b %Y %H:%M:%S") + ' - ' \
-           + datetime.fromtimestamp(backup.get('replaced_on', 0)).strftime("%d %b %Y %H:%M:%S") + ' @' \
-           + str(backup.get('save_version', 'UNKNOWN VERSION')) + ' ' \
-           + str(backup.get("message", ""))
+    """One line describing a snapshot, for the editor's list.
+
+    Takes a ``save_store.BackupRow``. It used to take the snapshot dict itself
+    and dig out ``replaced_on`` / ``message`` / ``save_version``, all of which
+    lived on the node because the chain was nested inside the save. The reason
+    and the timestamp are columns now, so there is nothing to dig out.
+    """
+    reason = backup.reason or ""
+    return f"{backup.created_at} - rev {backup.revision} - {reason}"
 
 
 @app.route("/record_stats.php", methods=['GET', 'POST'])

@@ -1,10 +1,8 @@
 import configparser
-import copy
 import logging
 import os
 import shutil
 import sys
-from datetime import datetime
 from functools import reduce
 from pathlib import Path
 
@@ -72,85 +70,72 @@ def lookup_objects_save_by_position(save, x, y, r):
 
 # What one backup holds: the save itself plus the backup it replaced. Kept in
 # one place because the editor lists exactly this and must not drift from it.
-BACKUP_KEYS = ['user_object', 'quests', 'battle', 'fleets', 'population', 'saved', 'saved_on',
-               'save_version', 'original_save_version', 'backup']
+#: Set by :func:`create_backup` to say *why* the next write happens. The session
+#: interface hands it to ``save_store.Store.store(reason=...)``, which is what
+#: puts it on the snapshot it creates.
+BACKUP_REASON_KEY = "__backup_reason"
 
-# How many backups to keep. One backup is a full deep copy of the save (~38 KB
-# for a level-85 empire) and every node nests the one it replaced, so the row
-# grows by a whole save per backup and flask-session decodes the lot on every
-# request. Measured on the Rising Empire save, which had stacked 85 of them:
+# How many snapshots to keep per save. Ten was the old in-blob limit and is the
+# same number here, but it is now a DELETE on save_backups rather than a slice
+# of a nested list -- which is the whole point of the rebuild. The old curve,
+# measured on the Rising Empire save, for the record:
 #
 #     backups   row      decode per request
 #          1    39 KB      0.2 ms
 #         10   359 KB      2.3 ms
-#         20   715 KB      4.1 ms
-#         40  1427 KB      8.5 ms
 #         85  3029 KB     18.7 ms
 #
-# Ten is the point where the curve flattens into the recent past: those 85 were
-# almost all "Level N" milestones from level 2 to 85, which nobody wants back,
-# while ten restores is still far more than an admin needs after a bad paste.
+# The row is now the empire's size at every one of those points.
 MAX_BACKUPS = 10
 
 
 def backup_chain(save=None):
-    """The stacked backups, newest first.
+    """The snapshots for the current save, newest first.
 
-    ``save['backup']`` is the most recent backup and every node links to the
-    one it replaced, so walking down the chain is the order the 2013 editor
-    listed them in. Index 0 is the save immediately before the current one.
-
-    A link that is not a dict ends the walk instead of raising: the editor
-    calls ``.get()`` on every node it lists, so handing it one of those would
-    take the page down over a single half-written link.
+    Used to walk ``save['backup']``, a chain of nested copies living inside the
+    payload -- which is why one row reached 404 KB and every request decoded the
+    lot. History is a table now, so this is a query. The payloads are *not*
+    fetched: the editor only needs the label and the level, and selecting ten
+    40 KB blobs to render a menu is the cost this removed.
     """
-    save = session if save is None else save
-    chain = []
-    node = save
-    while isinstance(node, dict):
-        child = node.get("backup")
-        if not isinstance(child, dict):
-            break
-        chain.append(child)
-        node = child
-    return chain
+    from flask import current_app
+
+    store = current_app.session_interface.save_store
+    store_id = (save or session).get("session_id") if save else _current_store_id()
+    if not store_id:
+        return []
+    return store.history(store_id)
 
 
-def trim_backups(limit=MAX_BACKUPS, save=None):
-    """Drop the oldest backups so the chain stops growing without bound.
+def _current_store_id() -> str | None:
+    """The store id the current request writes to, or None if there is no row."""
+    from flask import current_app
 
-    Only the tail of the chain is cut, and only the link to the first dropped
-    node is removed: the backups that survive are the same objects the editor
-    already lists, and the save itself is never touched.
-
-    ``limit=0`` clears every backup, which is the way to reclaim the space of
-    a save that grew large before this existed.
-    """
-    save = session if save is None else save
-    chain = backup_chain(save)
-    if len(chain) <= limit:
-        return 0
-    if limit:
-        chain[limit - 1].pop("backup", None)
-    else:
-        save.pop("backup", None)
-    dropped = len(chain) - limit
-    # The chain lives inside one session key, so cutting it mutates the session
-    # in place. The server-side interface upserts on every request, but the
-    # cookie interface only rewrites a session it believes changed, so say so.
-    if hasattr(save, "modified"):
-        save.modified = True
-    return dropped
+    return current_app.session_interface._get_store_id(session.sid)
 
 
 def create_backup(message, limit=MAX_BACKUPS):
-    timestamp = datetime.now().timestamp()
-    session["backup"] = copy.deepcopy({k: v for k, v in session.items() if
-                         k in BACKUP_KEYS})  # nested backups
-    session['saved_on'] = timestamp
-    session["backup"]['replaced_on'] = timestamp
-    session["backup"]['message'] = message
-    trim_backups(limit)
+    """Say why the next write happens. It does not write anything itself.
+
+    It used to deepcopy the save into ``session['backup']``, which made the row
+    grow by a whole save per backup and made every request pay to decode the
+    history. Now ``save_store.Store.store`` snapshots whatever it replaces on
+    every write, so all that was left for this function to contribute is *why* --
+    and that is what the editor shows next to each entry.
+
+    Stamping the reason on the session rather than writing a row here is what
+    keeps "Level 50" on the snapshot taken by the level-up rather than producing
+    a second, near-identical snapshot.
+    """
+    session[BACKUP_REASON_KEY] = message
+    if hasattr(session, "modified"):
+        session.modified = True
+    return message
+
+
+def pending_backup_reason() -> str | None:
+    """The reason create_backup recorded, or None if it was not called."""
+    return session.get(BACKUP_REASON_KEY)
 
 def save_database_uri(root_path, instance_path):
     save_db_path = os.path.join(my_games_path(), "save.db")
@@ -254,14 +239,6 @@ logger = daiquiri.getLogger(__name__)
 sys.excepthook = exception_handler
 
 
-def get_all_sessions():
-    sess_int: SqlAlchemySessionInterface = current_app.session_interface
-    sess_model = sess_int.sql_session_model
-    # record = sess_model.query.filter_by(
-    #         id=17).first()
-    records = sess_model.query.all()
-    return records
-
 def decode_save(serialized_save):
     try:
         sess_int: SqlAlchemySessionInterface = current_app.session_interface
@@ -296,17 +273,20 @@ def get_saves():
         loaded = store.load(row["store_id"])
         if loaded is None or not loaded.data:
             continue
-        if not loaded.data.get("user_object"):
+        # The old filter asked whether the key was present and not whether it
+        # held anything, so a row with ``user_object: null`` -- or a list, which
+        # is what a half-written /editor/save paste leaves -- passed and then
+        # blew up the first caller that did ``save['user_object']["userInfo"]``.
+        # One unusable row should cost that row, not the whole session list.
+        user_object = loaded.data.get("user_object")
+        if not isinstance(user_object, dict) or not user_object.get("userInfo"):
+            print("Skipping save with no usable user_object:",
+                  loaded.store_id, type(user_object).__name__)
             continue
         loaded.data["session_id"] = loaded.store_id
         loaded.data["__save_revision"] = loaded.revision
         saves.append(loaded.data)
     return saves
-
-
-def enrich_save(save, record):
-    save["session_id"] = record.session_id
-    return save
 
 
 def store_session(save):
