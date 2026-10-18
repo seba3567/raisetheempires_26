@@ -15,12 +15,6 @@ from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
 from itsdangerous import want_bytes
 
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
-
-
 crash_log = True
 
 db = SQLAlchemy()
@@ -287,13 +281,48 @@ def enrich_save(save, record):
 
 
 def store_session(save):
+    """Persist one save, in the format the reader expects.
+
+    This function had two independent faults and had never once written a save.
+
+    **It could not commit.** It called ``sess_int.db.session.commit()``, but
+    flask-session 0.8.0's SqlAlchemySessionInterface keeps the SQLAlchemy handle
+    on ``self.client`` (``self.client = client`` in its ``__init__``). There is
+    no ``.db`` on the interface, so the line raised AttributeError before
+    anything was written -- on every call, in every path that reached it. The
+    invasion, pillage and invasion-cleanup handlers all reach it.
+
+    **It wrote the wrong format.** It filled ``record.data`` with
+    ``pickle.dumps``, which nothing else here decodes: flask-session's own save
+    path and ``decode_save`` both go through ``session_interface.serializer``,
+    and empires-server patches that to msgspec.msgpack (see
+    ``serializer_init_patch``; the note at empires-server.py:143 records that json
+    was switched off exactly because msgspec makes the payload unpicklable). The
+    damage would have been silent too -- decode_save catches the mismatch, prints
+    "Skipping corrupt save" and returns None, and get_saves drops any row that
+    decodes to None.
+
+    Returns whether the write happened, so a caller can tell "saved" from "there
+    was nothing to save into".
+    """
     sess_int: SqlAlchemySessionInterface = current_app.session_interface
     sess_model = sess_int.sql_session_model
-    record = sess_model.query.filter_by(
-            session_id=save["session_id"]).first()
+    session_id = save.get("session_id")
+    record = sess_model.query.filter_by(session_id=session_id).first()
 
-    record.data = pickle.dumps(dict(save))
-    sess_int.db.session.commit()
+    if record is None:
+        # Assigning to record.data with no row raised on None, losing the request
+        # without saying which row was missing.
+        print("WARNING: store_session found no row for session_id", repr(session_id))
+        return False
+
+    # The store key is how the row is found, not part of the empire. It used to
+    # be written into the payload too, putting a key the game never expects
+    # inside the save.
+    payload = {key: value for key, value in save.items() if key != "session_id"}
+    record.data = sess_int.serializer.encode(payload)
+    sess_int.client.session.commit()
+    return True
 
 
 def validate_save(save, blank_allowed = False):
