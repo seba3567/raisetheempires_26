@@ -30,6 +30,8 @@
 /save.db
 /instance
 /backup-save-db
+# Volcados de mysqldump hechos a mano antes de un borrado.
+/backup-antes-borrado-*.sql
 .coverage
 coverage.xml
 test-results.xml

@@ -85,6 +85,20 @@ class AccountBoundSqlAlchemySessionInterface(SqlAlchemySessionInterface):
     Falling through to ``super()`` for an unauthenticated request is what keeps
     anonymous play working exactly as it did: no header, no account, same cookie
     behaviour as the original 2013 server.
+
+    One row per account
+    -------------------
+    Overriding ``_get_store_id`` guarantees that an account always *reads and
+    writes* one row, but it does not stop a second row appearing next to it: a
+    player who plays before signing in gets a cookie-keyed row, and signing in
+    afterwards silently starts a *different* empire under the account key. Two
+    rows, one player, and nothing on screen says which is real. That is not a
+    hypothetical -- it is what the ``saves`` table held.
+
+    So the account branch asks ``_adopt_anonymous_save`` on the way in. It only
+    runs when the account has no save yet, so an account's real empire is never
+    at risk, and it removes the cookie row rather than copying it, so "one
+    account, one save" is true of the table and not merely of the code path.
     """
 
     def open_session(self, app: Flask, request: Request):
@@ -99,9 +113,22 @@ class AccountBoundSqlAlchemySessionInterface(SqlAlchemySessionInterface):
         store_id = self._get_store_id(sid)
         stored = self._retrieve_session_data(store_id)
 
+        if stored is None:
+            # No empire for this account yet. If this browser played anonymously
+            # before signing in, that empire is theirs and belongs here.
+            stored = self._adopt_anonymous_save(app, request, store_id)
+
         if stored is not None:
             return self.session_class(stored, sid=sid)
         return self.session_class(sid=sid, permanent=self.permanent)
+
+    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str):
+        """Take over the browser's anonymous save. Overridden where there is a store.
+
+        The parent has no save store of its own -- it persists through the
+        sessions table -- so there is nothing to move and nothing to say.
+        """
+        return None
 
     def _get_store_id(self, sid: str) -> str:
         zid = self._supplied_zid()
@@ -202,6 +229,49 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         payload = dict(row.data)
         payload[self.REVISION_KEY] = row.revision
         return payload
+
+    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str):
+        """Move a browser's anonymous empire onto the account, once.
+
+        Only ever called for an account that has no save, so this can never
+        overwrite a real one. The cookie row is *deleted*, not copied: leaving it
+        behind is exactly the two-rows-one-player state this exists to remove,
+        and it would otherwise be picked up again by a later anonymous request.
+
+        Returns the account's row in the same shape ``_retrieve_session_data``
+        produces, so the caller cannot tell an adoption from an ordinary read.
+        """
+        cookie_sid = request.cookies.get(self.get_cookie_name(app))
+        if not cookie_sid:
+            return None
+
+        # The *parent's* keying on purpose: self._get_store_id would resolve to
+        # the account again and we would "adopt" the account onto itself.
+        cookie_key = SqlAlchemySessionInterface._get_store_id(self, cookie_sid)
+        if cookie_key == account_key:
+            return None
+
+        row = self.save_store.load(cookie_key)
+        if row is None or not row.data:
+            return None
+
+        payload = dict(row.data)
+        # An empty session is not an empire. Adopting one would carry a stranger
+        # row's revision across for nothing and hide the fact that this account
+        # genuinely starts fresh.
+        if not isinstance(payload.get("user_object"), dict):
+            return None
+
+        payload.pop(self.REVISION_KEY, None)
+        payload.pop(self.REASON_KEY, None)
+        self.save_store.store(account_key, payload)
+        self.save_store.delete(cookie_key)
+        print("Adopted anonymous save", cookie_key, "into", account_key)
+
+        # Read back rather than reusing `payload`: the revision has to be the
+        # one the row is at now, or the write at the end of this request would
+        # conflict with the write we just made.
+        return self._retrieve_session_data(account_key)
 
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
 

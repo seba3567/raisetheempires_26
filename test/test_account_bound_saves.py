@@ -261,3 +261,109 @@ class TestReadAndWriteAgree:
             mine = app.session_interface._get_store_id(flask_session.sid)
 
         assert other != mine
+
+
+class TestOneRowPerAccount:
+    """Signing in after playing anonymously must not leave two empires behind.
+
+    Keying the save by account stops an account from *writing* to two rows, but
+    on its own it happily leaves a cookie-keyed row sitting next to the account's
+    own. This module and the ``saves`` table both showed that state: one player,
+    one account, three rows.
+
+    Every test here uses its own zid. The app and its database are shared across
+    the module, so a fixed id would mean adoption silently not running -- because
+    an earlier test already gave that account a save -- and the test would pass
+    for the wrong reason.
+    """
+
+    ADOPT_ZID = "2361750976462841"
+    KEEPS_ZID = "2361750976462842"
+    FRESH_ZID = "2361750976462843"
+
+    @staticmethod
+    def _empire(level: int, uid: int = 4242) -> str:
+        import json
+
+        return json.dumps(
+            {"user_object": {"userInfo": {"player": {"level": level, "uid": uid}}}}
+        )
+
+    def _play_then_sign_in(self, app, body: str, zid: str):
+        """One browser: play with no account, then arrive with one.
+
+        Driven through a single test client rather than a hand-written ``Cookie``
+        header, because the cookie is the server's to issue: flask-session names
+        it, signs nothing, but only the client that was handed it will send it
+        back the way a browser does. Forging the header by hand tests a cookie
+        the gateway never agreed to.
+        """
+        browser = app.test_client()
+        browser.post(
+            "/editor/save",
+            data={"savegame": body, "message": "played before signing in"},
+        )
+        cookie_rows = {
+            row for row in stored_rows(app) if not is_account_store_id(row)
+        }
+
+        # The same browser, now with an account: a read is enough, because the
+        # adoption happens while the session is opened.
+        browser.get("/list_session", headers={"x-player-zid": zid})
+        return cookie_rows
+
+    def _stored(self, app, key: str):
+        with app.app_context():
+            row = app.session_interface.save_store.load(key)
+        return row.data if row else None
+
+    def test_an_anonymous_empire_moves_to_the_account(self, app):
+        cookie_rows = self._play_then_sign_in(
+            app, self._empire(31), self.ADOPT_ZID
+        )
+
+        assert cookie_rows, "the anonymous write stored nothing to adopt"
+        account_key = "session:" + account_store_id(int(self.ADOPT_ZID))
+        assert account_key in stored_rows(app)
+
+        moved = self._stored(app, account_key)
+        player = ((moved or {}).get("user_object") or {}).get("userInfo", {}).get("player", {})
+        assert player.get("level") == 31, "the empire did not survive the move"
+
+    def test_the_cookie_row_is_removed_not_left_behind(self, app):
+        """Copying would leave the exact two-rows-one-player state this fixes."""
+        cookie_rows = self._play_then_sign_in(
+            app, self._empire(12), self.KEEPS_ZID
+        )
+
+        remaining = stored_rows(app)
+        assert not (cookie_rows & remaining), "the cookie row was left behind"
+        assert len([r for r in remaining if not is_account_store_id(r)]) == 0
+
+    def test_an_account_with_its_own_save_keeps_it(self, app):
+        """Adoption never runs against an account that already has an empire."""
+        browser = app.test_client()
+        browser.post(
+            "/editor/save",
+            data={"savegame": self._empire(99), "message": "played anonymously"},
+        )
+        # A second browser, already signed in, builds the account's real empire.
+        write_save(app, {"x-player-zid": self.KEEPS_ZID},
+                   cookie="session=the-real-browser",
+                   body=self._empire(5))
+
+        browser.get("/list_session", headers={"x-player-zid": self.KEEPS_ZID})
+
+        kept = self._stored(app, "session:" + account_store_id(int(self.KEEPS_ZID)))
+        player = ((kept or {}).get("user_object") or {}).get("userInfo", {}).get("player", {})
+        assert player.get("level") == 5, "the account's own empire was overwritten"
+
+    def test_an_empty_anonymous_row_is_not_adopted(self, app):
+        """``{"user_object": null}`` is bookkeeping, not an empire.
+
+        Adopting it would give a brand new account a row it never played, which
+        then reads as "this account already has a save".
+        """
+        self._play_then_sign_in(app, '{"user_object": null}', self.FRESH_ZID)
+
+        assert "session:" + account_store_id(int(self.FRESH_ZID)) not in stored_rows(app)
