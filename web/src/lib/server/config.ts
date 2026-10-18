@@ -4,17 +4,83 @@
  * Everything is overridable by environment variable so the same build runs in
  * development (Bun on 8080 -> Flask on 5005) and in production behind a proxy.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * `.env`, loaded once, for anything the process itself did not provide.
+ *
+ * The project's own `.gitignore` lists `/web/.env`, so a `.env` file is the
+ * documented way to configure this service -- but Vite does not put `.env` into
+ * `process.env`. It goes into `import.meta.env`, under VITE_-prefixed names only,
+ * which is a different thing entirely and would mean renaming every setting.
+ * `bun run dev` starting the server did not bridge it either.
+ *
+ * The result was a clean checkout following the documented convention and getting
+ * `SESSION_SECRET is not set` on every page: a 500 with no hint that the file it
+ * had just been given was the problem.
+ *
+ * Process wins over file, so exporting a variable still overrides the file, and
+ * this only fills gaps. Production sets real environment variables and is
+ * unaffected.
+ *
+ * The file is found by working directory rather than by walking up from this
+ * module. `import.meta.dir` would have been the tidier anchor, but it is a Bun
+ * extension that Vite's SSR transform does not preserve, so under `vite dev` it
+ * is undefined -- and a `join(undefined, ...)` inside a try block fails in a way
+ * that is indistinguishable from "there is no .env". That is exactly what the
+ * first attempt looked like: code that was correct and simply never ran.
+ */
+function loadDotEnv(): Record<string, string> {
+	for (const candidate of [process.env.RTE_ENV_FILE, join(process.cwd(), '.env')]) {
+		if (!candidate) continue;
+
+		let raw: string;
+		try {
+			raw = readFileSync(candidate, 'utf8');
+		} catch {
+			// Not here. Try the next candidate.
+			continue;
+		}
+
+		const values: Record<string, string> = {};
+		for (const line of raw.split('\n')) {
+			const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+			// Blank lines, `#` comments, and anything that is not a KEY=VALUE pair.
+			if (!match) continue;
+			// Strip a trailing \r from a CRLF file, and one layer of quoting.
+			let value = match[2].trim().replace(/\r$/, '');
+			if (
+				(value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+				(value.startsWith("'") && value.endsWith("'") && value.length > 1)
+			) {
+				value = value.slice(1, -1);
+			}
+			values[match[1]] = value;
+		}
+		return values;
+	}
+
+	// No .env is the normal case in production.
+	return {};
+}
+
+const dotEnv = loadDotEnv();
+
+function fromFile(name: string): string | undefined {
+	const value = dotEnv[name];
+	return value === undefined || value === "" ? undefined : value;
+}
 
 function env(name: string, fallback: string): string {
-  const value = process.env[name];
-  return value === undefined || value === "" ? fallback : value;
+	return process.env[name] ?? fromFile(name) ?? fallback;
 }
 
 function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+	const raw = process.env[name] ?? fromFile(name);
+	if (raw === undefined) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 export const config = {
