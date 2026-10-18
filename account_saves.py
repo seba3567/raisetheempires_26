@@ -37,6 +37,8 @@ before exposing the port.
 
 from __future__ import annotations
 
+import os
+
 from flask import Flask
 from flask.wrappers import Request
 from flask_session import Session
@@ -174,17 +176,24 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
 
     @staticmethod
     def _save_store_path(app: Flask) -> str:
+        """The MariaDB URL the saves live in.
+
+        Read from ``SAVE_STORE_PATH`` so the deployment, not the code, decides
+        which server. There is no SQLite fallback any more: a bare filename
+        used to mean SQLite and now raises in Store, loudly, rather than
+        quietly creating a second database somewhere on disk.
+        """
         from flask import current_app
 
         current = current_app or app
         configured = current.config.get("SAVE_STORE_PATH")
         if configured:
             return configured
-        # Same file the sessions table lives in; the new tables are created
-        # alongside it rather than in a second database, so there is one thing to
-        # back up and one thing to point at.
-        uri = current.config.get("SQLALCHEMY_DATABASE_URI", "")
-        return uri.replace("sqlite:///", "").replace("sqlite://", "") or "save.db"
+        # importlib.metadata would be overkill for a default; the same value the
+        # deployment sets, spelled out so a fresh checkout starts somewhere.
+        return os.environ.get(
+            "SAVE_STORE_PATH",
+            "mariadb://root:2001@127.0.0.1:3306/raisetheempires")
 
     def _retrieve_session_data(self, store_id: str):
         row = self.save_store.load(store_id)

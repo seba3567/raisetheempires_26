@@ -7,13 +7,8 @@ from flask_session.base import MsgSpecSerializer
 from quest_settings import quest_titles
 
 os.environ["PBR_VERSION"] = '5.4.3'
-if not os.environ.get('EDITOR'):
-    os.environ["EDITOR"] = 'notepad'  # system specific!
-
-import editor
-from tendo import singleton
-
 import init_settings as settings
+from single_instance import SingleInstance
 
 if __name__ == '__main__':
     settings.read_ops()
@@ -28,7 +23,7 @@ if not settings.debug and __name__ == '__main__':
     # than one per machine. Two gateways on different ports are two different
     # services -- useful for a staging instance, and for driving a throwaway
     # copy of this server without stopping the real one.
-    me = singleton.SingleInstance(flavor_id=str(settings.port))
+    me = SingleInstance(flavor_id=str(settings.port))
 
 if os.name == 'nt':
     os.system('color')
@@ -3330,7 +3325,12 @@ def delete_save(message):
 @app.errorhandler(500)
 def server_error_page(error):
     if settings.crash_log:
-        text = editor.edit(filename=os.path.join(log_path(), "log.txt"))
+        log_file = os.path.join(log_path(), "log.txt")
+        try:
+            import subprocess
+            subprocess.Popen(["notepad", log_file] if os.name == "nt" else ["xdg-open", log_file])
+        except Exception as e:
+            print("Could not launch log editor:", e)
     return 'It went wrong'
 
 

@@ -24,19 +24,17 @@ URL = os.environ.get("RTE_MARIADB_TEST_URL",
 def _reachable(url: str) -> bool:
     """Can we reach a MariaDB server at all?
 
-    Deliberately connects *without* the database name. The test database does
-    not exist yet -- ``Store._ensure_schema_mariadb`` is what creates it -- and
-    a probe that asks for the database up front would report "unreachable" on a
-    server that is sitting right there, skipping the tests on a machine that
-    could have run them.
+    Connects *without* the database name. The test database may not exist yet --
+    ``Store._ensure_schema`` is what creates it -- and a probe that asks for the
+    database up front would report "unreachable" on a server that is sitting
+    right there, skipping the tests on a machine that could have run them.
     """
     from urllib.parse import urlparse, urlunparse
 
-    from save_store import Dialect
+    from save_store import connect
+
     try:
-        parsed = urlparse(url)
-        server_only = urlunparse(parsed._replace(path=""))
-        connection = Dialect.connect(server_only)
+        connection = connect(urlunparse(urlparse(url)._replace(path="")))
         connection.close()
         return True
     except Exception:
@@ -103,7 +101,7 @@ class TestOneRowPerPlayer:
                 store._exec(
                     connection,
                     "INSERT INTO saves (store_id, revision, data, created_at, updated_at) "
-                    "VALUES (?, 1, ?, NOW(), NOW())",
+                    "VALUES (%s, 1, %s, NOW(), NOW())",
                     ("acct1", b"\x80\x01", ))
 
 
@@ -238,13 +236,10 @@ class TestPayload:
         store.store("acct1", empire())
 
         def row_size():
-            # Through _exec, not connection.execute: the store translates the
-            # ? placeholders to %s for pymysql, and a raw call with ? would
-            # fail on string formatting rather than read the row.
             with store._connect() as connection:
                 return store._exec(
                     connection,
-                    "SELECT LENGTH(data) AS size FROM saves WHERE store_id = ?",
+                    "SELECT LENGTH(data) AS size FROM saves WHERE store_id = %s",
                     ("acct1",)).fetchone()["size"]
 
         first = row_size()

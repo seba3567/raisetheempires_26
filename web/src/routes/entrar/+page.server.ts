@@ -19,16 +19,16 @@ export const actions: Actions = {
 			return fail(400, { error: 'Completa ambos campos.', username });
 		}
 
-		const user = findByUsername(username);
+		const user = await findByUsername(username);
 		// One message for both cases: the form must not confirm which usernames
 		// exist.
 		if (!user || !(await verifyPassword(user, password))) {
-			recordActivity(null, 'login.failed', username.slice(0, 24));
+			await recordActivity(null, 'login.failed', username.slice(0, 24));
 			return fail(401, { error: 'Usuario o contraseña incorrectos.', username });
 		}
 
-		touchLastSeen(user.id);
-		recordActivity(user.id, 'login');
+		await touchLastSeen(user.id);
+		await recordActivity(user.id, 'login');
 		await setSessionCookie(cookies, user.id, locals.secure);
 
 		// `next` lets the admin gate send people back where they were going.

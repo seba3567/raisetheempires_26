@@ -16,14 +16,27 @@ about the storage layer.
 """
 from __future__ import annotations
 
+import os
+import uuid
+
 import pytest
 
 from save_store import Store
 
+# Each test gets its own database on the shared server, so runs cannot see each
+# other's snapshots. There is no SQLite any more -- Store takes a mariadb:// URL.
+SERVER = os.environ.get("RTE_TEST_MARIADB",
+                        "mariadb://root:2001@127.0.0.1:3306/rte_trim_test")
+
+
+def a_store(name: str, **kwargs) -> Store:
+    return Store(f"{SERVER.rsplit('/', 1)[0]}/rte_trim_{name}_{uuid.uuid4().hex[:8]}",
+                 **kwargs)
+
 
 @pytest.fixture
-def store(tmp_path):
-    return Store(str(tmp_path / "saves.db"))
+def store():
+    return a_store("main")
 
 
 def save(level=1):
@@ -68,8 +81,8 @@ class TestHistoryStopsGrowing:
         # newest snapshot is of revision 28 -- the state before the last write.
         assert max(revisions) == 28
 
-    def test_the_cap_is_configurable(self, tmp_path):
-        generous = Store(str(tmp_path / "generous.db"), keep=25)
+    def test_the_cap_is_configurable(self):
+        generous = a_store("generous", keep=25)
         for level in range(1, 20):
             generous.store("acct1", save(level))
 
@@ -94,19 +107,20 @@ class TestHistoryStopsGrowing:
 
 
 class TestReclaimingSpace:
-    def test_a_higher_cap_starts_over(self, tmp_path):
+    def test_a_higher_cap_starts_over(self):
         """Raising the cap keeps more history for a save that already had some.
 
         The 2013 way to reclaim a save that had grown large was to clear the
         chain; the new one is to trim with a lower cap or delete the save, and
         the old snapshots are rows like any other.
         """
-        first = Store(str(tmp_path / "first.db"), keep=20)
+        url = a_store("first", keep=20).path
+        first = Store(url, keep=20)
         for level in range(1, 21):
             first.store("acct1", save(level))
         assert len(first.history("acct1")) == 19
 
-        tighter = Store(str(tmp_path / "first.db"), keep=3)
+        tighter = Store(url, keep=3)
         tighter.store("acct1", save(level=99))
 
         assert len(tighter.history("acct1")) == 3

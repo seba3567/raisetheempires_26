@@ -23,7 +23,7 @@
  */
 
 export const RUFFLE_SCRIPT_URL = '/ruffle/ruffle.js';
-export const RUFFLE_VERSION = '0.7.1';
+export const RUFFLE_VERSION = '0.8.0-nightly';
 
 export const SWF_PATH = '/files/empire-s.assets.zgncdn.com/assets/109338/ZGame.109338.swf';
 

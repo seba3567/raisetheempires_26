@@ -36,118 +36,24 @@ has to change when the game does.
 from __future__ import annotations
 
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
-MARIADB_SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "schema_mariadb.sql")
 
 #: How many snapshots to keep per save. Ten was the old in-blob limit; here it is
 #: a delete of old rows rather than a slice of a nested list.
 DEFAULT_KEEP = 10
 
 
-class Dialect:
-    """The two or three statements that are not the same on both engines.
-
-    Everything else in :class:`Store` is plain SQL that MariaDB and SQLite both
-    accept. What differs is the driver, the row shape, and how a write is made
-    atomic -- which is the one that matters, so it is spelled out here rather
-    than hidden behind a compatibility layer nobody reads.
-    """
-
-    @staticmethod
-    def is_url(path: str) -> bool:
-        return path.startswith(("mariadb://", "mysql://"))
-
-    @staticmethod
-    def connect(url: str):
-        from urllib.parse import unquote, urlparse
-
-        import pymysql
-
-        parsed = urlparse(url)
-        connection = pymysql.connect(
-            host=parsed.hostname or "127.0.0.1",
-            port=parsed.port or 3306,
-            user=unquote(parsed.username or "root"),
-            password=unquote(parsed.password or ""),
-            database=(parsed.path or "").strip("/") or None,
-            charset="utf8mb4",
-            # autocommit on, so the transactions in Store are explicit -- same
-            # reason sqlite3 is opened with isolation_level=None.
-            autocommit=True,
-        )
-        return MariaConnection(connection)
-
-
-class MariaConnection:
-    """A pymysql connection shaped like the sqlite3 one Store already uses.
-
-    Two differences, both of which would otherwise surface as an
-    AttributeError halfway through a write:
-
-    * pymysql executes on a cursor; sqlite3 executes on the connection. Store
-      calls ``connection.execute`` throughout, so this forwards.
-    * pymysql returns tuples; sqlite3 returns objects you can index by column
-      name. Every query in Store indexes by name, so the cursor hands back
-      dicts.
-
-    Deliberately not a general compatibility layer -- it is exactly the two
-    differences, and nothing else.
-    """
-
-    def __init__(self, connection):
-        self._connection = connection
-        self.cursor = _DictCursor(connection.cursor())
-
-    def execute(self, sql: str, params=()):
-        # Returns the cursor, not the rowcount, to match sqlite3: every read in
-        # Store does connection.execute(...).fetchone(), and handing back an int
-        # would fail with "'int' object has no attribute 'fetchone'" rather
-        # than reading the row.
-        self.cursor.execute(sql, params) if params else self.cursor.execute(sql)
-        return self.cursor
-
-    def cursor_for(self):
-        """A fresh cursor, for the rare caller that needs a second one."""
-        return _DictCursor(self._connection.cursor())
-
-    def close(self):
-        self._connection.close()
-
-    def __enter__(self):
-        # Store and its tests both use `with store._connect() as connection`,
-        # which sqlite3 supports and pymysql does not. Mirroring sqlite3's
-        # semantics -- commit on a clean exit, roll back on an exception, and
-        # notably do NOT close -- is what keeps the two engines interchangeable.
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self._connection.commit()
-        else:
-            self._connection.rollback()
-        return False
-
-    def commit(self):
-        self._connection.commit()
-
-    def rollback(self):
-        self._connection.rollback()
-
-    def __getattr__(self, name):
-        return getattr(self._connection, name)
-
-
 class _DictCursor:
-    """Adapter giving pymysql cursors the ``row["name"]`` shape sqlite3 has.
+    """Adapter giving pymysql cursors the ``row["name"]`` shape the queries use.
 
-    pymysql returns tuples by default; every query in Store indexes by column
-    name. Rather than rewriting them, this wraps ``fetchall``/``fetchone`` to
-    hand back dicts, so the same code runs on both.
+    pymysql returns tuples by default and every query in Store indexes by column
+    name, so this wraps ``fetchall``/``fetchone`` to hand back dicts.
+
+    Kept rather than switching every query to index 0, because ``SELECT *``
+    column order is not something the callers should have to know.
     """
 
     def __init__(self, cursor):
@@ -166,6 +72,99 @@ class _DictCursor:
 
     def fetchall(self):
         return [self._as_dict(row) for row in self._cursor.fetchall()]
+
+    def __iter__(self):
+        row = self.fetchone()
+        while row is not None:
+            yield row
+            row = self.fetchone()
+
+
+def strip_sql_comments(script: str) -> str:
+    """Drop ``--`` comment lines before the schema is split on ``;``.
+
+    The schema is the only SQL file in the project and it is heavily commented,
+    which is worth keeping. But a semicolon inside a comment -- "until the move;
+    the file kept the plain name" -- splits a statement in half and the server
+    rejects the fragment, which points at the schema rather than at the comment.
+    Removing the comments first makes the split safe and the error messages
+    honest.
+    """
+    return "\n".join(line for line in script.splitlines()
+                     if not line.lstrip().startswith("--"))
+
+
+def connect(url: str):
+    """Open a connection to the MariaDB named by ``url``.
+
+    The URL is ``mariadb://user:password@host:port/database``, which is the
+    same shape as ``SQLALCHEMY_DATABASE_URI`` so there is one format to learn.
+    Passing a bare filename used to mean SQLite and no longer does.
+    """
+    from urllib.parse import unquote, urlparse
+
+    import pymysql
+
+    parsed = urlparse(url)
+    return MariaConnection(pymysql.connect(
+        host=parsed.hostname or "127.0.0.1",
+        port=parsed.port or 3306,
+        user=unquote(parsed.username or "root"),
+        password=unquote(parsed.password or ""),
+        database=(parsed.path or "").strip("/") or None,
+        charset="utf8mb4",
+        # autocommit on, so the transactions in Store are explicit.
+        autocommit=True,
+    ))
+
+
+class MariaConnection:
+    """A pymysql connection shaped the way :class:`Store` expects.
+
+    pymysql executes on a cursor and returns tuples, where every query here
+    does ``connection.execute(...).fetchone()`` and indexes by column name.
+    Rather than rewrite the queries, this forwards ``execute`` to the cursor and
+    hands back dict rows.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self.cursor = _DictCursor(connection.cursor())
+
+    def execute(self, sql: str, params=()):
+        # Returns the cursor, not the rowcount: every read does
+        # connection.execute(...).fetchone(), and an int would fail with
+        # "'int' object has no attribute 'fetchone'".
+        if params:
+            self.cursor.execute(sql, params)
+        else:
+            self.cursor.execute(sql)
+        return self.cursor
+
+    def cursor_for(self):
+        """A fresh cursor, for the rare caller that needs a second one."""
+        return _DictCursor(self._connection.cursor())
+
+    def close(self):
+        self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Autocommit is on, so there is nothing to commit; the context manager
+        # exists so `with store._connect() as connection` reads the same as it
+        # did under sqlite3.
+        return False
+
+    def commit(self):
+        self._connection.commit()
+
+    def rollback(self):
+        self._connection.rollback()
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
 
 
 class WriteConflict(Exception):
@@ -257,89 +256,31 @@ class Store:
     # -------------------------------------------------------------- plumbing --
 
     def _connect(self):
-        """A DB-API connection to whichever engine ``path`` names.
-
-        ``path`` is either a file (SQLite) or a ``mariadb://`` URL. Both come
-        out of the same config key, so switching engines is a config change and
-        not a code change.
-        """
-        if Dialect.is_url(self.path):
-            return Dialect.connect(self.path)
-        # isolation_level=None puts the driver in autocommit, so transactions
-        # below are explicit. With the default isolation the driver would open
-        # one behind our back and the ROLLBACK on a conflict would fight it.
-        connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+        return connect(self.path)
 
     def _ensure_schema(self) -> None:
-        if Dialect.is_url(self.path):
-            self._ensure_schema_mariadb()
-            return
-        folder = os.path.dirname(os.path.abspath(self.path))
-        if folder and not os.path.isdir(folder):
-            os.makedirs(folder, exist_ok=True)
-        with open(SCHEMA_PATH, encoding="utf-8") as handle:
-            script = handle.read()
-        self._apply_script(self._connect(), script)
-
-    @staticmethod
-    def _apply_script(connection, script: str) -> None:
-        """Run a schema file one statement at a time, skipping index-on-missing-column.
-
-        ``CREATE TABLE IF NOT EXISTS`` creates what is missing and leaves what
-        exists alone, which is right for tables and wrong for columns: a
-        database from an earlier build keeps its earlier shape. So a new column
-        only appears when ``migrate_schema.py`` adds it.
-
-        That makes the indexes at the end of the file a problem on exactly the
-        database that most needs them -- ``CREATE INDEX idx_saves_uid ON saves
-        (uid)`` fails with "no such column" on a table whose uid column has not
-        been migrated yet, and takes the whole boot down with it. Those
-        statements are skipped with a note; the column and its index arrive
-        together when the migration runs.
-
-        A fresh database is unaffected: there the tables are created with the
-        columns, so every index applies.
-        """
-        for statement in script.split(";"):
-            if not statement.strip():
-                continue
-            try:
-                connection.execute(statement)
-            except Exception as error:
-                if "no such column" in str(error).lower():
-                    print("save_store: skipped an index on a column that is not "
-                          "there yet; run migrate_schema.py --apply:", error)
-                else:
-                    raise
-        connection.close()
-
-    def _ensure_schema_mariadb(self) -> None:
         """Create the database if it is missing, then apply the schema.
 
-        Two connections, on purpose. ``_connect`` asks for the database by name,
-        and a database that does not exist yet cannot be connected to -- so the
-        CREATE has to run against the server, and only then can the real
-        connection be opened.
+        Two connections, on purpose. ``_connect`` asks for the database by name
+        and a database that does not exist yet cannot be connected to, so the
+        CREATE runs against the server and only then is the real one opened.
 
-        The statements are split on ``;`` rather than handed to executescript,
-        which is a sqlite3 method with no MariaDB equivalent. The leading BOM is
-        stripped because PowerShell leaves one in files it has touched, and
-        MariaDB rejects it where sqlite3 quietly ignored it.
+        Statements are split on ``;`` and run one at a time: a statement that
+        fails must not take the whole boot with it, and a skipped index on a
+        column a migration has not added yet should say so rather than be fatal.
         """
         from urllib.parse import urlparse, urlunparse
 
-        with open(MARIADB_SCHEMA_PATH, encoding="utf-8") as handle:
-            script = handle.read().lstrip("﻿")
+        with open(SCHEMA_PATH, encoding="utf-8") as handle:
+            script = handle.read().lstrip("\ufeff")
 
         database = urlparse(self.path).path.strip("/")
         if not database:
-            return
+            raise ValueError(
+                f"{self.path!r} has no database name; SAVE_STORE_PATH must be a "
+                "mariadb://user:password@host:port/database URL")
 
-        bootstrap = Dialect.connect(urlunparse(urlparse(self.path)._replace(path="")))
+        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="")))
         try:
             bootstrap.execute(
                 f"CREATE DATABASE IF NOT EXISTS `{database}` "
@@ -349,17 +290,9 @@ class Store:
 
         connection = self._connect()
         try:
-            for statement in script.split(";"):
+            for statement in strip_sql_comments(script).split(";"):
                 if statement.strip():
-                    try:
-                        connection.execute(statement)
-                    except Exception as error:
-                        if "no such column" in str(error).lower():
-                            print("save_store: skipped an index on a column "
-                                  "that is not there yet; run "
-                                  "migrate_schema.py --apply:", error)
-                        else:
-                            raise
+                    connection.execute(statement)
         finally:
             connection.close()
 
@@ -379,15 +312,13 @@ class Store:
 
     @staticmethod
     def _exec(connection, sql: str, params=()):
-        """Run a parameterised statement on either engine.
+        """Run a parameterised statement.
 
-        Every query here is written with ``?`` placeholders, which is what
-        sqlite3 wants. pymysql wants ``%s`` and treats a ``?`` as literal text,
-        so a parameterised query would quietly store the wrong thing instead of
-        failing. Translating here means the queries stay written once.
+        No placeholder translation: MariaDB wants ``%s`` and that is what the
+        queries are written with. They used to be written with sqlite3's ``?``
+        and rewritten here, which meant a query sent anywhere else stored the
+        literal ``?`` instead of the value -- silently, without an error.
         """
-        if isinstance(connection, MariaConnection):
-            return connection.execute(sql.replace("?", "%s"), params)
         return connection.execute(sql, params) if params else connection.execute(sql)
 
     # ------------------------------------------------------------------ read --
@@ -402,7 +333,7 @@ class Store:
         try:
             row = self._exec(
                     connection, 
-                "SELECT store_id, revision, data FROM saves WHERE store_id = ?",
+                "SELECT store_id, revision, data FROM saves WHERE store_id = %s",
                 (store_id,),
             ).fetchone()
         finally:
@@ -418,7 +349,7 @@ class Store:
         try:
             row = self._exec(
                     connection, 
-                "SELECT 1 FROM saves WHERE store_id = ?", (store_id,)).fetchone()
+                "SELECT 1 FROM saves WHERE store_id = %s", (store_id,)).fetchone()
         finally:
             connection.close()
         return row is not None
@@ -441,7 +372,7 @@ class Store:
         try:
             row = self._exec(
                 connection,
-                "SELECT store_id, revision, data FROM saves WHERE uid = ? LIMIT 1",
+                "SELECT store_id, revision, data FROM saves WHERE uid = %s LIMIT 1",
                 (uid,)).fetchone()
         finally:
             connection.close()
@@ -472,7 +403,7 @@ class Store:
         try:
             self._exec(
                 connection,
-                "UPDATE saves SET uid = ? WHERE store_id = ? AND uid IS NULL",
+                "UPDATE saves SET uid = %s WHERE store_id = %s AND uid IS NULL",
                 (uid, store_id))
             return True
         finally:
@@ -515,12 +446,10 @@ class Store:
             # front; MariaDB spells it START TRANSACTION, which is immediate by
             # default. Either way the point is that the snapshot and the new
             # row land together.
-            connection.execute(
-                "START TRANSACTION" if isinstance(connection, MariaConnection)
-                else "BEGIN IMMEDIATE")
+            connection.execute("START TRANSACTION")
             existing = self._exec(
                 connection,
-                "SELECT id, revision FROM saves WHERE store_id = ?",
+                "SELECT id, revision FROM saves WHERE store_id = %s",
                 (store_id,)).fetchone()
 
             if existing is None:
@@ -531,7 +460,7 @@ class Store:
                 self._exec(
                     connection,
                     "INSERT INTO saves (store_id, revision, uid, data, "
-                    "created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)",
+                    "created_at, updated_at) VALUES (%s, 1, %s, %s, %s, %s)",
                     (store_id, uid, blob, now, now))
                 connection.execute("COMMIT")
                 return 1
@@ -545,18 +474,18 @@ class Store:
             # Keep what is being replaced, not what is replacing it.
             previous = self._exec(
                     connection, 
-                "SELECT data FROM saves WHERE id = ?",
+                "SELECT data FROM saves WHERE id = %s",
                 (existing["id"],)).fetchone()["data"]
             self._exec(
                     connection, 
                 "INSERT INTO save_backups (save_id, revision, reason, data, "
-                "created_at) VALUES (?, ?, ?, ?, ?)",
+                "created_at) VALUES (%s, %s, %s, %s, %s)",
                 (existing["id"], current, reason, previous, now))
 
             self._exec(
                     connection,
-                "UPDATE saves SET revision = ?, data = ?, uid = ?, updated_at = ? "
-                "WHERE id = ? AND revision = ?",
+                "UPDATE saves SET revision = %s, data = %s, uid = %s, updated_at = %s "
+                "WHERE id = %s AND revision = %s",
                 (current + 1, blob, uid, now, existing["id"], current))
 
             self._trim(connection, existing["id"])
@@ -586,7 +515,7 @@ class Store:
         """
         rows = self._exec(
             connection,
-            "SELECT id FROM save_backups WHERE save_id = ? ORDER BY revision DESC",
+            "SELECT id FROM save_backups WHERE save_id = %s ORDER BY revision DESC",
             (save_id,)).fetchall()
         # Everything past the newest `keep`. No LIMIT/OFFSET at all: MariaDB
         # rejects a placeholder in OFFSET (error 1064), and sqlite3 rejects the
@@ -595,7 +524,7 @@ class Store:
         stale = [row["id"] for row in rows[self.keep:]]
 
         if stale:
-            placeholders = ",".join("?" * len(stale))
+            placeholders = ",".join(["%s"] * len(stale))
             self._exec(
                 connection,
                 f"DELETE FROM save_backups WHERE id IN ({placeholders})",
@@ -622,7 +551,7 @@ class Store:
                 "SELECT b.save_id, b.revision, b.reason, LENGTH(b.data) AS size, "
                 "       b.created_at "
                 "  FROM save_backups b JOIN saves s ON s.id = b.save_id "
-                " WHERE s.store_id = ? ORDER BY b.revision DESC LIMIT ?",
+                " WHERE s.store_id = %s ORDER BY b.revision DESC LIMIT %s",
                 (store_id, limit)).fetchall()
         finally:
             connection.close()
@@ -637,7 +566,7 @@ class Store:
             row = self._exec(
                     connection, 
                 "SELECT b.data FROM save_backups b JOIN saves s ON s.id = b.save_id "
-                " WHERE s.store_id = ? AND b.revision = ?",
+                " WHERE s.store_id = %s AND b.revision = %s",
                 (store_id, revision)).fetchone()
         finally:
             connection.close()
@@ -663,7 +592,7 @@ class Store:
         try:
             cursor = self._exec(
                     connection, 
-                "DELETE FROM saves WHERE store_id = ?", (store_id,))
+                "DELETE FROM saves WHERE store_id = %s", (store_id,))
         finally:
             connection.close()
         return cursor.rowcount > 0

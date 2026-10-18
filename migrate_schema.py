@@ -11,8 +11,7 @@
     running this twice is a no-op.
 
     Usage:
-        python migrate_schema.py                          # dry run, SQLite
-        python migrate_schema.py --apply
+        python migrate_schema.py --path mariadb://...          # dry run
         python migrate_schema.py --path mariadb://... --apply
 """
 
@@ -21,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from save_store import MariaConnection, Store
+from save_store import Store
 
 # (table, column, DDL to add it). The index is a separate step because it
 # depends on the column and MariaDB will not add one for a missing column.
@@ -38,16 +37,11 @@ INDEXES = [
 def table_columns(store: Store, table: str) -> set:
     connection = store._connect()
     try:
-        if isinstance(connection, MariaConnection):
-            rows = store._exec(
-                connection,
-                "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-                (table,)).fetchall()
-        else:
-            rows = store._exec(
-                connection, f"PRAGMA table_info({table})").fetchall()
-            return {row["name"] for row in rows}
+        rows = store._exec(
+            connection,
+            "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+            (table,)).fetchall()
         return {row["name"] for row in rows}
     finally:
         connection.close()
@@ -56,15 +50,10 @@ def table_columns(store: Store, table: str) -> set:
 def index_names(store: Store) -> set:
     connection = store._connect()
     try:
-        if isinstance(connection, MariaConnection):
-            rows = store._exec(
-                connection,
-                "SELECT DISTINCT INDEX_NAME AS name FROM information_schema."
-                "STATISTICS WHERE TABLE_SCHEMA = DATABASE()").fetchall()
-        else:
-            rows = store._exec(
-                connection,
-                "SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+        rows = store._exec(
+            connection,
+            "SELECT DISTINCT INDEX_NAME AS name FROM information_schema."
+            "STATISTICS WHERE TABLE_SCHEMA = DATABASE()").fetchall()
         return {row["name"] for row in rows}
     finally:
         connection.close()
@@ -72,8 +61,8 @@ def index_names(store: Store) -> set:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--path", default="instance/save.db",
-                        help="a database file, or a mariadb:// URL")
+    parser.add_argument("--path", required=True,
+                        help="mariadb://user:password@host:port/database")
     parser.add_argument("--apply", action="store_true",
                         help="run the statements; without it, only report them")
     args = parser.parse_args()

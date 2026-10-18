@@ -27,14 +27,14 @@ import {
 import { zidForUser } from '#lib/ids';
 import { resetDb } from "./helpers.ts";
 
-beforeEach(() => {
-  resetDb();
+beforeEach(async () => {
+  await resetDb();
 });
 
 describe("createUser", () => {
   test("stores an argon2id hash, never the password", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    const stored = findByUsername("ana");
+    const stored = await findByUsername("ana");
 
     expect(stored).not.toBeNull();
     expect(stored?.password_hash).not.toContain("hunter2");
@@ -44,7 +44,7 @@ describe("createUser", () => {
 
   test("verifies the right password and rejects the wrong one", async () => {
     await createUser("ana", "hunter2hunter2");
-    const user = findByUsername("ana");
+    const user = await findByUsername("ana");
     if (!user) throw new Error("setup failed");
 
     expect(await verifyPassword(user, "hunter2hunter2")).toBe(true);
@@ -67,19 +67,19 @@ describe("createUser", () => {
 
   test("rejects a duplicate username regardless of case", async () => {
     await createUser("ana", "hunter2hunter2");
-    expect(createUser("ANA", "hunter2hunter2")).rejects.toBeInstanceOf(UsernameTaken);
-    expect(createUser("  Ana  ", "hunter2hunter2")).rejects.toBeInstanceOf(UsernameTaken);
+    expect(await createUser("ANA", "hunter2hunter2")).rejects.toBeInstanceOf(UsernameTaken);
+    expect(await createUser("  Ana  ", "hunter2hunter2")).rejects.toBeInstanceOf(UsernameTaken);
   });
 
   test("enforces length rules", async () => {
-    expect(createUser("ab", "hunter2hunter2")).rejects.toBeInstanceOf(RangeError);
-    expect(createUser("a".repeat(25), "hunter2hunter2")).rejects.toBeInstanceOf(RangeError);
-    expect(createUser("valid", "short")).rejects.toBeInstanceOf(RangeError);
+    expect(await createUser("ab", "hunter2hunter2")).rejects.toBeInstanceOf(RangeError);
+    expect(await createUser("a".repeat(25), "hunter2hunter2")).rejects.toBeInstanceOf(RangeError);
+    expect(await createUser("valid", "short")).rejects.toBeInstanceOf(RangeError);
   });
 
   test("seeds a progress row so a fresh account is immediately playable", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    const progress = getProgress(user.id);
+    const progress = await getProgress(user.id);
 
     expect(progress).not.toBeNull();
     expect(progress?.level).toBe(1);
@@ -89,7 +89,7 @@ describe("createUser", () => {
 
   test("finds a user by the zid the gateway will be given", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    expect(findByZid(user.zid)?.username).toBe("ana");
+    expect(await findByZid(user.zid)?.username).toBe("ana");
   });
 
   test("normalizeUsername folds case and surrounding space", () => {
@@ -100,10 +100,10 @@ describe("createUser", () => {
 describe("progress", () => {
   test("patches only the fields given", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    const before = getProgress(user.id);
+    const before = await getProgress(user.id);
     if (!before) throw new Error("createUser must seed a progress row");
 
-    const after = updateProgress(user.id, { level: 12 });
+    const after = await updateProgress(user.id, { level: 12 });
 
     expect(after.level).toBe(12);
     expect(after.xp).toBe(before.xp);
@@ -111,7 +111,7 @@ describe("progress", () => {
   });
 
   test("throws for a user with no progress row", () => {
-    expect(() => updateProgress(9999, { level: 2 })).toThrow();
+    expect(() => await updateProgress(9999, { level: 2 })).toThrow();
   });
 });
 
@@ -124,73 +124,73 @@ describe("friendships", () => {
 
   test("starts as none", async () => {
     const { ana, beto } = await twoUsers();
-    expect(friendshipStatus(ana.id, beto.id)).toEqual({ status: "none", outgoing: false });
+    expect(await friendshipStatus(ana.id, beto.id)).toEqual({ status: "none", outgoing: false });
   });
 
   test("a request is pending and one-directional in status", async () => {
     const { ana, beto } = await twoUsers();
-    expect(addFriend(ana.id, beto.id)).toBe("pending");
+    expect(await addFriend(ana.id, beto.id)).toBe("pending");
 
-    expect(friendshipStatus(ana.id, beto.id)).toEqual({ status: "pending", outgoing: true });
-    expect(friendshipStatus(beto.id, ana.id)).toEqual({ status: "pending", outgoing: false });
+    expect(await friendshipStatus(ana.id, beto.id)).toEqual({ status: "pending", outgoing: true });
+    expect(await friendshipStatus(beto.id, ana.id)).toEqual({ status: "pending", outgoing: false });
   });
 
   test("the reverse request accepts rather than duplicating", async () => {
     const { ana, beto } = await twoUsers();
-    addFriend(ana.id, beto.id);
-    expect(addFriend(beto.id, ana.id)).toBe("accepted");
+    await addFriend(ana.id, beto.id);
+    expect(await addFriend(beto.id, ana.id)).toBe("accepted");
 
-    expect(friendshipStatus(ana.id, beto.id).status).toBe("accepted");
-    expect(friendshipStatus(beto.id, ana.id).status).toBe("accepted");
+    expect(await friendshipStatus(ana.id, beto.id).status).toBe("accepted");
+    expect(await friendshipStatus(beto.id, ana.id).status).toBe("accepted");
   });
 
   test("accepting is idempotent", async () => {
     const { ana, beto } = await twoUsers();
-    addFriend(ana.id, beto.id);
-    addFriend(beto.id, ana.id);
-    expect(addFriend(ana.id, beto.id)).toBe("accepted");
+    await addFriend(ana.id, beto.id);
+    await addFriend(beto.id, ana.id);
+    expect(await addFriend(ana.id, beto.id)).toBe("accepted");
   });
 
   test("only accepted friends show up in the list", async () => {
     const { ana, beto } = await twoUsers();
-    addFriend(ana.id, beto.id);
-    expect(listFriends(ana.id)).toHaveLength(0);
+    await addFriend(ana.id, beto.id);
+    expect(await listFriends(ana.id)).toHaveLength(0);
 
-    addFriend(beto.id, ana.id);
-    expect(listFriends(ana.id).map((f) => f.username)).toEqual(["beto"]);
-    expect(listFriends(beto.id).map((f) => f.username)).toEqual(["ana"]);
+    await addFriend(beto.id, ana.id);
+    expect(await listFriends(ana.id).map((f) => f.username)).toEqual(["beto"]);
+    expect(await listFriends(beto.id).map((f) => f.username)).toEqual(["ana"]);
   });
 
   test("removing clears both directions", async () => {
     const { ana, beto } = await twoUsers();
-    addFriend(ana.id, beto.id);
-    addFriend(beto.id, ana.id);
-    removeFriend(ana.id, beto.id);
+    await addFriend(ana.id, beto.id);
+    await addFriend(beto.id, ana.id);
+    await removeFriend(ana.id, beto.id);
 
-    expect(friendshipStatus(ana.id, beto.id).status).toBe("none");
-    expect(listFriends(ana.id)).toHaveLength(0);
-    expect(listFriends(beto.id)).toHaveLength(0);
+    expect(await friendshipStatus(ana.id, beto.id).status).toBe("none");
+    expect(await listFriends(ana.id)).toHaveLength(0);
+    expect(await listFriends(beto.id)).toHaveLength(0);
   });
 
   test("cannot befriend yourself", async () => {
     const { ana } = await twoUsers();
-    expect(() => addFriend(ana.id, ana.id)).toThrow();
+    expect(() => await addFriend(ana.id, ana.id)).toThrow();
   });
 
   test("rejects an unknown target", async () => {
     const { ana } = await twoUsers();
-    expect(() => addFriend(ana.id, 9999)).toThrow();
+    expect(() => await addFriend(ana.id, 9999)).toThrow();
   });
 
   test("suggestions exclude yourself and existing friends", async () => {
     const { ana, beto } = await twoUsers();
     await createUser("cami", "hunter2hunter2");
 
-    expect(suggestFriends(ana.id).map((s) => s.username)).toEqual(["beto", "cami"]);
+    expect(await suggestFriends(ana.id).map((s) => s.username)).toEqual(["beto", "cami"]);
 
-    addFriend(ana.id, beto.id);
-    addFriend(beto.id, ana.id);
-    expect(suggestFriends(ana.id).map((s) => s.username)).toEqual(["cami"]);
+    await addFriend(ana.id, beto.id);
+    await addFriend(beto.id, ana.id);
+    expect(await suggestFriends(ana.id).map((s) => s.username)).toEqual(["cami"]);
   });
 });
 
@@ -198,13 +198,13 @@ describe("roles", () => {
   test("new accounts are players by default", async () => {
     const user = await createUser("ana", "hunter2hunter2");
     expect(user.role).toBe("player");
-    expect(isAdmin(findByUsername("ana"))).toBe(false);
+    expect(await isAdmin(await findByUsername("ana"))).toBe(false);
   });
 
   test("an account can be created as admin directly", async () => {
     const user = await createUser("root", "hunter2hunter2", "admin");
     expect(user.role).toBe("admin");
-    expect(isAdmin(findByUsername("root"))).toBe(true);
+    expect(await isAdmin(await findByUsername("root"))).toBe(true);
   });
 
   test("setRole promotes and demotes", async () => {
@@ -213,44 +213,44 @@ describe("roles", () => {
     await createUser("root", "hunter2hunter2", "admin");
     const user = await createUser("ana", "hunter2hunter2");
 
-    setRole(user.id, "admin");
-    expect(isAdmin(findById(user.id))).toBe(true);
+    await setRole(user.id, "admin");
+    expect(await isAdmin(await findById(user.id))).toBe(true);
 
-    setRole(user.id, "player");
-    expect(isAdmin(findById(user.id))).toBe(false);
+    await setRole(user.id, "player");
+    expect(await isAdmin(await findById(user.id))).toBe(false);
   });
 
   test("the last admin cannot be demoted", async () => {
     // Otherwise one call locks every moderator out of their own server.
     const only = await createUser("root", "hunter2hunter2", "admin");
-    expect(() => setRole(only.id, "player")).toThrow("last admin");
+    expect(() => await setRole(only.id, "player")).toThrow("last admin");
 
     const second = await createUser("other", "hunter2hunter2", "admin");
-    expect(() => setRole(second.id, "player")).not.toThrow();
-    expect(() => setRole(only.id, "player")).toThrow("last admin");
+    expect(() => await setRole(second.id, "player")).not.toThrow();
+    expect(() => await setRole(only.id, "player")).toThrow("last admin");
   });
 
   test("rejects an unknown role", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    expect(() => setRole(user.id, "root" as Role)).toThrow("unknown role");
+    expect(() => await setRole(user.id, "root" as Role)).toThrow("unknown role");
   });
 });
 
 describe("activity", () => {
   test("records and reads back newest first", async () => {
     const user = await createUser("ana", "hunter2hunter2");
-    recordActivity(user.id, "login");
-    recordActivity(user.id, "friend.add", "beto");
+    await recordActivity(user.id, "login");
+    await recordActivity(user.id, "friend.add", "beto");
 
-    const rows = recentActivity(user.id);
+    const rows = await recentActivity(user.id);
     expect(rows).toHaveLength(2);
     expect(rows[0]?.kind).toBe("friend.add");
     expect(rows[0]?.detail).toBe("beto");
   });
 
   test("records anonymous activity with no user", () => {
-    recordActivity(null, "login.failed", "ghost");
+    await recordActivity(null, "login.failed", "ghost");
     // Anonymous rows must not leak into any player's feed.
-    expect(recentActivity(12345)).toHaveLength(0);
+    expect(await recentActivity(12345)).toHaveLength(0);
   });
 });

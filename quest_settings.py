@@ -1,5 +1,5 @@
+from pathlib import Path
 import json
-import os
 
 import mod_engine
 from language_settings import language_strings
@@ -7,7 +7,7 @@ from save_engine import my_games_path
 
 
 def read_quest_settings():
-    with open(quest_settings_path) as f:
+    with open(quest_settings_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -15,7 +15,7 @@ def simple_list(raw_list):
     return (raw_list if isinstance(raw_list, list) else [raw_list]) if raw_list != '' else []
 
 print("Loading Quest settings")
-quest_settings_path = os.path.join(my_games_path(), "questsettings-converted.json")
+quest_settings_path = str(Path(my_games_path()) / "questsettings-converted.json")
 quest_settings = json.loads(mod_engine.mod.get(quest_settings_path)()) if quest_settings_path in mod_engine.mod else read_quest_settings()
 print("Loading sequels")
 sequels = { q["_name"]:[t["_name"] for s in simple_list(q["sequels"]) for t in simple_list(s["sequel"])] for q in quest_settings['quests']['quest']}

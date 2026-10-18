@@ -133,9 +133,9 @@ describe('role and session round trip', () => {
 
 	test('isAdmin agrees with the decision', async () => {
 		const { user } = await makeUser('root', 'admin');
-		expect(isAdmin(user)).toBe(true);
+		expect(await isAdmin(user)).toBe(true);
 		const plain = await createUser('ana', 'hunter2hunter2');
-		expect(isAdmin(plain)).toBe(false);
+		expect(await isAdmin(plain)).toBe(false);
 	});
 });
 
@@ -151,12 +151,12 @@ async function userFor(request: Request) {
 	const id = await readSession(request);
 	if (id === null) return null;
 	const { findById } = await import('#lib/server/models/accounts');
-	return findById(id);
+	return await findById(id);
 }
 
 async function demote(userId: number) {
 	const { run } = await import('#lib/server/db/client');
-	run('UPDATE users SET role = ? WHERE id = ?', 'player', userId);
+	await run('UPDATE users SET role = ? WHERE id = ?', 'player', userId);
 }
 
 describe('adminOnlyPaths', () => {

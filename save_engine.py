@@ -2,12 +2,11 @@ import configparser
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from functools import reduce
 from pathlib import Path
 
-import daiquiri
-import editor
 from flask import current_app, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
@@ -218,23 +217,28 @@ def exception_handler(exc_type, exc_value, exc_traceback):
     log_file = os.path.join(log_path(), "log.txt")
     if crash_log:
         if _crash_editor_allowed():
-            editor.edit(filename=log_file)
+            try:
+                subprocess.Popen(["notepad", log_file] if os.name == "nt" else ["xdg-open", log_file])
+            except Exception as e:
+                logger.error("Could not launch crash editor: %s", e)
         else:
             logger.error("Crash log editor suppressed (automated run); see %s", log_file)
-
-# logger = logging.getLogger(__name__)
-# handler = logging.StreamHandler(stream=sys.stdout)
-# logger.addHandler(handler)
 
 
 config = configparser.ConfigParser()
 config.read('RaiseTheEmpires.ini')
 
-daiquiri.setup(level=logging.INFO, outputs=(
-    daiquiri.output.Stream(sys.stdout),
-    daiquiri.output.File(os.path.join(log_path(), "log.txt"), formatter=daiquiri.formatter.TEXT_FORMATTER),
-    ))
-logger = daiquiri.getLogger(__name__)
+# Standard logging configuration replacing daiquiri
+log_format = "%(asctime)s [%(process)d] %(levelname)-8s %(name)s: %(message)s"
+logging.basicConfig(
+    level=logging.INFO,
+    format=log_format,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(os.path.join(log_path(), "log.txt"), encoding="utf-8")
+    ]
+)
+logger = logging.getLogger(__name__)
 
 sys.excepthook = exception_handler
 

@@ -22,6 +22,8 @@ that replaces what the old ones checked.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from conftest import asset_status
@@ -122,7 +124,7 @@ class TestTheFormatIsTheReadersFormat:
 
         with store._connect() as connection:
             blobs = [row["data"] for row in
-                     connection.execute("SELECT data FROM saves")]
+                     connection.execute("SELECT data FROM saves").fetchall()]
 
         # Every row, not LIMIT 1: the database is shared with the rest of the
         # suite and other modules leave rows of their own behind. What matters
@@ -199,15 +201,20 @@ class TestAMissingRowIsNotACrash:
         store = store_of(gateway_app)
 
         with gateway_app.app_context():
+            # A unique key: the database is session-scoped and shared, so a
+            # fixed one would find whatever the last run left at it and the
+            # revision assertion would be about that, not about this.
+            key = "session:acct-stale-" + uuid.uuid4().hex[:12]
+
             # A save read at the current revision, then somebody else writes.
-            save = {"session_id": "session:acct-stale", "__save_revision": 1,
+            save = {"session_id": key, "__save_revision": 1,
                     "user_object": {"level": 1}}
-            store.store("session:acct-stale", {"user_object": {"level": 1}})
+            store.store(key, {"user_object": {"level": 1}})
 
             assert store_session(save) is True      # revision 1, current is 1
             assert store_session(save) is False     # revision 1, current is 2
 
-            assert store.load("session:acct-stale").data["user_object"]["level"] == 1, \
+            assert store.load(key).data["user_object"]["level"] == 1, \
                 "a refused write must not have changed anything"
 
 

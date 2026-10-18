@@ -5,7 +5,7 @@
     "": {
       "name": "raisetheempires-web",
       "dependencies": {
-        "@ruffle-rs/ruffle": "0.7.1",
+        "@ruffle-rs/ruffle": "^0.8.0-nightly.2026.10.18",
         "flowbite": "^4.0.2",
         "flowbite-svelte": "^1.33.1",
       },
@@ -84,7 +84,7 @@
 
     "@rollup/pluginutils": ["@rollup/pluginutils@5.4.0", "", { "dependencies": { "@types/estree": "^1.0.0", "estree-walker": "^2.0.2", "picomatch": "^4.0.2" }, "peerDependencies": { "rollup": "^1.20.0||^2.0.0||^3.0.0||^4.0.0" }, "optionalPeers": ["rollup"] }, "sha512-MfPp06CjRLfXQ3wY0R8vJDYBy/MvVcc9OulEfR0B8Iv9ko+GCNaRZ+EpJYFl27LhKsZK0o420sYCRHCjfCgeUg=="],
 
-    "@ruffle-rs/ruffle": ["@ruffle-rs/ruffle@0.7.1", "", {}, "sha512-6ZWxx/cfX3RoNyQ1AVimECSae4gKqMxdPimOD+chiIcOFiJS0ATGKcjkretxNT03lqNUpiSyJjF55AuvvZ+QeA=="],
+    "@ruffle-rs/ruffle": ["@ruffle-rs/ruffle@0.8.0-nightly.2026.10.18", "", {}, "sha512-ExvhtAt02yRzYvvTTOWNoP19MYuB0C0mhtn5WekKgqku9f3AK5WpWXrF65nBebD71bnZbks0avMoOJC8UKpGHg=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 

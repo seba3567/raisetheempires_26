@@ -35,7 +35,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.secure = isSecureRequest(event.request);
 
 	const userId = await readSession(event.request);
-	const user = userId === null ? null : findById(userId);
+	const user = userId === null ? null : await findById(userId);
 	event.locals.user = user ? publicUser(user) : null;
 
 	const publicOrigin = publicOriginFor(event.url);

@@ -1,4 +1,4 @@
-import getopt
+import argparse
 import sys
 
 debug = False
@@ -12,32 +12,39 @@ compression = True
 caching = True
 app_mode = True
 
+
 def read_ops():
     global host, port, http_host, http_path, debug, open_browser, crash_log, compression, caching, app_mode
+    parser = argparse.ArgumentParser(description="RaiseTheEmpires server options", add_help=False)
+    parser.add_argument("--host", default=host, help="Host to listen on")
+    parser.add_argument("--port", type=int, default=port, help="Port to listen on")
+    parser.add_argument("--http-host", default=http_host, help="Host to open in browser")
+    parser.add_argument("--http-path", default=http_path, help="Path to open in browser")
+    parser.add_argument("--debug", action="store_true", default=debug, help="Enable debug mode")
+    parser.add_argument("--no-popup", dest="open_browser", action="store_false", help="Disable browser popup")
+    parser.add_argument("--no-crash-log", dest="crash_log", action="store_false", help="Disable crash log editor")
+    parser.add_argument("--no-compression", dest="compression", action="store_false", help="Disable HTTP compression")
+    parser.add_argument("--no-caching", dest="caching", action="store_false", help="Disable cache")
+    parser.add_argument("--no-app_mode", dest="app_mode", action="store_false", help="Disable app mode")
+
     try:
-        opts, _args = getopt.getopt(sys.argv[1:], "", ["debug", "host=", "port=", "http-host=", "http-path=", "no-popup", "no-crash-log", "no-compression", "no-caching", "no-app_mode"])
-    except getopt.GetoptError as e:
-        print("Error:", e.msg)
+        args, _ = parser.parse_known_args(sys.argv[1:])
+    except Exception as e:
+        print("Error parsing options:", e)
         sys.exit(1)
 
-    for o, a in opts:
-        if o == '--host':
-            host = a
-        elif o == '--port':
-            port = int(a)
-        elif o == '--http-host':
-            http_host = a
-        elif o == '--http-path':
-            http_path = a
-        elif o == '--debug':
-            debug = True
-        elif o == '--no-popup':
-            open_browser = False
-        elif o == '--no-crash-log':
-            crash_log = False
-        elif o == '--no-compression':
-            compression = False
-        elif o == '--no-caching':
-            caching = False
-        elif o == '--no-app_mode':
-            app_mode = False
+    host = args.host
+    port = args.port
+    http_host = args.http_host
+    http_path = args.http_path
+    debug = args.debug
+    if args.open_browser is not None:
+        open_browser = args.open_browser
+    if args.crash_log is not None:
+        crash_log = args.crash_log
+    if args.compression is not None:
+        compression = args.compression
+    if args.caching is not None:
+        caching = args.caching
+    if args.app_mode is not None:
+        app_mode = args.app_mode

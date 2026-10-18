@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 	 * It is kept only as the fallback for an account that has never played.
 	 */
 	const state = await fetchPlayerState(request, user.zid);
-	const stored = getProgress(user.id);
+	const stored = await getProgress(user.id);
 	const hasSave = state?.hasSave ?? false;
 
 	// The catalogue, so this page does not hardcode the filenames. `state.picture`
@@ -38,8 +38,11 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 			resources: state?.resources ?? {},
 			picture: state?.picture ?? null
 		},
-		friends: listFriends(user.id),
-		suggestions: suggestFriends(user.id)
+		// Awaited together rather than started and collected: Bun's SQL client
+		// pools connections, and three in-flight queries on one request would
+		// take three of them.
+		friends: await listFriends(user.id),
+		suggestions: await suggestFriends(user.id)
 	};
 };
 
@@ -83,10 +86,10 @@ export const actions: Actions = {
 		if (!locals.user) redirect(303, '/entrar');
 
 		const form = await request.formData();
-		const target = findByUsername(String(form.get('friend') ?? ''));
+		const target = await findByUsername(String(form.get('friend') ?? ''));
 		if (target) {
-			addFriend(locals.user.id, target.id);
-			recordActivity(locals.user.id, 'friend.add', target.username);
+			await addFriend(locals.user.id, target.id);
+			await recordActivity(locals.user.id, 'friend.add', target.username);
 		}
 		return { added: target?.username ?? null };
 	},
@@ -95,10 +98,10 @@ export const actions: Actions = {
 		if (!locals.user) redirect(303, '/entrar');
 
 		const form = await request.formData();
-		const target = findByUsername(String(form.get('friend') ?? ''));
+		const target = await findByUsername(String(form.get('friend') ?? ''));
 		if (target) {
-			removeFriend(locals.user.id, target.id);
-			recordActivity(locals.user.id, 'friend.remove', target.username);
+			await removeFriend(locals.user.id, target.id);
+			await recordActivity(locals.user.id, 'friend.remove', target.username);
 		}
 		return { removed: target?.username ?? null };
 	}

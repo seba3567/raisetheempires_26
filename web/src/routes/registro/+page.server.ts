@@ -23,7 +23,7 @@ export const actions: Actions = {
 		try {
 			const user = await createUser(username, password);
 			userId = user.id;
-			recordActivity(userId, 'register');
+			await recordActivity(userId, 'register');
 		} catch (cause) {
 			if (cause instanceof UsernameTaken) {
 				return fail(409, {
@@ -37,7 +37,7 @@ export const actions: Actions = {
 			throw cause;
 		}
 
-		touchLastSeen(userId);
+		await touchLastSeen(userId);
 		await setSessionCookie(cookies, userId, locals.secure);
 
 		// Straight into the player. home.html, the 2012 Facebook frame with a

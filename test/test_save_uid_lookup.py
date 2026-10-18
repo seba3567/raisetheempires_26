@@ -17,14 +17,27 @@ an exception unless it was declared required.
 """
 from __future__ import annotations
 
+import os
+import uuid
+
 import pytest
 
 from save_store import Store, save_uid
 
+# Store takes a mariadb:// URL; there is no SQLite fallback any more, so each
+# test names its own throwaway database on the shared server.
+SERVER = os.environ.get("RTE_TEST_MARIADB",
+                        "mariadb://root:2001@127.0.0.1:3306/rte_uid_test")
+
+
+def a_store() -> Store:
+    base = SERVER.rsplit("/", 1)[0]
+    return Store(f"{base}/rte_uid_{uuid.uuid4().hex[:10]}")
+
 
 @pytest.fixture
-def store(tmp_path):
-    return Store(str(tmp_path / "saves.db"))
+def store():
+    return a_store()
 
 
 def empire(uid, level=1, name="Empire"):
@@ -100,7 +113,7 @@ class TestTheBackfill:
         store.store("acct1", empire(303))
         with store._connect() as connection:
             store._exec(connection,
-                        "UPDATE saves SET uid = NULL WHERE store_id = ?",
+                        "UPDATE saves SET uid = NULL WHERE store_id = %s",
                         ("acct1",))
 
         pending = store.rows_without_uid()
@@ -112,7 +125,7 @@ class TestTheBackfill:
         store.store("acct1", empire(303))
         with store._connect() as connection:
             store._exec(connection,
-                        "UPDATE saves SET uid = NULL WHERE store_id = ?",
+                        "UPDATE saves SET uid = NULL WHERE store_id = %s",
                         ("acct1",))
 
         for store_id, payload in store.rows_without_uid():

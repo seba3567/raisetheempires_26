@@ -1,3 +1,4 @@
+from pathlib import Path
 import copy
 import json
 import os
@@ -10,8 +11,8 @@ import mod_engine
 from crc64_go_iso import zid_from_sid
 from save_engine import my_games_path, validate_save
 
-game_settings_path = os.path.join(my_games_path(), "gamesettings-converted.json")
-initial_island_path = os.path.join(my_games_path(), "allies/initial-island.json")
+game_settings_path = str(Path(my_games_path()) / "gamesettings-converted.json")
+initial_island_path = str(Path(my_games_path()) / "allies" / "initial-island.json")
 
 # Header used by the SvelteKit front door to hand over the signed-in account's
 # identity. See get_zid().
