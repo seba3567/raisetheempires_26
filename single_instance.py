@@ -1,5 +1,6 @@
 """Platform-native single instance lock using msvcrt (Windows) and fcntl (Unix)."""
 
+import contextlib
 import os
 import tempfile
 
@@ -21,7 +22,8 @@ class SingleInstance:
 
     def _lock(self):
         try:
-            self.file_handle = open(self.lockfile, "w")
+            # We deliberately keep the file handle open for the lifetime of the process to maintain the lock
+            self.file_handle = open(self.lockfile, "w")  # noqa: SIM115
             self.file_handle.write(f"{os.getpid()}\n")
             self.file_handle.flush()
 
@@ -36,10 +38,8 @@ class SingleInstance:
                 fcntl.flock(self.file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             if self.file_handle:
-                try:
+                with contextlib.suppress(Exception):
                     self.file_handle.close()
-                except Exception:
-                    pass
             raise SingleInstanceException(
                 f"Another instance is already running with flavor '{self.flavor_id}' (lockfile: {self.lockfile})"
             ) from exc
@@ -59,7 +59,7 @@ class SingleInstance:
                 self.file_handle.close()
                 if os.path.exists(self.lockfile):
                     os.remove(self.lockfile)
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
             finally:
                 self.file_handle = None

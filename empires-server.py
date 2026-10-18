@@ -74,8 +74,9 @@ import json
 import random
 import threading  #, webbrowaser
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Any, Callable
+from typing import Any
 
 import pyamf
 import pyamf.amf0
@@ -630,7 +631,16 @@ def delete_save():
     in ``users`` is a different thing and survives, so deleting an empire does
     not delete the login.
     """
-    store_id = request.form.get('store_id') or request.args.get('store_id')
+    # Flask does not populate request.form for a DELETE -- it parses bodies for
+    # POST and PUT only -- so the id arrives here empty and every delete answers
+    # "falta el id". Parsed by hand rather than switched to POST: the verb is
+    # part of the contract, and a client that gets it wrong should not be able
+    # to delete anything.
+    store_id = request.values.get('store_id')
+    if not store_id:
+        from urllib.parse import parse_qs
+        store_id = (parse_qs(request.get_data(as_text=True) or '').get('store_id') or [None])[0]
+
     if not store_id:
         return jsonify({"ok": False, "message": "Falta el id de la partida"}), 400
 
@@ -3054,11 +3064,7 @@ def handle_my_custom_event(json):
 
 
 @socketio.on('delete_save')
-def delete_save(message):
-    # session.permanent = False
-    # session.clear() #unsolved flask-session bug
-
-    # print('deleted save: ' + message)
+def on_delete_save_socket(message):
     print("Save will be deleted after redirect " + message)
 
 
