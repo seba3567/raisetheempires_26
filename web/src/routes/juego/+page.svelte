@@ -185,14 +185,20 @@
 		void startPlayer();
 	}
 
+	// The service worker is deliberately NOT registered here. SvelteKit already
+	// registers it on every page, from src/service-worker.ts, and it does so with
+	// `{ type: 'module' }` -- which it has to, because the file is served as an ES
+	// module (`import '/@fs/.../service-worker.ts'`).
+	//
+	// This block registered the same URL as a *classic* worker, so the browser
+	// refused to evaluate it: "Uncaught SyntaxError: Cannot use import statement
+	// outside a module (at service-worker.js:1:1)". Registering a script URL twice
+	// is not a harmless no-op here; whichever registration loses is the one that
+	// throws, and it throws on every load of the game page.
+	//
+	// It was also registering only here, so offline asset caching was a property
+	// of this route rather than of the site.
 	onMount(() => {
-		// Register service worker for offline game assets caching
-		if ('serviceWorker' in navigator) {
-			navigator.serviceWorker.register('/service-worker.js').catch((err) => {
-				console.debug('ServiceWorker no disponible:', err);
-			});
-		}
-
 		return () => {
 			if (watchdog) clearTimeout(watchdog);
 			watchdog = null;
