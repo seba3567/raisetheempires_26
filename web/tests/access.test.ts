@@ -14,8 +14,10 @@ import { resetDb } from './helpers.ts';
 
 const ORIGIN = 'http://localhost:8080';
 
-beforeEach(() => {
-	resetDb();
+// Awaited for the same reason as in accounts.test.ts: an un-awaited hook lets
+// the test body race the TRUNCATE.
+beforeEach(async () => {
+	await resetDb();
 });
 
 describe('accessDenied classification', () => {
@@ -151,12 +153,14 @@ async function userFor(request: Request) {
 	const id = await readSession(request);
 	if (id === null) return null;
 	const { findById } = await import('#lib/server/models/accounts');
-	return findById(id);
+	return await findById(id);
 }
 
 async function demote(userId: number) {
 	const { run } = await import('#lib/server/db/client');
-	run('UPDATE users SET role = ? WHERE id = ?', 'player', userId);
+	// Awaited: a floating UPDATE let the assertion below read the role before
+	// the demotion landed, and the admin kept access he had just lost.
+	await run('UPDATE users SET role = ? WHERE id = ?', 'player', userId);
 }
 
 describe('adminOnlyPaths', () => {

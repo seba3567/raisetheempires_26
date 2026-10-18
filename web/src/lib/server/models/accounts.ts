@@ -1,10 +1,16 @@
 /**
  * Accounts, friendships and progress.
  *
- * Identity rule: the account id is assigned by the database sequence and the
- * game's ``zid`` is derived from it (see ids.ts). It is *not* derived from a
- * session cookie, which is what the Python server still does and why a cookie
- * rotation there can split one player's save in two.
+ * Identity rule: the account id is assigned by the application from a stable
+ * source (see ids.ts) and the game's ``zid`` is derived from it. It is *not*
+ * derived from a session cookie, which is what the Python server still does and
+ * why a cookie rotation there can split one player's save in two.
+ *
+ * Everything here is async. That is not a stylistic choice: MariaDB is reached
+ * over a socket through Bun's SQL client, and holding a synchronous handle open
+ * across a round trip is not something to do. The helpers in db/client keep the
+ * SQL and the ``?`` placeholders unchanged, so this file reads the way it did
+ * when it was talking to SQLite.
  */
 import { all, now, one, run, transact } from "../db/client.ts";
 import { zidForUserAsNumber } from "../../ids.ts";
@@ -48,10 +54,10 @@ type UserWithoutHash = Omit<User, "password_hash" | "zid">;
 /**
  * A user as the outside world sees it.
  *
- * `zid` is carried as a string even though the column is INTEGER. SQLite hands
- * back a JS number, and the value is safe today, but routing every identity
- * through one string representation removes a whole class of precision bug
- * from the JSON boundary.
+ * `zid` is carried as a string even though the column is BIGINT. MariaDB's
+ * client hands back a JS number for a BIGINT when it fits, and the value is
+ * safe today, but routing every identity through one string representation
+ * removes a whole class of precision bug from the JSON boundary.
  */
 export interface PublicUser extends UserWithoutHash {
   zid: string;
@@ -80,10 +86,23 @@ function defaultWorldName(username: string): string {
   return `${cleaned[0]?.toUpperCase()}${cleaned.slice(1)}'s Empire`;
 }
 
+/**
+ * The next account id.
+ *
+ * Not AUTO_INCREMENT: the id is assigned by the application so it comes from a
+ * stable source and a regenerated id can never orphan a save. MAX(id)+1 inside
+ * the transaction is safe here because the caller holds the write lock and a
+ * duplicate raises rather than colliding silently.
+ */
+async function nextUserId(): Promise<number> {
+  const row = await one<{ n: number | null }>("SELECT MAX(id) AS n FROM users");
+  return (row?.n ?? 0) + 1;
+}
+
 export async function createUser(
   username: string,
   password: string,
-  role: Role = "player",
+  role: Role = "player"
 ): Promise<PublicUser> {
   const trimmed = username.trim();
   const usernameKey = normalizeUsername(username);
@@ -95,58 +114,52 @@ export async function createUser(
     throw new RangeError("password must be at least 8 characters");
   }
 
-  const existing = one<{ id: number }>(
+  const existing = await one<{ id: number }>(
     "SELECT id FROM users WHERE username_key = ?",
-    usernameKey,
+    usernameKey
   );
   if (existing) throw new UsernameTaken(trimmed);
 
-  const passwordHash = await Bun.password.hash(password, {
-    algorithm: "argon2id",
-  });
+  const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
 
-  return transact(() => {
+  return transact(async () => {
     // The id has to exist before zid is derived from it, so insert then update.
-    run(
-      `INSERT INTO users (zid, username, username_key, password_hash, role, created_at)
-       VALUES (0, ?, ?, ?, ?, ?)`,
+    const id = await nextUserId();
+    await run(
+      `INSERT INTO users (id, zid, username, username_key, password_hash, role, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      0,
       trimmed,
       usernameKey,
       passwordHash,
       role,
-      now(),
+      now()
     );
-    const created = one<{ id: number }>(
-      "SELECT id FROM users WHERE username_key = ?",
-      usernameKey,
-    );
-    if (!created) throw new Error("user insert did not persist");
-
-    const id = created.id;
-    run("UPDATE users SET zid = ? WHERE id = ?", zidForUserAsNumber(id), id);
-    run(
+    await run("UPDATE users SET zid = ? WHERE id = ?", zidForUserAsNumber(id), id);
+    await run(
       `INSERT INTO progress (user_id, level, xp, world_name, updated_at)
        VALUES (?, 1, 0, ?, ?)`,
       id,
       defaultWorldName(trimmed),
-      now(),
+      now()
     );
 
-    const user = findById(id);
+    const user = await findById(id);
     if (!user) throw new Error("user insert did not persist");
     return publicUser(user);
   });
 }
 
-export function findById(id: number): User | null {
+export async function findById(id: number): Promise<User | null> {
   return one<User>("SELECT * FROM users WHERE id = ?", id);
 }
 
-export function findByUsername(username: string): User | null {
+export async function findByUsername(username: string): Promise<User | null> {
   return one<User>("SELECT * FROM users WHERE username_key = ?", normalizeUsername(username));
 }
 
-export function findByZid(zid: string | number): User | null {
+export async function findByZid(zid: string | number): Promise<User | null> {
   return one<User>("SELECT * FROM users WHERE zid = ?", zid);
 }
 
@@ -154,8 +167,8 @@ export async function verifyPassword(user: User, password: string): Promise<bool
   return Bun.password.verify(password, user.password_hash);
 }
 
-export function touchLastSeen(id: number): void {
-  run("UPDATE users SET last_seen_at = ? WHERE id = ?", now(), id);
+export async function touchLastSeen(id: number): Promise<void> {
+  await run("UPDATE users SET last_seen_at = ? WHERE id = ?", now(), id);
 }
 
 export function isAdmin(user: Pick<User, "role"> | null | undefined): boolean {
@@ -168,34 +181,34 @@ export function isAdmin(user: Pick<User, "role"> | null | undefined): boolean {
  * Without that guard it is one call away from locking every moderator out of
  * their own server.
  */
-export function setRole(userId: number, role: Role): void {
+export async function setRole(userId: number, role: Role): Promise<void> {
   if (!ROLES.includes(role)) throw new RangeError(`unknown role: ${role}`);
 
   if (role !== "admin") {
-    const admins = one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'",
+    const admins = await one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
     );
-    const target = findById(userId);
+    const target = await findById(userId);
     if (target?.role === "admin" && (admins?.n ?? 0) <= 1) {
       throw new Error("cannot remove the last admin");
     }
   }
 
-  run("UPDATE users SET role = ? WHERE id = ?", role, userId);
+  await run("UPDATE users SET role = ? WHERE id = ?", role, userId);
 }
 
-export function getProgress(userId: number): Progress | null {
+export async function getProgress(userId: number): Promise<Progress | null> {
   return one<Progress>("SELECT * FROM progress WHERE user_id = ?", userId);
 }
 
-export function updateProgress(
+export async function updateProgress(
   userId: number,
-  patch: { level?: number; xp?: number; world_name?: string },
-): Progress {
-  const current = getProgress(userId);
+  patch: { level?: number; xp?: number; world_name?: string }
+): Promise<Progress> {
+  const current = await getProgress(userId);
   if (!current) throw new Error(`no progress row for user ${userId}`);
 
-  run(
+  await run(
     `UPDATE progress
         SET level = ?, xp = ?, world_name = ?, updated_at = ?
       WHERE user_id = ?`,
@@ -203,35 +216,38 @@ export function updateProgress(
     patch.xp ?? current.xp,
     patch.world_name ?? current.world_name,
     now(),
-    userId,
+    userId
   );
 
-  const updated = getProgress(userId);
+  const updated = await getProgress(userId);
   if (!updated) throw new Error(`progress update lost for user ${userId}`);
   return updated;
 }
 
-export function recordActivity(userId: number | null, kind: string, detail?: string): void {
-  // `id` is left to the column's rowid alias. On Postgres the migration needs
-  // GENERATED BY DEFAULT AS IDENTITY instead; nothing else in this file changes.
-  run(
+export async function recordActivity(
+  userId: number | null,
+  kind: string,
+  detail?: string
+): Promise<void> {
+  // `id` is left to AUTO_INCREMENT. The original relied on the column's rowid
+  // alias, which was SQLite-only and has no MariaDB equivalent.
+  await run(
     "INSERT INTO activity (user_id, kind, detail, created_at) VALUES (?, ?, ?, ?)",
     userId,
     kind,
     detail ?? null,
-    now(),
+    now()
   );
 }
 
-export function recentActivity(userId: number, limit = 20): Array<{
-  kind: string;
-  detail: string | null;
-  created_at: string;
-}> {
+export async function recentActivity(
+  userId: number,
+  limit = 20
+): Promise<Array<{ kind: string; detail: string | null; created_at: string }>> {
   return all<{ kind: string; detail: string | null; created_at: string }>(
     "SELECT kind, detail, created_at FROM activity WHERE user_id = ? ORDER BY id DESC LIMIT ?",
     userId,
-    limit,
+    limit
   );
 }
 
@@ -252,19 +268,29 @@ export interface FriendView {
  * Rows are stored in both directions, so a lookup is one indexed read and the
  * status can never disagree between the two players.
  */
-export function friendshipStatus(
+export async function friendshipStatus(
   viewer: number,
   other: number,
-): { status: "none" | "pending" | "accepted" | "blocked"; outgoing: boolean } {
-  const mine = one<FriendRow>(
-    "SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?",
+  lock = false
+): Promise<{ status: "none" | "pending" | "accepted" | "blocked"; outgoing: boolean }> {
+  // `lock` adds FOR UPDATE, and is what the writer uses.
+  //
+  // Without it the two SELECTs inside a transaction take shared locks and the
+  // upsert that follows needs an exclusive one on the same rows. MariaDB rejects
+  // that with "Record has changed since last read in table 'friendships'; try
+  // restarting transaction" -- a real deadlock report, not a formatting
+  // complaint. Locking up front is what makes read-then-write safe here.
+  const suffix = lock ? " FOR UPDATE" : "";
+
+  const mine = await one<FriendRow>(
+    `SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?${suffix}`,
     viewer,
-    other,
+    other
   );
-  const theirs = one<FriendRow>(
-    "SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?",
+  const theirs = await one<FriendRow>(
+    `SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?${suffix}`,
     other,
-    viewer,
+    viewer
   );
 
   if (mine?.status === "blocked" || theirs?.status === "blocked") {
@@ -283,10 +309,13 @@ export function friendshipStatus(
 }
 
 /** Send or accept a friend request. Both directions are written together. */
-export function addFriend(requesterId: number, targetId: number): "pending" | "accepted" {
+export async function addFriend(
+  requesterId: number,
+  targetId: number
+): Promise<"pending" | "accepted"> {
   if (requesterId === targetId) throw new RangeError("cannot befriend yourself");
 
-  const target = findById(targetId);
+  const target = await findById(targetId);
   if (!target) throw new Error(`no such user: ${targetId}`);
 
   const stamp = now();
@@ -294,8 +323,9 @@ export function addFriend(requesterId: number, targetId: number): "pending" | "a
   // The current state has to be read inside the transaction. A prior version
   // read it before opening one and then always wrote "pending" on the second
   // call, so accepting a request could never take effect.
-  return transact(() => {
-    const current = friendshipStatus(requesterId, targetId);
+  return transact(async () => {
+    // Locked, because this one is about to write to both rows.
+    const current = await friendshipStatus(requesterId, targetId, true);
 
     if (current.status === "accepted") return "accepted";
     if (current.status === "blocked") throw new Error("friendship is blocked");
@@ -305,29 +335,31 @@ export function addFriend(requesterId: number, targetId: number): "pending" | "a
     const status = isAcceptance ? "accepted" : "pending";
     const acceptedAt = isAcceptance ? stamp : null;
 
+    // MariaDB spells this ON DUPLICATE KEY UPDATE, keyed on any unique index;
+    // the composite primary key (user_id, friend_id) is the one it matches. The
+    // Postgres/SQLite form was "ON CONFLICT ... DO UPDATE SET ... excluded".
     const upsert = `
       INSERT INTO friendships (user_id, friend_id, status, requested_by, created_at, accepted_at)
       VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (user_id, friend_id)
-      DO UPDATE SET status = excluded.status,
-                    requested_by = excluded.requested_by,
-                    accepted_at = excluded.accepted_at`;
+      ON DUPLICATE KEY UPDATE status = VALUES(status),
+                               requested_by = VALUES(requested_by),
+                               accepted_at = VALUES(accepted_at)`;
 
-    run(upsert, requesterId, targetId, status, requesterId, stamp, acceptedAt);
-    run(upsert, targetId, requesterId, status, requesterId, stamp, acceptedAt);
+    await run(upsert, requesterId, targetId, status, requesterId, stamp, acceptedAt);
+    await run(upsert, targetId, requesterId, status, requesterId, stamp, acceptedAt);
 
     return status;
   });
 }
 
-export function removeFriend(userId: number, otherId: number): void {
-  transact(() => {
-    run("DELETE FROM friendships WHERE user_id = ? AND friend_id = ?", userId, otherId);
-    run("DELETE FROM friendships WHERE user_id = ? AND friend_id = ?", otherId, userId);
+export async function removeFriend(userId: number, otherId: number): Promise<void> {
+  await transact(async () => {
+    await run("DELETE FROM friendships WHERE user_id = ? AND friend_id = ?", userId, otherId);
+    await run("DELETE FROM friendships WHERE user_id = ? AND friend_id = ?", otherId, userId);
   });
 }
 
-export function listFriends(userId: number): FriendView[] {
+export async function listFriends(userId: number): Promise<FriendView[]> {
   return all<FriendView>(
     `SELECT u.username, u.zid, f.status, p.level, p.world_name, u.last_seen_at
        FROM friendships f
@@ -335,12 +367,12 @@ export function listFriends(userId: number): FriendView[] {
        LEFT JOIN progress p ON p.user_id = u.id
       WHERE f.user_id = ? AND f.status = 'accepted'
       ORDER BY u.username`,
-    userId,
+    userId
   );
 }
 
 /** Players worth suggesting: accounts with progress that are not yet friends. */
-export function suggestFriends(userId: number, limit = 10): FriendView[] {
+export async function suggestFriends(userId: number, limit = 10): Promise<FriendView[]> {
   return all<FriendView>(
     `SELECT u.username, u.zid, 'none' AS status, p.level, p.world_name, u.last_seen_at
        FROM users u
@@ -354,6 +386,6 @@ export function suggestFriends(userId: number, limit = 10): FriendView[] {
       LIMIT ?`,
     userId,
     userId,
-    limit,
+    limit
   );
 }

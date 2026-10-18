@@ -4,4 +4,4 @@
 -- without another migration, and NOT NULL with a default so the existing rows
 -- stay valid and the column can be added without a table rewrite.
 
-ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'player';
+ALTER TABLE users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'player';

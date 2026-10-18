@@ -35,15 +35,16 @@ export const config = {
   },
 
   /**
-   * Data file for the account/friends/progress store.
+   * The account/friends/progress store.
    *
-   * SQLite by default: zero external services, one file, which matches the
-   * preservation character of this project. All SQL lives in db/ and is written
-   * to a portable dialect so switching to Postgres later is a driver change,
-   * not a rewrite.
+   * MariaDB, like the gateway's save store: one database for the whole project.
+   * `url` is the same shape as the Python side's SAVE_STORE_PATH so there is one
+   * format to learn. Created on first connect if it is not there yet.
    */
   database: {
-    file: env("DATABASE_FILE", "instance/web.db"),
+    url: env("RTE_DB_URL", "mysql://root:2001@127.0.0.1:3306/raisetheempires"),
+    /** Bare name, for the CREATE DATABASE that runs before the connection. */
+    name: env("RTE_DB_NAME", "raisetheempires"),
   },
 
   session: {

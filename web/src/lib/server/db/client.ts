@@ -1,17 +1,31 @@
 /**
  * Database access.
  *
- * Everything above this file talks in plain SQL with ``?`` placeholders and a
- * small set of helpers. That is deliberate: swapping SQLite for Postgres later
- * is a new driver behind this interface, not a rewrite of the queries.
+ * MariaDB, through Bun's own SQL client. Everything above this file talks in
+ * plain SQL with ``?`` placeholders and a small set of helpers -- which was the
+ * point of the original bun:sqlite version: changing the engine is a driver
+ * swap underneath, not a rewrite of the queries. Every query below is unchanged
+ * from when this was SQLite.
+ *
+ * Two things did change underneath:
+ *
+ * bun:sqlite handed back a query object with ``.all()``/``.get()``/``.run()``
+ * on it. Bun's client returns plain arrays of row objects, so ``one`` reads the
+ * first row and ``run`` returns nothing rather than a row-count nobody used.
+ *
+ * And the connection is a network one, so everything is async. Holding a
+ * synchronous handle open across a round trip is not something to do.
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { SQL } from 'bun';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { config } from '../config.ts';
 
 export type MigrationMap = Record<string, string>;
+
+/** A parameter, in the order the query binds them. */
+export type Params = Array<string | number | boolean | null | Date>;
 
 /**
  * Migration SQL, keyed by filename.
@@ -50,99 +64,183 @@ function loadMigrations(): MigrationMap {
 	return map;
 }
 
+/**
+ * Split a migration file into statements.
+ *
+ * ``--`` comment lines go first: a semicolon inside one would otherwise cut a
+ * statement in half and the server would reject the fragment, which points at
+ * the schema rather than at the comment.
+ */
+function splitStatements(script: string): string[] {
+	return script
+		.split('\n')
+		.filter((line) => !line.trimStart().startsWith('--'))
+		.join('\n')
+		.split(';')
+		.map((statement) => statement.trim())
+		.filter(Boolean);
+}
+
 /** Apply any migration whose filename has not been recorded yet. */
-export function migrate(db: Database): string[] {
-	db.exec(
-		'CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)'
+export async function migrate(sql: SQL): Promise<string[]> {
+	await sql.unsafe(
+		'CREATE TABLE IF NOT EXISTS schema_migrations (' +
+			'name VARCHAR(191) NOT NULL PRIMARY KEY, ' +
+			'applied_at DATETIME NOT NULL' +
+			') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
 	);
+
 	const applied = new Set(
-		db
-			.query<{ name: string }, []>('SELECT name FROM schema_migrations')
-			.all()
-			.map((r) => r.name)
+		((await sql.unsafe('SELECT name FROM schema_migrations')) as any[]).map((row) => row.name)
 	);
 
 	const migrations = Object.entries(loadMigrations())
 		// Normalise the key to a bare filename. Vite's glob yields
 		// "./migrations/001_init.sql" while the filesystem branch yields
-		// "001_init.sql", and recording both made the same migration run twice:
-		// the second run re-executed 001 and then 002 tried to add a column that
-		// already existed.
-		.map(([path, sql]) => [path.split('/').pop() ?? path, sql] as const)
+		// "001_init.sql", and recording both made the same migration run twice.
+		.map(([path, content]) => [path.split('/').pop() ?? path, content] as const)
 		.sort(([a], [b]) => a.localeCompare(b));
 
 	const ran: string[] = [];
-	for (const [name, sql] of migrations) {
+	for (const [name, content] of migrations) {
 		if (applied.has(name)) continue;
-		// Each migration is atomic: either the whole file applies or none of it.
-		db.transaction(() => {
-			db.exec(sql);
-			db
-				.query('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)')
-				.run(name, new Date().toISOString());
-		})();
+		for (const statement of splitStatements(content)) {
+			await sql.unsafe(statement);
+		}
+		await sql.unsafe('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)', [
+			name,
+			new Date()
+		]);
 		ran.push(name);
 	}
 	return ran;
 }
 
-let instance: Database | null = null;
+async function ensureDatabase(url: string): Promise<void> {
+	/**
+	 * CREATE DATABASE cannot run inside the database it creates, so this opens a
+	 * second connection with no database named. Every deploy pointing at a fresh
+	 * MariaDB hits this once.
+	 */
+	const withoutDatabase = url.replace(/\/([^/?]+)(\?|$)/, '/$2');
+	const bootstrap = new SQL(withoutDatabase);
+	try {
+		await bootstrap.unsafe(
+			`CREATE DATABASE IF NOT EXISTS \`${config.database.name}\` ` +
+				'CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+		);
+	} finally {
+		await bootstrap.close();
+	}
+}
 
-function ensureParentDir(file: string): void {
-	const parent = dirname(file);
-	if (parent && parent !== '.') mkdirSync(parent, { recursive: true });
+/**
+ * The in-flight initialisation, not the connection.
+ *
+ * `db()` is async and this used to cache the connection, so two callers that
+ * arrived before the first finished both saw `undefined` and both ran the
+ * migrations -- the second one then failed on a duplicate key in
+ * schema_migrations. Caching the promise closes that window: the second caller
+ * awaits the first one's work rather than starting its own.
+ */
+let opening: Promise<SQL> | null = null;
+
+async function openConnection(url: string): Promise<SQL> {
+	await ensureDatabase(url);
+
+	const sql = new SQL(url);
+	await migrate(sql);
+	return sql;
 }
 
 /** Open (once) and migrate the configured database. */
-export function db(): Database {
-	if (instance) return instance;
-
-	const file = config.database.file;
-	ensureParentDir(file);
-
-	const database = new Database(file, { create: true });
-	database.exec('PRAGMA journal_mode = WAL');
-	database.exec('PRAGMA foreign_keys = ON');
-	database.exec('PRAGMA busy_timeout = 5000');
-
-	migrate(database);
-	instance = database;
-	return instance;
+export function db(): Promise<SQL> {
+	if (!opening) {
+		opening = openConnection(config.database.url).catch((error) => {
+			// A failed open must not be cached, or one transient failure would
+			// poison every later request for the life of the process.
+			opening = null;
+			throw error;
+		});
+	}
+	return opening;
 }
 
 /** Close the shared handle. Used by tests. */
-export function closeDb(): void {
-	instance?.close();
-	instance = null;
+export async function closeDb(): Promise<void> {
+	if (opening) {
+		const sql = await opening.catch(() => null);
+		await sql?.close();
+	}
+	opening = null;
 }
 
 /* ---------------------------------------------------------------- queries -- */
 
-export function all<T>(sql: string, ...params: SQLQueryBindings[]): T[] {
-	return db()
-		.query<T, SQLQueryBindings[]>(sql)
-		.all(...params);
+/**
+ * The transaction currently in flight, if any.
+ *
+ * Every helper below routes through here rather than through ``db()`` directly.
+ * Without it a caller inside ``transact`` would silently write on the shared
+ * connection instead of inside its transaction: those writes would commit
+ * immediately, and a failure halfway through would leave half a user created.
+ * Bun's ``begin`` hands the transaction to the callback, but the model
+ * functions never see it, so it is parked here for the duration.
+ */
+let activeTx: any = null;
+
+async function current(): Promise<any> {
+	return activeTx ?? (await db());
 }
 
-export function one<T>(sql: string, ...params: SQLQueryBindings[]): T | null {
-	return (
-		db()
-			.query<T, SQLQueryBindings[]>(sql)
-			.get(...params) ?? null
-	);
+export async function all<T>(sql: string, ...params: Params): Promise<T[]> {
+	return (await (await current()).unsafe(sql, params as any)) as T[];
 }
 
-export function run(sql: string, ...params: SQLQueryBindings[]): void {
-	db()
-		.query(sql)
-		.run(...params);
+export async function one<T>(sql: string, ...params: Params): Promise<T | null> {
+	// Both awaits matter. The first gets the connection; the second gets the
+	// rows out of the promise `unsafe` returns. Without the second, `rows[0]` is
+	// `undefined` on a Promise and this silently answers null for every lookup --
+	// which is how createUser reported "user insert did not persist" about a row
+	// that was sitting there the whole time.
+	const rows = await (await current()).unsafe(sql, params as any);
+	return (rows[0] as T) ?? null;
 }
 
-/** Run `fn` inside a transaction. */
-export function transact<T>(fn: () => T): T {
-	return db().transaction(fn)();
+export async function run(sql: string, ...params: Params): Promise<void> {
+	await (await current()).unsafe(sql, params as any);
 }
 
+/**
+ * Run `fn` inside a transaction.
+ *
+ * Bun's client opens one with a callback and commits when the callback returns,
+ * which is the same shape bun:sqlite's `transaction()` had -- so the call sites
+ * read the same, but the body has to be async.
+ */
+export async function transact<T>(fn: () => Promise<T> | T): Promise<T> {
+	if (activeTx) {
+		// Bun has no nested transactions. Reusing the outer one silently would
+		// be a lie about the scope the caller asked for.
+		throw new Error('transact() called inside another transact()');
+	}
+	const sql = await db();
+	return (await sql.begin(async (tx: any) => {
+		activeTx = tx;
+		try {
+			return await fn();
+		} finally {
+			activeTx = null;
+		}
+	})) as T;
+}
+
+/**
+ * A timestamp for a DATETIME column.
+ *
+ * ISO-8601 with a `T` and a `Z` -- what `toISOString()` gives -- is rejected by
+ * MariaDB with error 1292. This is the spelling both engines take.
+ */
 export function now(): string {
-	return new Date().toISOString();
+	return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }

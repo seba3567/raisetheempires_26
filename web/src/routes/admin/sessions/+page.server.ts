@@ -26,16 +26,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const sessions = await fetchSessions();
 
-	const rows: SessionRow[] | null =
-		sessions?.map((session) => {
-			const account = findByZid(session.uid);
-			return {
-				...session,
-				// A save with no matching account belongs to a browser that never
-				// signed in -- anonymous play, or a world left over from before.
-				owner: account ? account.username : null
-			};
-		}) ?? null;
+	// Resolved with Promise.all rather than awaited in the loop: one lookup per
+	// session, all independent reads, and a sequential version would take the
+	// slowest one times the count.
+	const rows: SessionRow[] | null = sessions
+		? await Promise.all(
+				sessions.map(async (session) => {
+					const account = await findByZid(session.uid);
+					return {
+						...session,
+						// A save with no matching account belongs to a browser that
+						// never signed in -- anonymous play, or a world left over
+						// from before.
+						owner: account ? account.username : null
+					};
+				})
+			)
+		: null;
 
 	return {
 		sessions: rows,
