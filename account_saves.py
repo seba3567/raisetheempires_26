@@ -273,9 +273,44 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         # conflict with the write we just made.
         return self._retrieve_session_data(account_key)
 
+    def _store_with_retry(self, store_id, payload, reason, revision):
+        """Write the session, retrying once if MariaDB picks us as the victim.
+
+        A deadlock is not a lost write: MariaDB rolled the transaction back and
+        chose this one to abort precisely so the other could finish. Running it
+        again almost always succeeds, because whatever collided has moved on. One
+        retry is the standard remedy, and bounding it at one is the point -- an
+        unbounded retry against a hot row turns a transient collision into a hung
+        request.
+
+        Only the two lock errors are retried. A duplicate key or a missing column
+        will not improve by trying again, and a WriteConflict is a different
+        thing: the row legitimately moved, and the caller above deals with that
+        rather than retrying it.
+        """
+        from save_store import TransientStoreError, is_transient_store_error
+
+        for attempt in (1, 2):
+            try:
+                return self.save_store.store(
+                    store_id, payload, reason=reason, expected_revision=revision)
+            except Exception as error:
+                if not is_transient_store_error(error):
+                    raise
+                # Wrapping rather than re-raising the driver's own error is what
+                # lets the caller above tell "this lock did not clear" apart from
+                # a genuine failure. Without it the retry budget is pointless:
+                # the second collision would escape as an OperationalError nobody
+                # upstream is catching.
+                if attempt == 2:
+                    raise TransientStoreError(
+                        f"{store_id}: lock collision survived one retry") from error
+                print("Session save hit a lock collision, retrying once:", error)
+        raise AssertionError("unreachable")
+
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
 
-        from save_store import WriteConflict
+        from save_store import TransientStoreError, WriteConflict
 
         private = (self.REVISION_KEY, self.REASON_KEY)
         payload = {key: value for key, value in session.items()
@@ -295,8 +330,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             return
 
         try:
-            written = self.save_store.store(store_id, payload, reason=reason,
-                                           expected_revision=revision)
+            written = self._store_with_retry(store_id, payload, reason, revision)
         except WriteConflict as conflict:
             # This runs during response finalisation: the response the player is
             # getting has already been built. Raising here turned a perfectly
@@ -308,6 +342,14 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             # computed from the session in hand, so this write is redundant
             # rather than lost. Say so, and let the response through.
             print("Session save skipped, the row moved underneath:", conflict)
+            session.modified = False
+            return
+        except TransientStoreError as error:
+            # Same reasoning as above: the response is already built and the
+            # player cannot read anything we could put in an error body. A
+            # deadlock that survived its retry is worth shouting about in the
+            # log, and not worth a 500.
+            print("Session save dropped after a retry:", error)
             session.modified = False
             return
 

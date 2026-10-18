@@ -179,6 +179,38 @@ class UnknownSave(Exception):
     """No row for that store id."""
 
 
+# MariaDB errno for the two errors that mean "somebody else had the lock, try
+# again" rather than "this statement is wrong":
+#   1205 Lock wait timeout exceeded
+#   1213 Deadlock found when trying to get lock; try restarting transaction
+TRANSIENT_LOCK_ERRNOS = frozenset({1205, 1213})
+
+
+def is_transient_store_error(error: BaseException) -> bool:
+    """True for a lock collision worth retrying, false for anything else.
+
+    A deadlock means MariaDB rolled this transaction back and picked it as the
+    victim so the other one could finish. Nothing was half-written and the
+    statement was not wrong, so running it again is the correct response -- and
+    almost always works, because whatever collided has moved on.
+
+    Everything else must *not* be retried. A duplicate key, a missing column or a
+    bad parameter will fail identically every time, and retrying those just turns
+    a clear error into a slow one.
+    """
+    code = error.args[0] if error.args else None
+    return isinstance(code, int) and code in TRANSIENT_LOCK_ERRNOS
+
+
+class TransientStoreError(Exception):
+    """A lock collision that outlived its retry.
+
+    Named so a caller can choose to give up on a background write. The
+    alternative, letting the driver's OperationalError escape, is what turned a
+    deadlock during end-of-request session flushing into a 500 for the player.
+    """
+
+
 @dataclass(frozen=True)
 class SaveRow:
     """One loaded save, with the revision it was read at."""
