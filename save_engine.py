@@ -137,36 +137,39 @@ def pending_backup_reason() -> str | None:
     return session.get(BACKUP_REASON_KEY)
 
 def save_database_uri(root_path, instance_path):
-    save_db_path = os.path.join(my_games_path(), "save.db")
+    my_games = Path(my_games_path())
+    root_p = Path(root_path)
+    instance_p = Path(instance_path)
 
-    if os.path.samefile(my_games_path(), root_path):
-        new_save_db_path = os.path.join(instance_path, "save.db")
-        if os.path.exists(save_db_path):
-            if not os.path.exists(new_save_db_path):
+    save_db_path = my_games / "save.db"
+
+    try:
+        is_same = my_games.resolve() == root_p.resolve()
+    except Exception:
+        is_same = False
+
+    if is_same:
+        new_save_db_path = instance_p / "save.db"
+        if save_db_path.exists():
+            if not new_save_db_path.exists():
                 print("INFORMATION: You're running from source, and because of Flask update save.db has to be moved to the instance folder. Installs out of folder should be unaffected")
-                if not os.path.exists(instance_path):
-                    os.makedirs(instance_path)
-                backup_save_dir_path = os.path.join(my_games_path(), "backup-save-db")
-                if not os.path.exists(backup_save_dir_path):
-                    os.makedirs(backup_save_dir_path)
-                shutil.copy(save_db_path, backup_save_dir_path)
-                shutil.move(save_db_path, new_save_db_path)
+                instance_p.mkdir(parents=True, exist_ok=True)
+                backup_save_dir_path = my_games / "backup-save-db"
+                backup_save_dir_path.mkdir(parents=True, exist_ok=True)
+                shutil.copy(str(save_db_path), str(backup_save_dir_path))
+                shutil.move(str(save_db_path), str(new_save_db_path))
                 print("Moved your save.db to", instance_path, "and a backup can be found at", backup_save_dir_path)
             else:
                 print("WARNING: You have a save.db in both the root as the instance folder (when running from source), only the instance one will be used!")
         save_db_path = new_save_db_path
 
-    # SQLite does not create the folder that holds the database file. On a fresh
-    # clone there is no save.db in the project root, so the instance folder was
-    # never created above and the first connection failed with
-    # "unable to open database file".
-    save_db_dir = os.path.dirname(os.path.abspath(save_db_path))
-    if save_db_dir and not os.path.isdir(save_db_dir):
+    # SQLite does not create the folder that holds the database file.
+    save_db_dir = save_db_path.resolve().parent
+    if not save_db_dir.is_dir():
         print("Creating save database folder", save_db_dir)
-        os.makedirs(save_db_dir, exist_ok=True)
+        save_db_dir.mkdir(parents=True, exist_ok=True)
 
     print("SQLITE", f"sqlite:///{save_db_path}")
-
     return f"sqlite:///{save_db_path}"
 
 
@@ -183,8 +186,9 @@ def base_path():
 
 
 def log_path():
-    if os.path.exists(my_games_path()):
-        return my_games_path()
+    p = Path(my_games_path())
+    if p.exists():
+        return str(p)
     print("Warning: folder in My games missing, falling back to install folder.")
     return "."
 
@@ -214,7 +218,7 @@ def exception_handler(exc_type, exc_value, exc_traceback):
         return
 
     logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-    log_file = os.path.join(log_path(), "log.txt")
+    log_file = str(Path(log_path()) / "log.txt")
     if crash_log:
         if _crash_editor_allowed():
             try:
@@ -235,7 +239,7 @@ logging.basicConfig(
     format=log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(log_path(), "log.txt"), encoding="utf-8")
+        logging.FileHandler(str(Path(log_path()) / "log.txt"), encoding="utf-8")
     ]
 )
 logger = logging.getLogger(__name__)
