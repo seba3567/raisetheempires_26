@@ -1,0 +1,23 @@
+-- 003_activity_auto_increment.sql
+--
+-- 001 declared activity.id as `INT NOT NULL AUTO_INCREMENT`, because
+-- recordActivity() never supplies an id -- it is meant to come from the server.
+--
+-- A database can still be sitting on `id int(11) NOT NULL` with no
+-- AUTO_INCREMENT, and then every one of those inserts fails with errno 1364,
+-- "Field 'id' doesn't have a default value". The symptom is far away from the
+-- cause: a login that verifies the password and then dies with a 500 while
+-- writing its own 'login' row, so the player never reaches the game and the
+-- form says nothing at all.
+--
+-- schema_migrations cannot catch this. 001 is recorded as applied -- correctly,
+-- by whatever ran it -- so the CREATE TABLE IF NOT EXISTS never runs again, and
+-- the drift between the file and the live table is invisible by construction.
+-- It has to be corrected explicitly, once, in a migration of its own.
+--
+-- MODIFY rather than ADD: there is a column and it holds real rows, so this
+-- changes the attribute in place and leaves the data alone. It is also a no-op
+-- on a database that already got it right, which matters because this file will
+-- run everywhere.
+
+ALTER TABLE activity MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
