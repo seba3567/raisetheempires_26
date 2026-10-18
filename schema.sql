@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS saves (
     store_id    TEXT    NOT NULL,
     -- Bumped on every successful write. The compare-and-swap target.
     revision    INTEGER NOT NULL DEFAULT 1,
+    -- The game's own player id, copied out of user_object.userInfo.player.uid
+    -- on every write. Indexed because the game addresses other players by it:
+    -- an invasion, a pillage and the neighbour list all look a player up by
+    -- uid. Before this they did it by reading *every* save in the table and
+    -- comparing -- a full deserialisation of every empire to find one.
+    --
+    -- Nullable: it is read out of the payload, and a row written by an older
+    -- build, or one with no empire in it yet, has none. That is a lookup miss,
+    -- not a row that cannot be stored.
+    uid         INTEGER,
     -- The empire. msgpack, via the session interface's serializer.
     data        BLOB    NOT NULL,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -71,3 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_save_backups_save_revision
 -- request finds its row -- so it gets a plain index rather than relying on the
 -- UNIQUE constraint alone.
 CREATE INDEX IF NOT EXISTS idx_saves_store_id ON saves (store_id);
+
+-- The game addresses other players by uid, not by store key, so this is what
+-- turns an invasion or a pillage from a full table scan into an index lookup.
+CREATE INDEX IF NOT EXISTS idx_saves_uid ON saves (uid);

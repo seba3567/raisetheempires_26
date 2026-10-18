@@ -210,6 +210,29 @@ def account_store_id(zid) -> str:
     return "acct" + str(zid)
 
 
+def save_uid(data) -> int | None:
+    """The player id inside a save, or None.
+
+    Read defensively all the way down: this runs against every row on every
+    write, including rows written by an older build, a half-finished paste, or a
+    test's stub. A missing or misshapen empire yields None, which is a lookup
+    miss rather than an exception -- the column is nullable for exactly this.
+    """
+    if not isinstance(data, dict):
+        return None
+    user_object = data.get("user_object")
+    if not isinstance(user_object, dict):
+        return None
+    info = user_object.get("userInfo")
+    if not isinstance(info, dict):
+        return None
+    player = info.get("player")
+    if not isinstance(player, dict):
+        return None
+    uid = player.get("uid")
+    return uid if isinstance(uid, int) and not isinstance(uid, bool) else None
+
+
 class Store:
     """SQLite-backed save storage.
 
@@ -260,11 +283,39 @@ class Store:
             os.makedirs(folder, exist_ok=True)
         with open(SCHEMA_PATH, encoding="utf-8") as handle:
             script = handle.read()
-        connection = self._connect()
-        try:
-            connection.executescript(script)
-        finally:
-            connection.close()
+        self._apply_script(self._connect(), script)
+
+    @staticmethod
+    def _apply_script(connection, script: str) -> None:
+        """Run a schema file one statement at a time, skipping index-on-missing-column.
+
+        ``CREATE TABLE IF NOT EXISTS`` creates what is missing and leaves what
+        exists alone, which is right for tables and wrong for columns: a
+        database from an earlier build keeps its earlier shape. So a new column
+        only appears when ``migrate_schema.py`` adds it.
+
+        That makes the indexes at the end of the file a problem on exactly the
+        database that most needs them -- ``CREATE INDEX idx_saves_uid ON saves
+        (uid)`` fails with "no such column" on a table whose uid column has not
+        been migrated yet, and takes the whole boot down with it. Those
+        statements are skipped with a note; the column and its index arrive
+        together when the migration runs.
+
+        A fresh database is unaffected: there the tables are created with the
+        columns, so every index applies.
+        """
+        for statement in script.split(";"):
+            if not statement.strip():
+                continue
+            try:
+                connection.execute(statement)
+            except Exception as error:
+                if "no such column" in str(error).lower():
+                    print("save_store: skipped an index on a column that is not "
+                          "there yet; run migrate_schema.py --apply:", error)
+                else:
+                    raise
+        connection.close()
 
     def _ensure_schema_mariadb(self) -> None:
         """Create the database if it is missing, then apply the schema.
@@ -300,7 +351,15 @@ class Store:
         try:
             for statement in script.split(";"):
                 if statement.strip():
-                    connection.execute(statement)
+                    try:
+                        connection.execute(statement)
+                    except Exception as error:
+                        if "no such column" in str(error).lower():
+                            print("save_store: skipped an index on a column "
+                                  "that is not there yet; run "
+                                  "migrate_schema.py --apply:", error)
+                        else:
+                            raise
         finally:
             connection.close()
 
@@ -364,6 +423,61 @@ class Store:
             connection.close()
         return row is not None
 
+    def load_by_uid(self, uid) -> SaveRow | None:
+        """The save for a player the game addresses by uid, or None.
+
+        The game does not address players by store key. An invasion, a pillage
+        and the neighbour list all say "this other player" and mean
+        ``user_object.userInfo.player.uid``. Doing that by scanning meant
+        deserialising *every* empire in the database to compare one number --
+        which is what get_saves() plus a list comprehension did on every
+        invasion, and is why this is an indexed column instead.
+
+        No match is a normal answer, not an error: a row written before the
+        column existed has no uid, and an empire that has never booted has no
+        player either.
+        """
+        connection = self._connect()
+        try:
+            row = self._exec(
+                connection,
+                "SELECT store_id, revision, data FROM saves WHERE uid = ? LIMIT 1",
+                (uid,)).fetchone()
+        finally:
+            connection.close()
+
+        if row is None:
+            return None
+        return SaveRow(store_id=row["store_id"], revision=row["revision"],
+                       data=self._decode(row["data"]))
+
+    def rows_without_uid(self) -> list:
+        """(store_id, decoded payload) for every row the column is missing.
+
+        The backfill walks these; reading the payloads here rather than in the
+        migration keeps the message-decoding rules in one place.
+        """
+        connection = self._connect()
+        try:
+            rows = self._exec(
+                connection,
+                "SELECT store_id, data FROM saves WHERE uid IS NULL").fetchall()
+        finally:
+            connection.close()
+        return [(row["store_id"], self._decode(row["data"])) for row in rows]
+
+    def set_uid(self, store_id: str, uid) -> bool:
+        """Fill the uid on a row that predates the column."""
+        connection = self._connect()
+        try:
+            self._exec(
+                connection,
+                "UPDATE saves SET uid = ? WHERE store_id = ? AND uid IS NULL",
+                (uid, store_id))
+            return True
+        finally:
+            connection.close()
+
     def count(self) -> int:
         connection = self._connect()
         try:
@@ -391,6 +505,9 @@ class Store:
         """
         blob = self._encode(data)
         now = self._now()
+        # Read out of the payload rather than passed in, so a caller cannot
+        # index one save under another's uid -- and cannot forget to.
+        uid = save_uid(data)
 
         connection = self._connect()
         try:
@@ -412,10 +529,10 @@ class Store:
                         f"{store_id}: expected revision {expected_revision} "
                         "but there is no row")
                 self._exec(
-                    connection, 
-                    "INSERT INTO saves (store_id, revision, data, created_at, "
-                    "updated_at) VALUES (?, 1, ?, ?, ?)",
-                    (store_id, blob, now, now))
+                    connection,
+                    "INSERT INTO saves (store_id, revision, uid, data, "
+                    "created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)",
+                    (store_id, uid, blob, now, now))
                 connection.execute("COMMIT")
                 return 1
 
@@ -437,10 +554,10 @@ class Store:
                 (existing["id"], current, reason, previous, now))
 
             self._exec(
-                    connection, 
-                "UPDATE saves SET revision = ?, data = ?, updated_at = ? "
+                    connection,
+                "UPDATE saves SET revision = ?, data = ?, uid = ?, updated_at = ? "
                 "WHERE id = ? AND revision = ?",
-                (current + 1, blob, now, existing["id"], current))
+                (current + 1, blob, uid, now, existing["id"], current))
 
             self._trim(connection, existing["id"])
             connection.execute("COMMIT")

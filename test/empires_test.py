@@ -27,11 +27,18 @@ def test_add_fleet():
 
 
 def test_random_fleet_challenge_response(monkeypatch):
-    def get_saves_mock():
-        return [{'user_object': {"userInfo": {"player": {"uid": 1}}, "pvp": {
-            "invaders": {"u2341959767162880": {"defender_fleet": ['V61,,,,', 'U01,,,,', 'U01,,,,', 'U01,,,,']}}}}}]
+    # Patched on get_save_by_uid, not get_saves: this lookup used to scan every
+    # save and compare the uid, which meant the mock had to fake a whole table.
+    # It is one indexed row now, so the mock is one save.
+    def get_save_by_uid_mock(wanted, required=False):
+        if str(wanted) != "1":
+            if required:
+                raise AssertionError(f"unexpected uid {wanted!r}")
+            return None
+        return {'user_object': {"userInfo": {"player": {"uid": 1}}, "pvp": {
+            "invaders": {"u2341959767162880": {"defender_fleet": ['V61,,,,', 'U01,,,,', 'U01,,,,', 'U01,,,,']}}}}}
 
-    monkeypatch.setattr(empires_server, "get_saves", get_saves_mock)
+    monkeypatch.setattr(empires_server, "get_save_by_uid", get_save_by_uid_mock)
 
     with app.test_request_context():
         session.sid = "0"

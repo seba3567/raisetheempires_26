@@ -12,7 +12,7 @@ from flask import current_app, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
 
-from save_store import WriteConflict
+from save_store import WriteConflict, save_uid
 
 crash_log = True
 
@@ -263,6 +263,32 @@ def get_saves():
     then did ``save['user_object'][...]`` on it.
     """
     interface = current_app.session_interface
+
+    if not hasattr(interface, "save_store"):
+        # A plain Flask session interface, and not even a server-side one.
+        if hasattr(interface, "sql_session_model"):
+            # A sqlalchemy-backed one -- a bare app in the older tests, or any
+            # deployment that never installed the account-bound interface.
+            # Read the sessions table the way this function used to.
+            saves = []
+            for record in interface.sql_session_model.query.all():
+                decoded = decode_save(record.data)
+                if not isinstance(decoded, dict):
+                    continue
+                user_object = decoded.get("user_object")
+                if isinstance(user_object, dict) and user_object.get("userInfo"):
+                    decoded["session_id"] = record.session_id
+                    saves.append(decoded)
+            return saves
+
+        # A cookie session. There is no server-side store to enumerate at all --
+        # the one save that exists is the session in hand.
+        current = dict(session)
+        user_object = current.get("user_object")
+        if isinstance(user_object, dict) and user_object.get("userInfo"):
+            return [current]
+        return []
+
     store = interface.save_store
     saves = []
     with store._connect() as connection:
@@ -287,6 +313,62 @@ def get_saves():
         loaded.data["__save_revision"] = loaded.revision
         saves.append(loaded.data)
     return saves
+
+
+class SaveNotFound(Exception):
+    """No save for that uid, where one had to exist.
+
+    Distinct from "this player has no save yet": these are calls that address
+    another player by uid -- an invasion, a pillage, a neighbour lookup -- so a
+    miss means the server's own state disagrees with itself. Raised rather than
+    returning None so it lands in the log; the gateway's catch-all turns it into
+    a normal response, so the client is unaffected either way.
+    """
+
+
+def get_save_by_uid(wanted, required=False):
+    """One save, looked up by the game's player id, or None.
+
+    ``neighbor_repelled``, ``invasion_complete``, ``pillage_response`` and the
+    rest used to do this by reading every save in the database and comparing
+    ``user_object.userInfo.player.uid`` -- a full deserialisation of every
+    empire to find one, on every invasion. The uid is an indexed column now, so
+    it is one row.
+
+    The returned dict carries ``session_id`` and ``__save_revision`` like
+    :func:`get_saves` does, so it can be handed straight to
+    :func:`store_session` with the write guarded.
+
+    ``required=True`` raises instead of returning None.
+    """
+    from flask import current_app
+
+    interface = current_app.session_interface
+    if not hasattr(interface, "save_store"):
+        # A plain Flask session interface -- a test building a bare app, or any
+        # deployment that never installed the account-bound one. No store to ask,
+        # so fall back to the scan this function replaced.
+        for candidate in get_saves():
+            found = save_uid(candidate)
+            if found is not None and str(found) == str(wanted):
+                return candidate
+        if required:
+            raise SaveNotFound(f"no save for uid {wanted!r}")
+        return None
+
+    loaded = interface.save_store.load_by_uid(wanted)
+    if loaded is None or not loaded.data:
+        if required:
+            raise SaveNotFound(f"no save for uid {wanted!r}")
+        return None
+    user_object = loaded.data.get("user_object")
+    if not isinstance(user_object, dict) or not user_object.get("userInfo"):
+        if required:
+            raise SaveNotFound(f"save for uid {wanted!r} has no usable user_object")
+        return None
+    loaded.data["session_id"] = loaded.store_id
+    loaded.data["__save_revision"] = loaded.revision
+    return loaded.data
 
 
 def store_session(save):

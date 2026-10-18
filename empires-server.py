@@ -57,6 +57,7 @@ from save_engine import (
     base_path,
     db,
     ensure_fleets,
+    get_save_by_uid,
     install_path,
     log_path,
     logger,
@@ -2195,12 +2196,17 @@ def invader_response():
 
 
 def neighbor_invader_response(uid):
-    saves = [save for save in get_saves() if
-              str(save['user_object']["userInfo"]["player"]["uid"]) == str(uid)]
+    """The invasions aimed at one neighbour, by their uid.
 
-    if saves:
+    A miss here is a normal answer, not an anomaly: this is a list of who is
+    currently poking at that player, and a player with no save has nobody. So
+    ``required`` is off and the empty result stands.
+    """
+    save = get_save_by_uid(uid)
+
+    if save:
         neigbor_invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                            "data": [invader_entry(k[1:]) for k, v in saves[0]['user_object']["pvp"]["invaders"].items() if k != "pve"]}
+                            "data": [invader_entry(k[1:]) for k, v in save['user_object']["pvp"]["invaders"].items() if k != "pve"]}
     else:
         neigbor_invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                                     "data": []}
@@ -2208,8 +2214,7 @@ def neighbor_invader_response(uid):
 
 
 def neighbor_repel_challenge_response(params):
-    [save] = [save for save in get_saves() if
-              str(save['user_object']["userInfo"]["player"]["uid"]) == str(params[0])]
+    save = get_save_by_uid(params[0], required=True)
 
     neigbor_invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                         "data": next((invader_entry(k[1:] + "_" + str(params[0])) for k, v in save['user_object']["pvp"]["invaders"].items() if k == "u" + str(params[1])), None)}
@@ -2584,7 +2589,7 @@ def random_fleet_challenge_response(host_uid):
     #     "hp": None
     # }
 
-    [save] = [save for save in get_saves() if str(save['user_object']["userInfo"]["player"]["uid"]) == str(host_uid)]
+    save = get_save_by_uid(host_uid, required=True)
     defender_fleet = save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["defender_fleet"]
 
     subtype = lookup_item_by_code(defender_fleet[0].split(',')[0])["-subtype"]
@@ -2666,8 +2671,7 @@ def random_enemy_fleet_challenge_response(enemy_fleet_id):
     if len(enemy_fleet_id.split("_")) <= 2:
         attacker_fleet = session['user_object']["pvp"]["invaders"]["u" + enemy_fleet_id.split("_")[1]].get('attacker_fleet', placeholder_fleet)
     else:
-        [save] = [save for save in get_saves() if
-                  str(save['user_object']["userInfo"]["player"]["uid"]) == str(enemy_fleet_id.split("_")[2])]
+        save = get_save_by_uid(enemy_fleet_id.split("_")[2], required=True)
         attacker_fleet = save['user_object']["pvp"]["invaders"]["u" + enemy_fleet_id.split("_")[1]].get('attacker_fleet', placeholder_fleet)
 
     subtype = lookup_item_by_code(attacker_fleet[0].split(',')[0])["-subtype"]
@@ -2725,7 +2729,7 @@ def load_challenge_response(param):
 def occupation_place_response(params):
     cancel_unstarted_invasions()
 
-    [save] = [save for save in get_saves() if str(save['user_object']["userInfo"]["player"]["uid"]) == str(params[0])]
+    save = get_save_by_uid(params[0], required=True)
     occupied_objects = lookup_objects_save_by_position(save, params[1], params[2], 5)
     # todo defenders from larger area?
     # occupied_objects_double = lookup_objects_save_by_position(save, params[1] - 3, params[2] - 3, 11)
@@ -2763,7 +2767,7 @@ def occupation_place_response(params):
 
 
 def pillage_response(params):
-    [save] = [save for save in get_saves() if str(save['user_object']["userInfo"]["player"]["uid"]) == str(params[0])]
+    save = get_save_by_uid(params[0], required=True)
     # occupied_objects = lookup_objects_save_by_position(save, params[1], params[2], 5)
     # occupied_items = [lookup_item_by_name(e["itemName"]) for e in occupied_objects]
     # defense_units = [e for e in occupied_items if "unit" in e]
@@ -2879,7 +2883,7 @@ def load_world_response(params):
             if "titanName" in allies[str(params[0])]:
                 ally["titanName"] = allies[str(params[0])]["titanName"]
         else:
-            [save] = [save for save in get_saves() if str(save['user_object']["userInfo"]["player"]["uid"]) == str(params[0])]
+            save = get_save_by_uid(params[0], required=True)
             ally["world"]["objects"] = save['user_object']["userInfo"]["world"]["objects"]
             ally["world"]["roadData"] = save['user_object']["userInfo"]["world"]["roadData"]
             ally["expansions"] = save['user_object']["userInfo"]["player"]["expansions"]

@@ -24,7 +24,7 @@ from quest_engine import (
     roll_reward_random_float,
     simple_list,
 )
-from save_engine import ensure_fleets, get_saves, store_session
+from save_engine import ensure_fleets, get_save_by_uid, get_saves, store_session
 
 
 class StaleBattleReference(Exception):
@@ -312,21 +312,39 @@ def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
 
 
 def neighbor_repelled(enemy_fleet):
-    [save] = [save for save in get_saves() if
-              str(save['user_object']["userInfo"]["player"]["uid"]) == str(enemy_fleet.get("invaded_uid"))]
+    """The defender learns somebody knocked the invader off their island.
+
+    Looks the defender up by uid, which is an indexed column. It used to read
+    every save in the database and compare the uid in each -- deserialising
+    every empire on the server to find one.
+    """
+    save = get_save_by_uid(enemy_fleet.get("invaded_uid"))
+    if save is None:
+        print("WARNING: no save for the repelled defender",
+              enemy_fleet.get("invaded_uid"))
+        return
     save['user_object']["pvp"]["invaders"]["u" + str(enemy_fleet.get("uid"))]["dID"] = get_zid()
     store_session(save)
 
 
 def invasion_complete(enemy_fleet_uid, params, friendlies, friendly_strengths):
-    [save] = [save for save in get_saves() if
-              str(save['user_object']["userInfo"]["player"]["uid"]) == str(enemy_fleet_uid)]
+    """The defender's save records that the invasion is over."""
+    save = get_save_by_uid(enemy_fleet_uid)
+    if save is None:
+        print("WARNING: no save to mark the invasion complete for", enemy_fleet_uid)
+        return
     save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["status"] = 2
     save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["attacker_fleet"] = [format_player_fleet(friendlies[i]["-code"]) for i in get_alive_unit_index(friendly_strengths)]
     store_session(save)
 
 
 def cancel_unstarted_invasions():
+    """Withdraw any invasion the defender has not answered yet.
+
+    This one is a sweep over every player by nature -- there is no "this one
+    uid" to look up, it is "whoever has me pending" -- so it keeps reading them
+    all. It does get the guarded write from store_session now.
+    """
     for save in get_saves():
         if save['user_object']["pvp"]["invaders"].get("u" + str(get_zid()), {}).get("status") == 1:
             del save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]

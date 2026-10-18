@@ -5,13 +5,18 @@ CREATE TABLE IF NOT EXISTS saves (
     store_id    VARCHAR(255) NOT NULL,
     -- Bumped on every successful write. The compare-and-swap target.
     revision    INT NOT NULL DEFAULT 1,
+    -- The game's own player id, copied out of user_object.userInfo.player.uid
+    -- on every write and indexed, because the game addresses other players by
+    -- it. Nullable: a row with no empire in it yet has none.
+    uid         BIGINT NULL,
     -- The empire. msgpack, via the session interface's serializer.
     data        LONGBLOB NOT NULL,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT saves_store_id_unique UNIQUE (store_id),
     CONSTRAINT saves_revision_positive CHECK (revision >= 1),
-    INDEX idx_saves_store_id (store_id)
+    INDEX idx_saves_store_id (store_id),
+    INDEX idx_saves_uid (uid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A snapshot of what a save looked like before a given revision was replaced.
