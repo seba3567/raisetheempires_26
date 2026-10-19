@@ -182,7 +182,9 @@ def do_state_rewards(state, reference_item, meta, playback_tend=False):
     world = session['user_object']["userInfo"]["world"]
     resources = world['resources']
     resources['coins'] += int(state.get('-coins', 0))
-    resources['energy'] += energy  #which one?
+    # Energy stays on the player; it is not mirrored into world['resources'].
+    # See quest_engine.do_rewards for why that mirror was a second answer to a
+    # question that already had one.
     resources['oil'] += int(state.get('-oil', '0').split('|')[0])
     resources['wood'] += int(state.get('-wood', '0').split('|')[0])
 
@@ -286,7 +288,8 @@ def do_costs(costs):
     world = session['user_object']["userInfo"]["world"]
     resources = world['resources']
     resources['coins'] -= int(costs.get('-coins', 0))
-    resources['energy'] -= int(costs.get('-energy', 0)) #which one?
+    # The player's energy is charged just above; the world copy is not touched.
+    # See quest_engine.do_rewards for what this mirror used to cost.
     resources['oil'] -= int(costs.get('-oil', '0').split('|')[0])
     resources['wood'] -= int(costs.get('-wood', '0').split('|')[0])
 

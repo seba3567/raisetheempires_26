@@ -482,7 +482,18 @@ def do_rewards(label, raw_rewards, meta, inc_modifier=lambda a: a, item_modifier
     world = session['user_object']["userInfo"]["world"]
     resources = world['resources']
     resources['coins'] += int(inc.get('coins', 0))
-    resources['energy'] += int(inc.get('energy', 0)) #which one?  #repleenish!!
+    # Energy is *not* mirrored into world['resources'].
+    #
+    # It used to be, here and in five other places, each carrying a question
+    # nobody had answered -- `#which one?`, `# needed?`. The two counters
+    # diverged (a save read 27 on the player and 10 in the world) and the
+    # client only ever reads the player's: `init_user` sends `player["energy"]`
+    # and `RESOURCE_ORDER` does not include energy, so nothing shows the other
+    # one to anyone. Maintaining it was duplicated state -- a second answer to a
+    # question that already had one, free to drift.
+    #
+    # `player['energy']` is the number of record, and it is an integer: a
+    # resource that accumulates by `+=` must not end up as 27.0.
     resources['oil'] += int(inc.get('oil', 0))
     resources['wood'] += int(inc.get('wood', 0))
 
@@ -502,7 +513,6 @@ def do_rewards(label, raw_rewards, meta, inc_modifier=lambda a: a, item_modifier
         print("Level increased to", level["-num"], "New energy:", energy_cap)
         player['level'] = int(level["-num"])
         player['energy'] = int(energy_cap)
-        resources['energy'] = int(energy_cap)
         player['energyMax'] = int(energy_cap)
         levels_count += 1
         if "reward" in level and level["reward"]["-type"] == "cash":

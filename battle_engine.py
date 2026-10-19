@@ -1499,8 +1499,15 @@ def doBattleRewards(hit_type, max_strength, damage, friendly_max_strength):
     print("Combat rewards", hit_type ,  "xp:", xp, "(" + str(player['xp']) + ")")
 
     if energy:
-        player['energy'] += energy
-        resources['energy'] += energy # needed?
+        # `player['energy']` only. This mirrored into world['resources'] too,
+        # marked `# needed?` and never answered -- and it was not needed: the
+        # client reads the player's energy and RESOURCE_ORDER does not carry
+        # it, so a second counter was written in six places and read by nobody.
+        # It had already drifted: a save read 27 here and 10 there.
+        #
+        # The int() is the other half. Energy is a count, and letting it
+        # drift to 27.0 through repeated += is how a resource stops being one.
+        player['energy'] = int(player['energy'] + energy)
         print("Combat rewards", hit_type ,  "energy:", energy, "(" + str(player['energy']) + ")")
 
 
