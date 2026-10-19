@@ -8,11 +8,11 @@
  * cannot recompile. So the gateway is a loopback-only service and this file is
  * the only way to reach it.
  *
- * The load-bearing detail is the Host header. ``templates/ruffle.html`` renders
- * ``app_url={{ request.host_url }}`` into the FlashVars, and the client builds
- * its gateway URL from it (``Config.SERVICES_GATEWAY_PATH``). Flask therefore
- * has to see the *public* host, not 127.0.0.1:5005, or the game would call
- * straight back into Python and bypass this service entirely.
+ * The load-bearing detail is the Host header. The FlashVars carry
+ * ``app_url`` as an absolute URL built by ``buildFlashVars()``, and the client
+ * builds its gateway URL from it (``Config.SERVICES_GATEWAY_PATH``). Flask
+ * therefore has to see the *public* host, not 127.0.0.1:5005, or the game would
+ * call straight back into Python and bypass this service entirely.
  */
 import { config } from "./config.ts";
 

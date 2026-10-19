@@ -1,9 +1,9 @@
 /**
  * Reverse proxy to the AMF0 gateway.
  *
- * The Host assertions here are the load-bearing ones: templates/ruffle.html
- * renders `app_url={{ request.host_url }}` into the FlashVars and the client
- * builds its gateway URL from it. If Flask sees 127.0.0.1:5005 instead of the
+ * The Host assertions here are the load-bearing ones: `buildFlashVars()` puts
+ * the public origin into `app_url`, and the client builds its gateway URL from
+ * it. If Flask sees 127.0.0.1:5005 instead of the
  * public host, the game silently bypasses this service.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -71,7 +71,7 @@ describe('proxyToGateway', () => {
 
 	test('gives Flask the PUBLIC host, not the upstream address', async () => {
 		// This is what makes app_url correct in the FlashVars.
-		await forward(new Request(`${PUBLIC}/ruffle.html`));
+		await forward(new Request(`${PUBLIC}/juego`));
 
 		expect(lastSeen().headers['host']).toBe('localhost:8080');
 		expect(lastSeen().headers['host']).not.toContain('127.0.0.1');
@@ -80,13 +80,13 @@ describe('proxyToGateway', () => {
 	});
 
 	test('a different public host is honoured', async () => {
-		await forward(new Request(`${PUBLIC}/ruffle.html`), 'https://game.example.com');
+		await forward(new Request(`${PUBLIC}/juego`), 'https://game.example.com');
 		expect(lastSeen().headers['host']).toBe('game.example.com');
 		expect(lastSeen().headers['x-forwarded-proto']).toBe('https');
 	});
 
 	test('keeps the port when the public service runs on one', async () => {
-		await forward(new Request(`${PUBLIC}/ruffle.html`), 'http://localhost:9999');
+		await forward(new Request(`${PUBLIC}/juego`), 'http://localhost:9999');
 		expect(lastSeen().headers['host']).toBe('localhost:9999');
 	});
 
@@ -164,7 +164,7 @@ describe('proxyToGateway', () => {
 	test('reports an unreachable gateway instead of hanging', async () => {
 		// Port 1 is reserved and nothing listens on it.
 		const res = await proxyToGateway(
-			new Request(`${PUBLIC}/ruffle.html`),
+			new Request(`${PUBLIC}/juego`),
 			PUBLIC,
 			'http://127.0.0.1:1',
 		);
@@ -280,12 +280,12 @@ describe('player identity', () => {
 		proxyToGateway(req, PUBLIC, origin, zid);
 
 	test('hands the signed-in account to the gateway', async () => {
-		await forwardAs(new Request(`${PUBLIC}/ruffle.html`), ACCOUNT_ZID);
+		await forwardAs(new Request(`${PUBLIC}/juego`), ACCOUNT_ZID);
 		expect(lastSeen().headers['x-player-zid']).toBe(ACCOUNT_ZID);
 	});
 
 	test('sends nothing for anonymous traffic', async () => {
-		await forwardAs(new Request(`${PUBLIC}/ruffle.html`), null);
+		await forwardAs(new Request(`${PUBLIC}/juego`), null);
 		expect(lastSeen().headers['x-player-zid']).toBeUndefined();
 	});
 

@@ -198,6 +198,64 @@
 	//
 	// It was also registering only here, so offline asset caching was a property
 	// of this route rather than of the site.
+	/*
+	 * ------------------------------------------------------- is it frozen, or slow?
+	 *
+	 * A stalled tab and a throttled one look identical from the outside, and
+	 * that ambiguity is what made this expensive to diagnose: "se queda pegado"
+	 * could have meant a crash, a hang, or a browser doing exactly what
+	 * browsers do. It is measurable, so measure it.
+	 *
+	 * `requestAnimationFrame` is what the browser stops scheduling when a tab is
+	 * not in front -- Chrome clamps timers in hidden pages to one per second,
+	 * and Ruffle's background tick goes through a Worker that gets clamped the
+	 * same way. So counting rAF callbacks per second gives the truth: near zero
+	 * means the browser is throttling, not that the game has died.
+	 */
+	let fps = $state<number | null>(null);
+	let backgrounded = $state(false);
+	/** Below this, the page is visible, so the slowness is ours, not the browser's. */
+	const SLOW_FPS = 12;
+
+	function resume() {
+		/*
+		 * The Page Visibility API has no "wake me" call -- a hidden tab can only
+		 * be brought back by the user focusing the window. Asking for it is
+		 * still worth it: it raises the window on platforms that honour it, and
+		 * where it does nothing it costs nothing and misleads nobody.
+		 */
+		window.focus();
+	}
+
+	onMount(() => {
+		let frames = 0;
+		let windowStart = performance.now();
+		const countFrame = () => {
+			frames++;
+			requestAnimationFrame(countFrame);
+		};
+		requestAnimationFrame(countFrame);
+
+		const sampler = setInterval(() => {
+			const now = performance.now();
+			const elapsed = now - windowStart;
+			if (elapsed > 0) fps = Math.round((frames * 1000) / elapsed);
+			frames = 0;
+			windowStart = now;
+		}, 1000);
+
+		const syncVisibility = () => {
+			backgrounded = document.hidden;
+		};
+		document.addEventListener('visibilitychange', syncVisibility);
+		syncVisibility();
+
+		return () => {
+			clearInterval(sampler);
+			document.removeEventListener('visibilitychange', syncVisibility);
+		};
+	});
+
 	onMount(() => {
 		return () => {
 			if (watchdog) clearTimeout(watchdog);
@@ -221,6 +279,38 @@
 	>
 		<!-- Mount element for Ruffle -->
 		<div bind:this={mount} class="w-full h-full flex items-center justify-center"></div>
+
+		<!--
+			The honest answer to "it is stuck". Only ever shown once the game is
+			actually up, so it can never be mistaken for part of loading, and it
+			says which of the two very different situations is happening.
+		-->
+		{#if phase === 'ready' && backgrounded}
+			<div
+				class="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-3 rounded-t-lg bg-empire-950/95 px-4 py-2 text-left text-sm text-empire-100 shadow-[0_-2px_8px_rgba(0,0,0,0.45)]"
+				role="status"
+			>
+				<span>
+					El juego sigue en marcha, pero el navegador lo ralentiza cuando esta pestaña no está al
+					frente. Vuelve a esta ventana para ir a velocidad normal.
+				</span>
+				<button
+					type="button"
+					class="shrink-0 rounded border border-empire-500 px-3 py-1 hover:bg-empire-800"
+					onclick={resume}
+				>
+					Volver al juego
+				</button>
+			</div>
+		{:else if phase === 'ready' && fps !== null && fps < SLOW_FPS}
+			<div
+				class="absolute inset-x-0 bottom-0 z-10 rounded-t-lg bg-empire-950/95 px-4 py-2 text-left text-sm text-empire-100 shadow-[0_-2px_8px_rgba(0,0,0,0.45)]"
+				role="status"
+			>
+				El juego va a {fps} fps con esta ventana al frente. Si responde lento, prueba el build
+				de producción en lugar del servidor de desarrollo.
+			</div>
+		{/if}
 
 		{#if phase === 'idle'}
 			<div

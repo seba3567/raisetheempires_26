@@ -95,11 +95,38 @@ export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 	if (rufflePromise) return rufflePromise;
 
 	// Configure Ruffle runtime options before script loads.
-	// We prioritize WebGPU ('webgpu') with seamless fallback to WebGL.
+	//
+	// Renderer: 'wgpu-webgl', not 'webgpu'. This is the same wgpu emulation
+	// layer -- same Flash compatibility, same feature coverage -- reached
+	// through WebGL instead of the WebGPU backend. WebGPU was picking up the
+	// player's clicks and then freezing the tab with no further requests
+	// reaching the gateway, which is what "se congela" looked like from the
+	// server side: the batch never arrived, so nothing was ever wrong here.
+	//
+	// WebGPU also warns on Windows that powerPreference is ignored, and its
+	// fallback is not chosen until a device request actually fails -- which a
+	// hang never triggers. 'wgpu-webgl' asks for WebGL up front and gets the
+	// same renderer without the gamble.
+	//
+	// If a machine is ever verified good on WebGPU, 'webgpu' is the better
+	// choice; change it back with the reason recorded here.
 	if (typeof window !== 'undefined') {
 		window.RufflePlayer = window.RufflePlayer || {};
 		window.RufflePlayer.config = {
-			preferredRenderer: 'webgpu',
+			preferredRenderer: 'wgpu-webgl',
+			// Keep ticking when the tab is not in front.
+			//
+			// Ruffle's default here is to `instance.pause()` the moment
+			// `document.hidden` flips, which is what made every button feel
+			// slow: the click was queued and then fired in a burst on the way
+			// back in. It read like lag, and no amount of server time explained
+			// it -- the clicks were not reaching the gateway at all.
+			//
+			// 'mainThread' keeps the animation loop running in the background
+			// instead of parking it. The emulator is single-threaded either way,
+			// so this costs one thread's worth of CPU on a background tab and
+			// buys a game that responds the moment you look at it.
+			backgroundExecutionMode: 'mainThread',
 			letterbox: 'on',
 			warnOnUnsupportedContent: false,
 			logLevel: 'error',

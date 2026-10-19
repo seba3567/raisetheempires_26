@@ -7,8 +7,8 @@ demás lo sirve el servidor Python, al que este proceso hace de proxy.
 
 ```
 navegador ──► web/ (SvelteKit, :8080)  ──► empires-server.py (Flask, 127.0.0.1:5005)
-                landing, cuentas,            /ruffle.html, /assets, /js,
-                amigos, progreso,           /flashservices/gateway.php  (AMF0)
+                landing, cuentas,            /assets/… , /js, /flashservices/gateway.php  (AMF0)
+                amigos, progreso,           /ruffle.html  ->  /juego (redirect)
                 JUEGO (Ruffle embebido)
 ```
 
@@ -67,35 +67,123 @@ juego mudo hasta que el jugador tocara algo.
 
 ### Ruffle va completo, no solo el loader
 
-Ruffle **0.7.1 se sirve localmente** desde `static/ruffle/`, no desde unpkg. El
-SHA-256 del loader en el repo es
-`sha256-JgNqlFZwiN+z3oinWejtEKTOoHspUArzbzRe70JCAJg=`. Un proyecto de
-preservación no debería depender de que un CDN siga en pie.
+Ruffle **0.8.0-nightly.2026.10.18 se sirve localmente** desde `static/ruffle/`,
+no desde unpkg. El SHA-256 del loader en el repo es
+`C142B01123D1FAF2E8F20687409BD2080A9FD00CD56361F6DBD2BD805E3AB8A0`. Un proyecto
+de preservación no debería depender de que un CDN siga en pie.
 
-Ojo con esto: **`ruffle.js` no es un bundle, es un loader.** Son 455 KB que
-resuelven en runtime un core WebAssembly y dos chunks de JavaScript cuyos nombres
-derivan de su propia URL. Copiar solo el loader deja la página así:
+Ojo con esto: **`ruffle.js` no es un bundle, es un loader.** Son 666 KB que
+resuelven en runtime un core WebAssembly cuyo nombre de archivo lleva un hash y
+se deriva de la URL del propio loader. Copiar solo el loader deja la página así:
 
 ```
-GET /ruffle/core.ruffle.16d61072ac7fdc4d5013.js net::ERR_ABORTED 404
+GET /ruffle/ruffle_web_bg.FX3UZSBY.wasm net::ERR_ABORTED 404
 Serious error occurred loading SWF file: Error: Failed to load Ruffle WASM
 ```
 
 El juego entero, sin ningún otro síntoma. Por eso `static/ruffle/` tiene el
-**paquete completo** de `node_modules/@ruffle-rs/ruffle`: 12 archivos, 29,3 MB,
-dos de ellos binarios WASM de ~14 MB.
+**paquete completo** de `node_modules/@ruffle-rs/ruffle`: 8 archivos, 29,2 MB,
+dos de ellos binarios WASM de ~13,5 MB.
 
 ```
-ruffle.js                              455 KB   loader
-core.ruffle.16d61072ac7fdc4d5013.js    106 KB   el que pedía y daba 404
-core.ruffle.994eeef0a471a88cd0e3.js    112 KB
-172de42e6619eac8f371.wasm            13968 KB
-878d548199cddef07035.wasm            13894 KB
+ruffle.js                                  666 KB   loader
+ruffle.js.map                             1524 KB   source map
+ruffle_web_bg.FX3UZSBY.wasm              13831 KB   core WebAssembly
+ruffle_web-wasm_mvp_bg.CVX62F7H.wasm    13876 KB   core WebAssembly, build MVP
 ```
+
+Sobre la versión anterior (0.7.1) el layout era otro: el loader pedía además
+`core.ruffle.<hash>.js`. Si al hacer `bun add @ruffle-rs/ruffle@<version>` el
+nombre de esos chunks cambia, eso no es una regresión, es el layout nuevo.
 
 Los `.wasm` deben servirse como `application/wasm`:
 `WebAssembly.instantiateStreaming` rechaza cualquier otro content type, y el
 fallo se manifiesta como el mismo "Failed to load Ruffle WASM".
+
+### El `INFO web/src/log_adapter.rs:18` de la consola no es un fallo
+
+Al cargar el juego aparece en la consola del navegador una línea parecida a
+esta:
+
+```
+INFO web/src/log_adapter.rs:18 17:17:22 null: StatsManager.count errors zcache ZCacheResourceProvider resourceLoaded   1
+```
+
+No viene de este proyecto. Las tres piezas:
+
+- **`web/src/log_adapter.rs` es de Ruffle**, no nuestro. Es el crate `ruffle_web`,
+  que en el repo de Ruffle vive en `web/src/`. La línea 18 es `avm_trace`, que
+  hace `tracing::info!(target: "avm_trace", ...)`: eso es, cada `trace()` que el
+  ActionScript del SWF emite. La línea 26 sería `avm_warning`.
+- **El texto es del juego, no de Ruffle.** `StatsManager`, `ZCacheResourceProvider`,
+  `resourceLoaded` y `zcache` dan cero coincidencias en los dos `.wasm`; están en
+  el pool de constantes del ABC de `ZGame.109338.swf`. Junto a ellos aparecen
+  `ZLA ZCache hit: <uri>, type=<type>`, `ZLA ZCache put: <...>.png`,
+  `zlabs.resource:ImageResource` con su `bitmapData`, `PBEFallbackProvider.getPixels`
+  y la interfaz `IZCache` (`flush`, `put`, `containsKey`, `stats`). **ZCache es
+  la caché de imágenes y textures del juego servida por el CDN de Zynga**, no
+  telemetría: el `StatsManager` (`COUNTER_ZCACHE.zcache`) intentó hablar con ella,
+  no la encontró, y contó un error.
+- **Ese "error" es el diseño, no una falla.** El juego construye las URLs de
+  assets como `<zcache_url>/game/...`, y `zcache_url` es un FlashVar. Como no se
+  lo mandamos, la concatenación da la cadena literal `null` y el cliente pide
+  `/nullassets/game/...` a este origen. `empires-server.py` mapea ese prefijo al
+  archivo local en `assets/sol_assets_octdict/assets` (527 archivos, 174,7 MB:
+  437 SWF, 88 PNG, 2 MP3).
+
+  O sea que el trace es la huella de que los assets locales están sirviéndose.
+  **195 peticiones a `/nullassets/`, 195 respondidas 200/304, cero 404** en
+  `log.txt`. Apuntar `zcache_url` a un CDN "para arreglarlo" sería justo lo
+  contrario de arreglarlo: dejarían de servirse los assets locales y el juego
+  caería a `EmbeddedResourceProvider` sin arte. Cubierto por
+  `test_gateway_e2e.py::TestNullAssetsRoute`.
+
+**Por qué `logLevel: 'error'` no lo calla**, que es lo que más confunde: en
+`web/src/lib.rs`, `global_init()` instala un suscriptor global con
+`set_max_level(tracing::Level::INFO)` fijo. `logLevel` solo construye el
+suscriptor *por instancia*, y ese solo está activo dentro de `with_core()` /
+`with_instance()`. La carga asíncrona de recursos corre fuera de esos ámbitos y
+cae al global de `INFO`. No hay forma de bajarlo desde `RufflePlayer.config`, y
+`set_trace_observer` no sirve: añade un segundo camino de salida, no quita el
+`WASMLayer`.
+
+Se deja pasar. Silenciarlo exigiría parchear `console`, y un parche así
+escondería también el próximo `trace()` de verdad. Si molesta en una sesión
+concreta, se filtra desde las DevTools.
+
+### El arte del juego se cachea una semana; el resto no
+
+`/nullassets/**`, `/assets/**` e `/img/**` se sirven con
+`Cache-Control: public, max-age=604800`. Antes no había ninguna cabecera de
+caché en el proyecto, así que Werkzeug aplicaba su `no-cache` por defecto: el
+navegador guardaba el archivo pero tenía que **revalidarlo en cada uso**. El
+juego pide los mismos assets en cada visita, y eso convirtió 1133 de sus 1328
+peticiones de assets en 304 vacíos — un viaje entero por el proxy y de vuelta al
+disco para recibir tres cabeceras y ningún contenido.
+
+Lo que **no** se cachea, a propósito:
+
+- **`/nullassets/**` y `/img/**` no son `immutable`.** Sus nombres son descriptivos
+  (`Island3_Tileset_ENV.swf`), no hashes del contenido, así que un cache
+  inmutable sobreviviría a una edición del archivo y los jugadores seguirían
+  viendo el arte viejo. Una semana es el punto medio: elimina la revalidación en
+  cualquier sesión normal, y si el archivo cambia, el cambio tarda como mucho
+  una semana en llegar a quien ya lo cargó. El `ETag` sigue presente, que es lo
+  que avisa cuando la semana vence.
+- **`/css/` y `/js/` siguen en `no-cache`.** Son los recursos de las páginas
+  Jinja de 2013, se editan a mano y son 301 peticiones frente a las 2132 del
+  arte. Cachearlos convierte cada retoque en una adivina durante el desarrollo.
+- **Un 404 tampoco se cachea**, para que un asset que se archive después llegue a
+  quien ya lo pidió sin éxito.
+
+Cubierto por `test_gateway_e2e.py::TestAssetCacheHeaders`.
+
+Lo que **no** se puede cachear desde aquí: `/ruffle/*` (loader y WASM de Ruffle)
+lo sirve SvelteKit desde `static/`, y el adaptador solo fija cabeceras para
+`_app/immutable/*`, la salida de Vite. `static/` va sin `Cache-Control` y no hay
+gancho para cambiarlo. Son 3 peticiones por sesión, contra 2132 del arte, así que
+se deja. Si algún día llegaran a importar, habría que sacarlos de `static/` y
+servirlos desde una ruta propia.
 
 ## Por qué `zid` se deriva de la cuenta
 
@@ -174,9 +262,9 @@ dos veces.
 | `/` · `/entrar` · `/registro` · `/cuenta` | SvelteKit | Landing y cuentas |
 | `/juego` | SvelteKit | El SWF, embebido en la página |
 | `/admin/editor` | SvelteKit, **solo admin** | Editor de imperio, con los iconos del juego |
-| `/ruffle/*` | SvelteKit | Ruffle 0.7.1 completo (loader + chunks + WASM) |
+| `/ruffle/*` | SvelteKit | Ruffle 0.8.0-nightly completo (loader + WASM), desde `static/ruffle/` |
 | `/snapi.json` · `/player.json` | gateway (proxy) | Datos que el SWF y la web piden al servidor |
-| `/ruffle.html` · `/assets/…` · `/flashservices/…` | gateway (proxy) | Cliente y datos del juego |
+| `/ruffle.html` | gateway | Redirige a `/juego`. Ya no renderiza nada. |
 | `/save-editor` · `/gazillionaire` · `/patch/…` · `/list_session` | gateway, **solo admin** | Herramientas de edición |
 
 El hook decide con `event.route.id`: si no hay ruta que coincida, es del gateway.

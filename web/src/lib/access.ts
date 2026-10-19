@@ -29,9 +29,9 @@ const ADMIN_ONLY_EXACT: readonly string[] = [
   // the caller's own session, which is exactly why that was not obvious.
   "/editor/save",
   "/editor/restore",
-  // The standalone Ruffle page. The product's player is /juego, which embeds
-  // the same SWF in this app; this one is the 2013 standalone launcher kept for
-  // working on the client directly, so it is an admin tool rather than a page.
+  // The 2013 standalone launcher URLs. /juego is the player; these only
+  // redirect to it, and the template behind them is deleted. Listed anyway so a
+  // redirect can never become a rendered page again without this being revisited.
   "/ruffle.html",
   "/nodebug.html",
   // The 2013 avatar picker. /registro does not offer a choice yet, so this
