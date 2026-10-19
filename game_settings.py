@@ -214,8 +214,9 @@ def replenish_energy():
     player = session['user_object']["userInfo"]["player"]
     # Energy is a count and it is stored as one. It had drifted to 27.0 in a
     # live save, which is what a resource that arrives through a float stops
-    # being. The cast is here as well as on the awards because this is the
-    # function that runs on every single request.
+    # being. The cast is here as well as on the awards because this runs on
+    # every initUser, which is what puts a drifted save right again -- but the
+    # awards cast too, since this is not the only writer.
     player["energy"] = int(player["energy"])
     player["energyMax"] = int(player["energyMax"])
     current_energy_max = max(player["energy"], player["energyMax"])  # overfill possible

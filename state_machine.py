@@ -168,7 +168,10 @@ def do_state_rewards(state, reference_item, meta, playback_tend=False):
     energy = int(state.get('-energy', 0))
     if playback_tend:
         energy = max(energy, 0)
-    player['energy'] += energy
+    # int(): this is the writer that let energy reach 26.0 in a live save.
+    # `replenish_energy` casts too, but it only runs on initUser, so it cannot
+    # be the only thing guarding the type.
+    player['energy'] = int(player['energy'] + energy)
     player['cash'] += int(state.get('-cash', 0))
     player['socialXpGood'] += int(state.get('-socialXpGood', 0))
     player['socialXpBad'] += int(state.get('-socialXpBad', 0))
