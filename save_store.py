@@ -425,7 +425,7 @@ class Store:
         connection = self._connect()
         try:
             row = self._exec(
-                    connection, 
+                    connection,
                 "SELECT store_id, revision, data FROM saves WHERE store_id = %s",
                 (store_id,),
             ).fetchone()
@@ -436,6 +436,40 @@ class Store:
             return None
         return SaveRow(store_id=row["store_id"], revision=row["revision"],
                        data=self._decode(row["data"]))
+
+    def load_all(self) -> list[SaveRow]:
+        """Every save, in one query.
+
+        This exists because the sweep that reads every player's save -- the
+        neighbour list on every sign-up, the invasion cleanup on every
+        occupation -- used to select the whole table and then call ``load()``
+        once per row. That is N connections and N round trips to fetch data the
+        first query had already delivered, so the cost grew twice as fast as the
+        player count.
+
+        Rows that do not decode are skipped rather than raising: one
+        half-written paste must cost that row, not the whole list.
+        """
+        connection = self._connect()
+        try:
+            rows = self._exec(
+                connection,
+                "SELECT store_id, revision, data FROM saves ORDER BY store_id",
+            ).fetchall()
+        finally:
+            connection.close()
+
+        decoded = []
+        for row in rows:
+            try:
+                data = self._decode(row["data"])
+            except Exception as error:
+                print("Skipping undecodable save:", row["store_id"],
+                      type(error).__name__, error)
+                continue
+            decoded.append(SaveRow(store_id=row["store_id"],
+                                   revision=row["revision"], data=data))
+        return decoded
 
     def exists(self, store_id: str) -> bool:
         connection = self._connect()

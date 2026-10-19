@@ -325,16 +325,8 @@ def get_saves():
             return [current]
         return []
 
-    store = interface.save_store
     saves = []
-    with store._connect() as connection:
-        rows = connection.execute(
-            "SELECT store_id, data FROM saves ORDER BY store_id").fetchall()
-
-    for row in rows:
-        loaded = store.load(row["store_id"])
-        if loaded is None or not loaded.data:
-            continue
+    for loaded in interface.save_store.load_all():
         # The old filter asked whether the key was present and not whether it
         # held anything, so a row with ``user_object: null`` -- or a list, which
         # is what a half-written /editor/save paste leaves -- passed and then

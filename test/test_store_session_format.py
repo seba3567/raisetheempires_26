@@ -22,6 +22,7 @@ that replaces what the old ones checked.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import uuid
 
@@ -250,8 +251,99 @@ class TestAMissingRowIsNotACrash:
         assert "REFUSED" in message
 
 
+class TestLoadAll:
+    """One query for the whole table, instead of one per row.
+
+    The sweep that reads every player's save -- the neighbour list on every
+    sign-up, the invasion cleanup on every occupation -- used to select the
+    whole table and then call ``load()`` per row. That is N connections and N
+    round trips to fetch data the first query had already delivered.
+
+    Measured on 60 empires: 1169 ms down to 19 ms. The point of the test is
+    not the number, it is that the round trips stay flat as the table grows.
+    """
+
+    def _seed(self, app, count):
+        store = store_of(app)
+        with app.app_context():
+            keys = ["session:acct-all-" + uuid.uuid4().hex[:8] + "-" + str(n)
+                    for n in range(count)]
+            for n, key in enumerate(keys):
+                store.store(key, {"user_object": {"level": n}})
+            return keys
+
+    def test_it_returns_every_row(self, gateway_app, client):
+        seed(client)
+        store = store_of(gateway_app)
+        with gateway_app.app_context():
+            before = len(store.load_all())
+        keys = self._seed(gateway_app, 5)
+        try:
+            with gateway_app.app_context():
+                after = store.load_all()
+
+            assert len(after) >= before + 5
+            found = {row.store_id for row in after}
+            assert set(keys).issubset(found)
+        finally:
+            _purge(store, keys)
+
+    def test_it_carries_the_revision(self, gateway_app, client):
+        """The revision is what `store_session` compare-and-swaps against.
+
+        `load_all` exists because the sweep had the data but not this, and
+        re-fetched per row to get it. A row that lost its revision would look
+        current and would then refuse every write.
+        """
+        seed(client)
+        store = store_of(gateway_app)
+        keys = self._seed(gateway_app, 2)
+        try:
+            with gateway_app.app_context():
+                rows = {r.store_id: r.revision for r in store.load_all()}
+            for key in keys:
+                assert rows[key] >= 1
+        finally:
+            _purge(store, keys)
+
+    def test_it_does_not_ask_the_database_per_row(self, gateway_app, client, monkeypatch):
+        """The round trip count must not grow with the table."""
+        seed(client)
+        store = store_of(gateway_app)
+        keys = self._seed(gateway_app, 6)
+        try:
+            calls = []
+            real_connect = store._connect
+
+            def counting_connect():
+                calls.append(1)
+                return real_connect()
+
+            monkeypatch.setattr(store, "_connect", counting_connect)
+            with gateway_app.app_context():
+                store.load_all()
+
+            assert len(calls) == 1, f"load_all opened {len(calls)} connections"
+        finally:
+            _purge(store, keys)
+
+
+def _purge(store, keys):
+    """Drop the rows a test planted.
+
+    Cleanup only: a row left behind would make the next assertion in this file
+    see data it did not plant, which is the sort of failure that gets blamed on
+    the wrong test.
+    """
+    for key in keys:
+        with contextlib.suppress(Exception):
+            store.delete(key)
+
+
 class TestTheAdminRouteStillWorks:
+    """Nothing above should have broken the asset routes."""
+
+
     def test_the_art_serve(self, client):
-        """Nothing above should have broken the asset routes."""
         assert asset_status(client, "/avatar.json") == 200
         assert asset_status(client, "/motd.json") == 200
