@@ -24,7 +24,7 @@ from quest_engine import (
     roll_reward_random_float,
     simple_list,
 )
-from save_engine import ensure_fleets, get_save_by_uid, get_saves, store_session
+from save_engine import ensure_fleets, get_save_by_uid, get_saves, logger, store_session
 from save_store import save_invaders
 
 
@@ -554,6 +554,27 @@ def init_battle(params):
             enemy_fleet = lookup_item_by_code(task["_item"])
             baddies = [lookup_item_by_code(baddie_slot["-item"]) for baddie_slot in simple_list(enemy_fleet["baddie"])]
             if not friendlies:
+                # `ensure_fleets`, not `session['fleets']`: a session can
+                # arrive without the key at all, and the old direct index
+                # raised KeyError on exactly the path this guard is about.
+                known_fleets = ensure_fleets()
+                if known_fleets:
+                    # The session knows about fleets, and this is not one of
+                    # them. That is the state fault, not a loan: the client
+                    # named a fleet it is drawing and we do not have it, so
+                    # whatever we put here is a different army.
+                    #
+                    # The quest's troops are the right answer when the player
+                    # has brought nobody -- `session['fleets']` empty means
+                    # exactly that. When it is not empty, they brought someone
+                    # and we lost them.
+                    logger.error(
+                        "Battle named fleet %r, which is not registered; "
+                        "session has %s. The client is fighting units this "
+                        "server does not have.",
+                        params.get('fleet'), sorted(known_fleets))
+                    raise StaleBattleReference(
+                        f"fleet {params.get('fleet')!r} is not registered")
                 friendlies = [lookup_item_by_code(friendly[1:]) for friendly, count in task["fleet"].items() for i in
                               range(int(count))]
 

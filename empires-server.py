@@ -1869,7 +1869,16 @@ def user_response():
     replenish_energy()
 
     session["battle"] = None
-    session["fleets"] = {}
+    # The fleet registry survives a re-login.
+    #
+    # It used to be reset here, and that was the quiet half of a battle bug:
+    # the client's troops only ever reach the server through `addFleet`, so
+    # wiping the registry left it simulating units it did not have. When the
+    # next fight started, `init_battle` found nothing and fell back to the
+    # quest's troops -- which the client, already drawing its own, refused to
+    # accept ("TResolveBattle: unit strength out of sync"). A login in the
+    # middle of a session is normal; losing the troops because of it was not.
+    ensure_fleets()
     session['population'] = lookup_yield()
 
     if "market" not in session:
