@@ -36,6 +36,7 @@ from flask import (
     Flask,
     Response,
     current_app,
+    g,
     jsonify,
     make_response,
     redirect,
@@ -47,6 +48,7 @@ from flask import (
 from save_engine import (
     MAX_BACKUPS,
     InvalidSaveException,
+    _crash_editor_allowed,
     _current_store_id,
     backup_chain,
     base_path,
@@ -65,6 +67,11 @@ from save_engine import (
 )
 from save_migration import is_0_08a_preview, migrate
 
+# save_invaders reads the invasion map out of a save without raising on one that
+# never had it. It lives with the other save-shape readers in save_store, which
+# imports no Flask, so pulling it from there cannot cycle.
+from save_store import save_invaders
+
 try:
     from flask import safe_join  # flask 2.1.0 : safe_join is removed, use werkzeug.utils.safe_join instead."
 except ImportError:
@@ -73,9 +80,15 @@ import copy
 import json
 import random
 import threading  #, webbrowaser
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from contextlib import contextmanager
+
+# Named explicitly rather than inherited through a star import: the asset routes
+# build paths with it, and a `from quest_engine import *` that happens to
+# re-export Path is not something to rely on when that import list changes.
+from pathlib import Path
 from typing import Any
 
 import pyamf
@@ -101,6 +114,7 @@ from battle_engine import (
     spawn_fleet,
 )
 from game_settings import (
+    game_settings,
     get_sessions_id,
     get_zid,
     initial_island,
@@ -156,6 +170,34 @@ app.config['SESSION_TYPE'] = 'sqlalchemy'
 # one, which is exactly what a 10 MB save.db nobody remembered was.
 app.config['SAVE_STORE_PATH'] = save_store_url()
 app.config['SQLALCHEMY_DATABASE_URI'] = save_store_url()
+
+
+@app.before_request
+def mark_request_start():
+    """Flask's Request has no start time, so one is taken here."""
+    g.rte_started = time.perf_counter()
+
+
+@app.after_request
+def log_request(response):
+    """One line per request, the way Werkzeug used to do it by itself.
+
+    Werkzeug only logs requests while *it* is the server: ``log_request`` is
+    called by its own WSGI request handler, so the moment the gateway moved to
+    Granian or Waitress -- both of which serve the WSGI app directly -- every
+    access line stopped. Nothing was lost from the application log; what was
+    lost was the traffic. ``log.txt`` went quiet at the last request of the old
+    Werkzeug run and then just sat there holding that day's errors, which reads
+    exactly like a server that is still crashing and has been for twenty hours.
+
+    Application errors were never affected -- they go through ``logger.error``
+    and still land in the file. This restores the other half.
+    """
+    elapsed = (time.perf_counter() - g.get("rte_started", time.perf_counter())) * 1000
+    logger.info("%s %s -> %s in %.1fms",
+                request.method, request.full_path.rstrip("?"),
+                response.status_code, elapsed)
+    return response
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # Flask-SQLAlchemy has its own event notification system that gets layered on top of SQLAlchemy. To do this, it tracks modifications to the SQLAlchemy session. This option disables the modification tracking system.
 app.config['SESSION_SQLALCHEMY'] = db
 app.config['SESSION_COOKIE_HTTPONLY'] = False
@@ -167,11 +209,87 @@ MIN_ADMIN_ID = -1
 STEELE_ID = -1
 MAX_ADMIN_ID = 123
 
+def serving_port():
+    """The port this request's Host header names, or ``None`` if it names none.
+
+    Flask's ``Request`` has ``host`` and ``host_url`` but no ``host_port``, and
+    the port rides along inside ``host`` as a string -- ``"localhost:8080"``,
+    or ``"[::1]:5005"`` when the host is an IPv6 literal, which is why this
+    splits on the last colon rather than the first.
+    """
+    host = request.host or ""
+    if ":" not in host:
+        return None
+    try:
+        return int(host.rsplit(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def player_url():
+    """Where the player actually lives, when this request names it directly.
+
+    There is no ``/juego`` here: that route belongs to the SvelteKit front door.
+    Everything real arrives through it, which is also what puts the *public*
+    host in the Host header -- the reason ``app_url`` can be built server-side
+    at all.
+
+    So a request whose Host names this service's own port never came through
+    the front door, and redirecting it to ``/juego`` would walk it into a 404 on
+    this very server. ``WEB_ORIGIN`` names the front door when it is known; with
+    nothing to redirect to, that route says where to go instead of pretending.
+    """
+    if serving_port() != int(settings.port):
+        return None
+    configured = os.environ.get("WEB_ORIGIN", "").strip().rstrip("/")
+    return configured + "/juego" if configured else None
+
+
 @app.route("/")
 @app.route("/game")
 @app.route("/play")
 def index():
+    player = player_url()
+    if player:
+        return make_response(redirect(player))
+
+    if serving_port() == int(settings.port):
+        return make_response(WHERE_THE_GAME_IS, 200)
+
+    # Came through the front door, so /juego exists -- on the other service.
     return make_response(redirect("/juego"))
+
+
+#: Shown only when the gateway is opened directly instead of through the web
+#: front door. Short on purpose: this is a wrong-port landing page, not docs.
+WHERE_THE_GAME_IS = """<!doctype html>
+<meta charset="utf-8">
+<title>Raise the Empires — gateway</title>
+<style>
+  body { background:#11151c; color:#d8dee9; font:16px/1.6 system-ui,sans-serif;
+         margin:0; display:grid; place-items:center; min-height:100vh; }
+  main { max-width:34rem; padding:2rem; }
+  h1 { font-size:1.4rem; margin:0 0 .5rem; color:#e6b104; }
+  code { background:#1b212c; padding:.15rem .4rem; border-radius:.25rem; }
+  p { margin:.6rem 0; }
+  ul { color:#8b98a9; }
+</style>
+<main>
+  <h1>Esto es el gateway, no el juego</h1>
+  <p>El juego lo sirve la web, no este servicio. Esta redirección daba a
+     <code>/juego</code>, que aquí no existe: por eso salía un 404.</p>
+  <p>Abre la web en el puerto que tengas configurado
+     (<code>http://localhost:8080</code> en desarrollo), o pon
+     <code>WEB_ORIGIN</code> en el entorno para que esta página te mande allí
+     sola.</p>
+  <ul>
+    <li>El cliente necesita <code>localhost</code>, no <code>127.0.0.1</code>:
+        el servicio web escucha en IPv6.</li>
+    <li>Este puerto es interno. En producción hay un proxy delante y
+        <code>/juego</code> sí existe ahí.</li>
+  </ul>
+</main>
+"""
 
 
 @app.route("/home.html")
@@ -196,28 +314,13 @@ def home():
 
 @app.route("/ruffle.html")
 def ruffle():
-    """Legacy fallback player.
+    """The 2013 launcher URL, kept so old links still land on the game.
 
-    Redirects to the modern SvelteKit player at /juego by default.
-    If requested with ?raw=1 or ?fallback=1, renders templates/ruffle.html
-    for headless diagnostics and integration tests.
+    It no longer renders anything: `/juego` (web/src/routes/juego) is the only
+    player, and it was the one under test. The template that used to be served
+    here -- with its own copy of the FlashVars and a CDN-pinned Ruffle -- is
+    gone, which is also why `/ruffle.html?raw=1` now redirects here as well.
     """
-    if request.args.get("raw") == "1" or request.args.get("fallback") == "1":
-        if not validate_save(session, True):
-            return make_response(redirect('/admin/editor'))
-        saves = get_saves()
-        return render_template(
-            "ruffle.html",
-            time=datetime.now().timestamp(),
-            zid=str(get_zid()),
-            version=version,
-            allies=json.dumps(get_allies_friend(saves), default=lambda o: '<not serializable>', sort_keys=False, indent=2),
-            app_friends=json.dumps(get_allies_id(saves)),
-            worldname=session['user_object']["userInfo"]["worldName"] if 'user_object' in session else "Emperor",
-            picture=get_avatar_pic(),
-            dropdown_items=get_sessions_dropdown_info(saves),
-            motd=get_motd(),
-        )
     return make_response(redirect('/juego'))
 
 @app.route("/snapi.json")
@@ -697,9 +800,9 @@ def get_sessions_info(saves):
             "socialLevelBad": save['user_object']["userInfo"]["player"]["socialLevelBad"],
             "profilePic": "img/avatars/" + (save['profilePic'] if 'profilePic' in save and save['profilePic'] is not None else "blank.png"),
             "dominanceRank": 1,
-            "pvpNumOccupiers": len([k for k, v in save['user_object']["pvp"]["invaders"].items() if k != "pve"]),
-            "pvpNumOccupiersNotDefended": len([k for k, v in save['user_object']["pvp"]["invaders"].items() if k != "pve"]),
-            "pvpInfo": next((v for k, v in save['user_object']["pvp"]["invaders"].items() if k == "u" + str(get_zid())), None),
+            "pvpNumOccupiers": len([k for k in save_invaders(save) if k != "pve"]),
+            "pvpNumOccupiersNotDefended": len([k for k in save_invaders(save) if k != "pve"]),
+            "pvpInfo": save_invaders(save).get("u" + str(get_zid())),
             "tending": {
                 "actions": 3
             }
@@ -1150,17 +1253,30 @@ def motd_state():
     })
 
 
-def get_motd():
-    motd = "img/motds/" + random.choice(get_avail_motds())
-    return motd
-
 @app.route("/changelog.txt")
 def change_log():
     return render_template("changelog.txt")
 
+#: How long the browser may reuse an archived game asset without asking again.
+#:
+#: These files are named after what they are (``Island3_Tileset_ENV.swf``), not
+#: after a hash of their contents, so a year-long immutable cache would survive
+#: an edit to the archive and players would keep seeing the old art. A week is
+#: the compromise: it removes the revalidation in every normal session, and the
+#: worst case if the archive changes is that the change takes a week to reach
+#: players who already loaded one of those files.
+#:
+#: What it buys is not small. The game asks for the same assets on every visit,
+#: and with Werkzeug's default of ``no-cache`` the browser stored them but still
+#: had to revalidate each one: 1133 of 1328 asset requests in ``log.txt`` were
+#: 304s that carried no body and existed only to be told nothing had changed.
+#: Each one still cost a full hop through the proxy and back to the disk.
+ASSET_MAX_AGE = 60 * 60 * 24 * 7
+
+
 @app.route("/img/<path:path>")
 def template_img(path):
-    return send_from_directory_mod("templates/img", path)
+    return send_from_directory_mod("templates/img", path, max_age=ASSET_MAX_AGE)
 
 @app.route("/js/<path:path>")
 def template_js(path):
@@ -1172,19 +1288,36 @@ def template_css(path):
 
 @app.route('/nullassets/<path:path>')
 def send_sol_assets(path):
-    return send_from_directory_mod('assets/sol_assets_octdict/assets', path)
+    return send_from_directory_mod('assets/sol_assets_octdict/assets', path, max_age=ASSET_MAX_AGE)
 
 @app.route('/assets/<path:path>')
 def send_sol_assets_alternate(path):
-    return send_from_directory_mod('assets/sol_assets_octdict/assets', path)
+    return send_from_directory_mod('assets/sol_assets_octdict/assets', path, max_age=ASSET_MAX_AGE)
 
 
-def send_from_directory_mod(directory, filename, **options):
-    absolute_directory = os.path.join(install_path(), directory)
+def send_from_directory_mod(directory, filename, max_age=None, **options):
+    """Serve one file, letting a mod override win if one is loaded.
+
+    ``max_age`` sets how long the browser may reuse the file without asking
+    again. It applies to the mod branch too: a modded file is served from
+    memory, and without the header it would keep revalidating on every load
+    like everything else did.
+    """
+    absolute_directory = str(Path(install_path()) / directory)
     path = safe_join(os.fspath(absolute_directory), os.fspath(filename))
-    print(path)
 
-    return mod_engine.mod.get(path)() if path in mod_engine.mod else send_from_directory(absolute_directory, filename, **options)
+    if path in mod_engine.mod:
+        response = make_response(mod_engine.mod.get(path)())
+    else:
+        response = send_from_directory(
+            absolute_directory, filename, max_age=max_age, **options)
+
+    # send_from_directory sets this itself when max_age is given; the mod branch
+    # above is a bare response and would otherwise fall back to revalidating.
+    if max_age is not None and "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = f"public, max-age={max_age}"
+
+    return response
 
 
 @contextmanager
@@ -1217,6 +1350,22 @@ def _tolerate_batch_failure(call_count):
             "Gateway batch failed after at least one call; answering the rest",
             exc_info=True,
         )
+
+
+def _call_args_summary(params):
+    """What the client actually sent, short enough to read in a log line.
+
+    Knowing *which* method a batch called is half the diagnosis; knowing what
+    it passed is the other half. Truncated hard, because a world payload can be
+    thousands of characters and this line exists to be skimmed.
+    """
+    if params is None:
+        return "-"
+    try:
+        rendered = json.dumps(params, default=lambda o: "<no serializable>")
+    except (TypeError, ValueError):
+        rendered = repr(params)
+    return rendered if len(rendered) <= 160 else rendered[:157] + "..."
 
 
 def _pad_batch_results(resps, call_count):
@@ -1336,12 +1485,25 @@ def post_gateway():
                 reqq['params'] = _amf_as_list(reqq['params'])
             fn_name = getattr(reqq, 'functionName', None) or (reqq.get('functionName') if isinstance(reqq, dict) else None)
             handler = AMF_HANDLERS.get(fn_name)
+            called_at = time.perf_counter()
             if handler is not None:
                 resp = handler(reqq.get('params'), reqq, resp_msg)
                 if resp is not None:
                     resps.append(resp)
             else:
                 resps.append(dummy_response())
+            # Which method the client actually asked for, and what it cost.
+            #
+            # The access log only ever showed `POST /flashservices/gateway.php`,
+            # so a batch that hung or answered the wrong shape was invisible: the
+            # log could not tell you what the client was waiting on. When the
+            # tab stops talking to the server entirely, the last line here is
+            # the call it was processing.
+            logger.info("  AMF %-46s %s (%.1fms)  args=%s",
+                        (fn_name or "<sin nombre>")[:46],
+                        "atendido" if handler is not None else "SIN IMPLEMENTAR",
+                        (time.perf_counter() - called_at) * 1000,
+                        _call_args_summary(reqq.get('params')))
 
             if fn_name != 'UserService.tutorialProgress' and fn_name != 'WorldService.performAction':
                 report_other_log(fn_name, resps[-1] if resps else None, reqq, resp_msg.bodies[0][0])
@@ -1978,10 +2140,10 @@ def tutorial_response(step, sequence, endpoint):
     if step == 'tut_step_inviteFriendsEndPauseTutorial':
         handle_quest_progress(meta, progress_neighbor_count())
 
-    merge_quest_progress(meta['QuestComponent'] if 'QuestComponent' in meta else [], session['quests'], "session quest")
+    merge_quest_progress(meta.get('QuestComponent', []), session['quests'], "session quest")
     session['user_object']["userInfo"]["player"]["tutorialProgress"] = step  # TODO: revert step when loading if needed
 
-    report_tutorial_step(step, meta['QuestComponent'] if 'QuestComponent' in meta else None, meta['newPVE'], sequence,
+    report_tutorial_step(step, meta.get('QuestComponent'), meta['newPVE'], sequence,
                          endpoint)
     tutorial_response = {"errorType": 0, "userId": 1, "metadata": meta,
                          "data": []}
@@ -2401,7 +2563,14 @@ def occupation_place_response(params):
         "chID": str(get_zid()),
         "defender_fleet": defense_fleet
     }
-    store_session(save)
+    if not store_session(save):
+        # This writes the *attacker's* fleet into the *defender's* save, so a
+        # refusal here is the sharpest version of the silent loss: the invasion
+        # never appears next to the island it is attacking, while the attacker's
+        # own screen says it is underway. `store_session` has already logged the
+        # row it refused; say which act it was.
+        logger.error("invasion of %s was not saved: the defender's save moved under us",
+                     params[0])
 
     occupation_place_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                       "data": []}
@@ -2417,7 +2586,13 @@ def pillage_response(params):
     # defense_units = defense_units[:5]
 
     save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["pillTS"] = datetime.now().timestamp()
-    store_session(save)
+    if not store_session(save):
+        # This writes the *attacker's* action into the *defender's* save, so a
+        # refusal here is the sharpest version of the silent loss: the pillage
+        # never lands and the attacker is told it did. `store_session` has
+        # already logged the row it refused; say which act it was.
+        logger.error("pillage against %s was not saved: the defender's save moved under us",
+                     params[0])
 
     pillage_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                       "data": []}
@@ -2472,6 +2647,64 @@ def stop_mayhem_response():
     stop_mayhem_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                             "data": []}
     return stop_mayhem_response
+
+
+def _known_campaigns():
+    """The campaign catalogue, as ``{name: entry}``.
+
+    Read from gameSettings rather than hardcoded: the client's campaign list is
+    data, and a server that disagrees with it about which campaigns exist is a
+    server that eventually hands the client a map it cannot load.
+    """
+    campaigns = game_settings.get("settings", {}).get("campaigns", {}).get("campaign", [])
+    return {entry["-name"]: entry for entry in campaigns if entry.get("-name")}
+
+
+def set_current_campaign_response(params):
+    """The client naming the PvE campaign it is playing.
+
+    Sent once, right after ``initUser``, with the campaign id as its only
+    argument -- ``["camp001"]``, read off the wire rather than guessed.
+
+    Until this was implemented the call fell through to ``dummy_response()``:
+    ``errorType: 0`` and no data, which the client reads as "fine, nothing to
+    do". So the server kept whatever ``campaign.current`` happened to say in the
+    save, the client moved on with its own idea of the campaign, and nothing on
+    the server ever registered which campaign was actually being played.
+
+    ``init_user`` already seeds ``campaign.current`` with the first campaign, so
+    on a fresh account this is a confirmation rather than a change. It earns its
+    keep on a save that came from the editor or an old backup, where
+    ``current`` is whatever was stored.
+
+    The name is checked against the catalogue instead of trusted: a typo, or a
+    hand-edited save, must not be able to write a campaign id that no map lookup
+    will ever match. An unknown name is refused the way an unimplemented
+    service is -- success, no change -- because the client's own fallback is to
+    keep playing the campaign it already had, and silently moving it somewhere
+    else would be worse than ignoring it.
+    """
+    set_current_campaign_response = {"errorType": 0, "userId": 1,
+                                     "metadata": {"newPVE": 0}, "data": []}
+
+    requested = params[0] if isinstance(params, (list, tuple)) and params else None
+    entry = _known_campaigns().get(requested)
+    if entry is None:
+        logger.warning("setCurrentCampaign: unknown campaign %r; ignoring", requested)
+        return set_current_campaign_response
+
+    campaign = session['user_object']["userInfo"]["world"]["campaign"]
+    campaign["current"] = requested
+
+    # Register the opening chapter. `get_active_island_by_map` would create this
+    # entry the same way on first read; doing it here means the campaign is
+    # already there in the save rather than appearing as a side effect of the
+    # next PvE call.
+    start = entry.get("-startChapter")
+    if start and start not in campaign["active"]:
+        campaign["active"][start] = {"status": 0, "fleets": []}
+
+    return set_current_campaign_response
 
 
 def save_options_response(options):
@@ -2531,7 +2764,7 @@ def load_world_response(params):
             ally["expansions"] = save['user_object']["userInfo"]["player"]["expansions"]
             ally["worldName"] = save['user_object']["userInfo"]["worldName"]
             ally["titanName"] = save['user_object']["userInfo"]["titanName"]
-            ally["pvpInvaders"] = save['user_object']["pvp"]["invaders"]
+            ally["pvpInvaders"] = save_invaders(save)
 
         # ally["gf"] = False
         # ally["yimf"] = ""
@@ -3009,6 +3242,7 @@ AMF_HANDLERS: dict[str, Callable[[Any, Any, Any], Any]] = {
     'UserService.setWorldName': lambda p, *_: world_name_response(p[0]),
     'WorldService.updateRoads': lambda p, *_: update_roads_response(p[0]),
     'UserService.saveOptions': lambda p, *_: save_options_response(p[0]),
+    'UserService.setCurrentCampaign': lambda p, *_: set_current_campaign_response(p),
     'WorldService.viewZoom': lambda p, *_: view_zoom_response(p[0].get('zoom')),
     'WorldService.beginNextCampaign': lambda p, *_: next_campaign_response(p[0]),
     'WorldService.addFleet': lambda p, *_: add_fleet_response(p[0]),
@@ -3073,14 +3307,38 @@ def on_delete_save_socket(message):
 
 @app.errorhandler(500)
 def server_error_page(error):
-    if settings.crash_log:
-        log_file = os.path.join(log_path(), "log.txt")
+    """The last resort: something escaped that nothing else handled.
+
+    Two things were wrong here and both of them hid failures rather than
+    causing them.
+
+    **It opened a text editor.** This is the 2012 desktop build's crash flow,
+    inherited verbatim: `settings.crash_log` came from a command-line flag
+    meant for a windowed app, so on the server every unhandled exception popped
+    a Notepad on whoever's machine happened to be running it. Ninety-eight of
+    them, in one session, from a single typo in this file.
+
+    **It answered 200.** Returning a bare string from an error handler is a 200
+    with `text/plain`, and thirteen characters of it. A client parsing AMF got
+    `Unexpected token 'I'` and a browser got the word "wrong" on a blank page,
+    neither of which says "the gateway failed". The status has to be the truth.
+
+    The traceback goes to the log, which is the part that can actually be read
+    after the fact.
+    """
+    logger.error("Unhandled server error", exc_info=getattr(error, "original_exc_info", None))
+
+    if settings.crash_log and _crash_editor_allowed():
+        log_file = str(Path(log_path()) / "log.txt")
         try:
             import subprocess
             subprocess.Popen(["notepad", log_file] if os.name == "nt" else ["xdg-open", log_file])
         except Exception as e:
-            print("Could not launch log editor:", e)
-    return 'It went wrong'
+            logger.error("Could not launch log editor: %s", e)
+
+    # 500, not 200: the front end reads this as "the gateway is unreachable"
+    # and stops, rather than trying to parse an apology as game data.
+    return make_response("Internal Server Error", 500)
 
 
 def enc_hook(obj):
@@ -3174,10 +3432,12 @@ def open_browser_when_ready():
     """Open the game in the bundled Chromium, or the default browser."""
     if 'WERKZEUG_RUN_MAIN' in os.environ or not settings.open_browser:
         return
-    if os.path.exists(os.path.join("chromium", "chrome.exe")):
-        launch = os.path.join("chromium", "chrome.exe")
-    elif os.path.exists(os.path.join("chromium", "chrome")):
-        launch = os.path.join("chromium", "chrome")
+    bundled = Path("chromium") / "chrome.exe"
+    posix_bundled = Path("chromium") / "chrome"
+    if bundled.exists():
+        launch = str(bundled)
+    elif posix_bundled.exists():
+        launch = str(posix_bundled)
     else:
         threading.Timer(1.25, lambda: webbrowser.open(
             "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path
@@ -3185,7 +3445,7 @@ def open_browser_when_ready():
         return
 
     threading.Timer(1.25, lambda: os.system(
-        launch + " --user-data-dir=\"" + os.path.join(my_games_path(), "chromium-profile")
+        launch + " --user-data-dir=\"" + str(Path(my_games_path()) / "chromium-profile")
         + "\" --allow-outdated-plugins "
         + ("--app=" if settings.app_mode else "")
         + "http://" + settings.http_host + ":" + str(settings.port) + "/" + settings.http_path

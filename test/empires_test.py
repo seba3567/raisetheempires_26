@@ -1,3 +1,4 @@
+import copy
 import json
 
 import pytest
@@ -13,6 +14,63 @@ app = Flask(__name__)
 app.secret_key = 'test'
 
 TEST_DIR = Path(__file__).parent
+
+
+def _real_save():
+    """A save as the database holds it, from the factory that writes them.
+
+    `init_user()` returns the `user_object` value itself; the store wraps it
+    under that key, and every reader here indexes through it.
+    """
+    session.sid = "0"
+    session['profilePic'] = "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"
+    return {"user_object": empires_server.init_user(),
+            "profilePic": session['profilePic']}
+
+
+def _without_pvp(save):
+    """That same save with the chain removed, as an old build would have left it."""
+    stripped = copy.deepcopy(save)
+    stripped['user_object'].pop('pvp', None)
+    return stripped
+
+
+def test_neighbour_list_survives_a_save_without_pvp():
+    """One player's corrupt row must not break the sign-up of another.
+
+    `get_allies_info` reads every save, `init_user` calls it, and `initUser` is
+    the first thing a new player does -- so a save with no `pvp` chain used to
+    stop an unrelated player from creating their empire, with a KeyError about
+    a key they have never heard of. That is what put 121 of them in log.txt.
+    """
+    with app.test_request_context():
+        normal = _real_save()
+        broken = _without_pvp(normal)
+        rows = empires_server.get_sessions_info([normal, broken])
+
+    assert len(rows) == 2, "one broken row dropped a neighbour off the list"
+    assert all(r["pvpNumOccupiers"] == 0 for r in rows), "the fresh save has none pending either"
+    assert all(r["pvpInfo"] is None for r in rows)
+
+
+def test_cancel_unstarted_invasions_survives_a_save_without_pvp(monkeypatch):
+    """The other sweep over every player, called on every occupation.
+
+    It looks for "whoever has me pending", so it cannot address one uid and
+    has to read them all -- which meant the same unguarded index.
+    """
+    import battle_engine
+
+    with app.test_request_context():
+        broken = _without_pvp(_real_save())
+
+    monkeypatch.setattr(battle_engine, "get_saves", lambda: [broken])
+
+    with app.test_request_context():
+        session.sid = "0"
+        # Must not raise: there is nothing to cancel on a save that never
+        # registered a single invasion.
+        battle_engine.cancel_unstarted_invasions()
 
 
 def test_add_fleet():
@@ -339,7 +397,7 @@ def test_init_user(monkeypatch):
         session['profilePic'] = "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"
         user = empires_server.init_user()
 
-        with open(TEST_DIR / 'init_user.json') as f:
+        with (TEST_DIR / 'init_user.json').open(encoding="utf-8") as f:
             user["userInfo"]["player"]["lastEnergyCheck"] = 0
             user["neighbors"].sort(key=lambda x: x["uid"])
             expected_json = json.load(f)

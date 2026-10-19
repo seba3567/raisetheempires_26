@@ -159,10 +159,35 @@ def save_store_url():
     MySQLdb, which is not installed -- this project uses PyMySQL. Store ignores
     the scheme entirely and reads host, port, credentials and path. One URL,
     named after the driver that is actually installed.
+
+    That mismatch is not hypothetical: it took the server down on 2026-10-18
+    with ``ModuleNotFoundError: No module named 'MySQLdb'`` raised from
+    ``configure_app()``, before it had served a single request. A
+    ``ModuleNotFoundError`` about a driver nobody asked for is a bad way to
+    learn that a URL is spelled differently from the default, so
+    :func:`_with_installed_driver` accepts the spellings people actually write
+    and returns the one SQLAlchemy can use.
     """
-    return os.environ.get(
+    return _with_installed_driver(os.environ.get(
         "SAVE_STORE_PATH",
-        "mysql+pymysql://root:2001@127.0.0.1:3306/raisetheempires")
+        "mysql+pymysql://root:2001@127.0.0.1:3306/raisetheempires"))
+
+
+def _with_installed_driver(url: str) -> str:
+    """Spell the scheme as ``mysql+pymysql`` whatever the operator wrote.
+
+    ``mariadb://`` is the natural thing to write and is what several test
+    fixtures and at least one deployment used, but SQLAlchemy resolves it to
+    the MySQLdb driver rather than the PyMySQL one this project installs. Only
+    the scheme is rewritten; host, port, credentials and database are passed
+    through untouched, and Store ignores the scheme anyway. Anything else --
+    including a bare ``host:port/db`` -- is returned as it came in, so this
+    never invents a connection it was not given.
+    """
+    for shorthand in ("mariadb://", "mysql://"):
+        if url.startswith(shorthand):
+            return "mysql+pymysql://" + url[len(shorthand):]
+    return url
 
 
 def my_games_path():
@@ -232,7 +257,17 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler(str(Path(log_path()) / "log.txt"), encoding="utf-8")
-    ]
+    ],
+    # `force=True` is load-bearing, not tidiness. `basicConfig()` does nothing at
+    # all when the root logger already has handlers, and Granian installs its
+    # own in every worker *before* it imports the app. So the FileHandler above
+    # was silently never installed: under Granian the server answered requests
+    # and wrote nothing anywhere, and log.txt went quiet at the last request of
+    # the old Werkzeug run while still holding every error from that day.
+    #
+    # `force` also redirects Granian's own logging here, which is the point --
+    # one file to read when something has gone wrong.
+    force=True,
 )
 atexit.register(logging.shutdown)
 logger = logging.getLogger(__name__)
@@ -413,7 +448,22 @@ def store_session(save):
         # Someone wrote between this save being read and now. Refusing is the
         # safe half: the alternative is overwriting their turn, which is the bug
         # this whole rebuild exists to stop.
-        print("store_session refused a stale write for", session_id, ":", conflict)
+        #
+        # This is an ERROR and not a debug line. Every caller that reaches here
+        # has just thrown away a real change -- an invasion placed, a pillage
+        # taken, an ally tended -- and the handler still answers the client
+        # with `errorType: 0`, because it never checks this return value. The
+        # client is told the action worked and it did not happen.
+        #
+        # Retrying is not an option: this save was read before the other write,
+        # so writing it again would overwrite the turn that won the race, which
+        # is the exact loss the revision guard exists to prevent. The write has
+        # to be dropped; what must not be dropped is the record that it was.
+        logger.error(
+            "store_session REFUSED a stale write for %s (expected revision %r): %s. "
+            "The change in this call was discarded and the caller is about to "
+            "answer the client with success.",
+            session_id, revision, conflict)
         return False
 
     # The session's revision has to follow the row it just wrote.

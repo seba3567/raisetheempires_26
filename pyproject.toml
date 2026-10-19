@@ -159,18 +159,19 @@ ignore = [
     "T203",
 
     # ---- Deferred to phase 2: high-churn, low-signal rules -------------------
-    # pathlib migration (PTH*): real modernisation, but it rewrites ~70 call
-    # sites across the engines and needs its own review pass.
-    "PTH",
-    # Collapsing same-arm if/elif chains touches 127 blocks and risks changing
-    # which branch wins under short-circuit evaluation.
-    "SIM114",
+    # pathlib migration (PTH*): done. The count below was an estimate taken
+    # before anyone measured; it was 26 sites, not ~70, and they are now Path.
+    # The estimates for the rules below were also off in both directions, so
+    # count before scheduling rather than trusting the number written here.
+    #
+    # Collapsing same-arm if/elif chains: was estimated at 127 blocks, measured
+    # at zero. Left enabled, so a new one has to be written on purpose.
     # "Assign then immediately return" cleanup, purely cosmetic.
     "RET504",
     # list + list -> [*a, *b]; sometimes deliberate for a small memory profile.
     "RUF005",
-    # dict.get() rewrites around 12 call sites.
-    "SIM401",
+    # dict.get() rewrites: enabled, two sites, both mechanical.
+    # "SIM401",
     # zip(strict=...): adding strict=True can turn a silently-truncating zip into
     # a crash. Needs per-call review, not a blanket autofix.
     "B905",

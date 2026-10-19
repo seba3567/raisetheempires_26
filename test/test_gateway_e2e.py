@@ -20,6 +20,7 @@ are large and versioned.
 from __future__ import annotations
 
 import json
+import pathlib
 from typing import ClassVar
 
 import pytest
@@ -293,80 +294,145 @@ class TestRetired2013Pages:
 
 
 class TestPlayerPages:
-    """Smoke tests for the HTML the browser actually renders.
+    """The old player URLs must be dead ends, and stay that way.
 
-    The player pages are Jinja templates full of inline JavaScript, so a stray
-    backslash or an unrendered ``{{ ... }}`` silently blanks the whole game.
-    That class of bug is invisible to the gateway tests and only shows up in a
-    browser console, so assert the page contract here.
+    ``/juego`` is the only player. ``/ruffle.html`` used to be able to render
+    the 2013 Jinja template again via ``?raw=1``, which kept a second copy of
+    the FlashVars and a CDN-pinned Ruffle alive behind a query flag. That
+    template is deleted, and these tests are what stops it from coming back.
+    The player's own options are pinned in web/tests/player.test.ts.
     """
 
     def test_legacy_pages_redirect_to_real_player(self, client):
-        """Legacy players redirect to /juego by default."""
+        """Legacy players redirect to /juego, with no way back to the old template."""
         for path in ("/ruffle.html", "/nodebug.html", "/new.html", "/home.html"):
             response = client.get(path)
             assert response.status_code in (301, 302, 303, 307, 308)
             assert response.headers["Location"].endswith("/juego")
 
-    def test_ruffle_fallback_renders_when_requested(self, client):
-        response = client.get("/ruffle.html?raw=1")
-        assert response.status_code == 200
-        body = response.get_data(as_text=True)
-        assert body.strip()
-        assert "{{" not in body
+    def test_ruffle_html_has_no_raw_escape_hatch(self, client):
+        """`?raw=1` used to render templates/ruffle.html for diagnostics.
 
-    def test_ruffle_page_pins_and_verifies_the_emulator(self, client):
-        """Ruffle must stay version-pinned and integrity-checked.
-
-        An unpinned CDN tag means a future Ruffle release could break this
-        archived game with no way to roll the change back.
+        That template is gone; the flag now redirects like any other request.
+        A 200 here would mean the old player is somehow still reachable.
         """
-        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
+        for path in ("/ruffle.html?raw=1", "/ruffle.html?fallback=1"):
+            response = client.get(path)
+            assert response.status_code in (301, 302, 303, 307, 308)
+            assert response.headers["Location"].endswith("/juego")
 
-        assert "@ruffle-rs/ruffle@" in body, "Ruffle must be pinned to a version"
-        assert "integrity=\"sha256-" in body, "Ruffle must be loaded with SRI"
-        assert "crossorigin=\"anonymous\"" in body
-        # The bare, moving tag is what we are trying to avoid.
-        assert 'src="https://unpkg.com/@ruffle-rs/ruffle"' not in body
 
-    def test_ruffle_page_config_is_complete(self, client):
-        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
+class TestNullAssetsRoute:
+    """``/nullassets/`` is how the archived game art actually reaches the client.
 
-        # allowScriptAccess must stay on or the SWF throws Error #2067 and
-        # aborts GameSettingsInit.onConfigXmlLoaded.
-        assert "allowScriptAccess: true" in body
-        # The SWF itself.
-        assert "ZGame.109338.swf" in body
-        # FlashVars the client needs, including the server clock.
-        for flashvar in ("serverTime=", "sn_app_url=", "stats=1"):
-            assert flashvar in body
+    The SWF builds its asset URLs as ``<base>/game/...``, where ``<base>`` is the
+    ``zcache_url`` FlashVar -- Zynga's image/texture CDN, dead since 2012. We
+    deliberately do not send that FlashVar, so the concatenation yields the
+    literal string ``null`` and the client asks this origin for
+    ``/nullassets/game/...``. `empires-server.py` maps that prefix onto the
+    archived tree in ``assets/sol_assets_octdict/assets``.
 
-    def test_ruffle_page_passes_app_url_as_absolute(self, client):
-        """``app_url`` must be absolute or Ruffle cannot open the AMF socket.
+    So the ``StatsManager.count errors zcache`` trace in the browser console is
+    this design showing through, not a fault. Deleting either half breaks the
+    game silently -- the client falls back to `EmbeddedResourceProvider` and the
+    art simply never appears -- which is what these tests exist to catch.
+    """
 
-        GlobalEngine.parseFlashVars rebuilds the gateway URL from this FlashVar.
-        Without it the client falls back to the host compiled into the SWF
-        ("127.0.0.1"), producing a scheme-less URL that Ruffle's
-        NetConnection.connect() rejects -- every call then fails with
-        Error #2126. Note it is ``app_url``; ``sn_app_url`` feeds a different
-        constant and does not affect the gateway.
+    ASSET_ROOT = "assets/sol_assets_octdict/assets"
+
+    def test_the_archived_tree_is_present_and_not_empty(self):
+        """Without the archive on disk every asset below 404s at runtime."""
+        root = pathlib.Path(__file__).resolve().parents[1] / self.ASSET_ROOT
+        assert root.is_dir(), f"missing archived assets: {self.ASSET_ROOT}"
+
+        files = [p for p in root.rglob("*") if p.is_file()]
+        assert len(files) > 100, f"only {len(files)} files archived"
+
+    def test_serves_a_terrain_tileset(self, client):
+        """One real file, end to end, with the bytes it should have."""
+        with client.get("/nullassets/game/terrain/Island3_Tileset_ENV.swf") as response:
+            assert response.status_code == 200
+            assert response.data[:3] in (b"CWS", b"FWS", b"ZWS"), "not a SWF header"
+
+    def test_serves_the_same_tree_as_the_assets_alias(self, client):
+        """/assets/ and /nullassets/ are two names for one archive."""
+        path = "/nullassets/game/terrain/Island3_Tileset_ENV.swf"
+
+        # Closed explicitly: send_from_directory hands back a live file handle,
+        # which the test client would otherwise leak for every asset it serves.
+        with client.get(path) as response:
+            assert response.status_code == 200
+        with client.get(path.replace("/nullassets/", "/assets/")) as response:
+            assert response.status_code == 200
+
+    def test_a_missing_asset_is_a_404_and_not_a_crash(self, client):
+        """The game probes for files that were never archived.
+
+        It must get a clean 404. An unhandled exception here surfaces in the
+        client as a failed load with no explanation.
         """
-        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
+        with client.get("/nullassets/game/terrain/NoSuchTileset.swf") as response:
+            assert response.status_code == 404
 
-        assert "app_url=http://" in body, "app_url must be an absolute http URL"
-        assert "app_url=" in body and "app_url=\\" not in body.replace("&sn_app_url=\\", "")
 
-    def test_ruffle_bootstrap_has_no_broken_line_continuation(self, client):
-        """A missing backslash leaves a raw newline inside a JS string literal.
+class TestAssetCacheHeaders:
+    """Archived art must be cacheable, or every visit re-downloads it.
 
-        That is a SyntaxError which blanks the player entirely, and it is easy
-        to introduce while editing the FlashVars block.
+    The game asks for the same assets on every visit. Served with Werkzeug's
+    default ``no-cache`` the browser keeps the file but still revalidates it, so
+    each one became a full round trip through the proxy and back to the disk for
+    a 304 carrying no body: 1133 of the 1328 asset requests in ``log.txt``.
+
+    ``max-age`` cannot be ``immutable`` here. These files are named after what
+    they are (``Island3_Tileset_ENV.swf``), not after a hash of their contents,
+    so an immutable cache would survive an edit to the archive and players would
+    keep seeing the old art until the year expired.
+    """
+
+    def test_archived_art_is_cacheable_for_a_week(self, client):
+        with client.get("/nullassets/game/terrain/Island3_Tileset_ENV.swf") as response:
+            assert response.status_code == 200
+            cache_control = response.headers["Cache-Control"]
+
+        assert "public" in cache_control
+        assert "max-age=604800" in cache_control
+        assert "no-cache" not in cache_control, "no-cache defeats the whole point"
+
+    def test_img_is_cacheable_too(self, client):
+        """/img/ is the second-busiest static route: avatars, MOTDs and chrome."""
+        with client.get("/img/motds/Loading_BattleBlitz.png") as response:
+            assert response.status_code == 200
+            assert "max-age=604800" in response.headers["Cache-Control"]
+
+    def test_assets_still_carry_an_etag(self, client):
+        """A max-age is not a licence to serve stale bytes after an edit.
+
+        The ETag is what lets a browser that already holds the file notice, once
+        the week is up, that the archive changed.
         """
-        body = client.get("/ruffle.html?raw=1").get_data(as_text=True)
+        with client.get("/nullassets/game/terrain/Island3_Tileset_ENV.swf") as response:
+            assert response.headers.get("ETag")
 
-        start = body.index("parameters:")
-        line = body[start:body.index("\n", start)]
-        assert line.rstrip().endswith(('"', "'")), f"unterminated parameters string: {line!r}"
+    def test_a_404_is_not_cacheable(self, client):
+        """Caching a miss would pin a broken asset even after it is archived.
+
+        A game that probes for a file it does not have gets a 404 today and
+        would still get it tomorrow; if that 404 were cached, adding the file
+        later would not reach anyone who already asked.
+        """
+        with client.get("/nullassets/game/terrain/NoSuchTileset.swf") as response:
+            assert response.status_code == 404
+            assert "max-age=604800" not in response.headers.get("Cache-Control", "")
+
+    def test_template_css_stays_uncached(self, client):
+        """/css/ and /js/ are the 2013 pages' own assets, edited by hand.
+
+        They are a rounding error next to the art (301 requests against 2132),
+        and caching them makes editing one a guessing game during development.
+        """
+        with client.get("/css/facebook.css") as response:
+            assert response.status_code == 200
+            assert "max-age=604800" not in response.headers.get("Cache-Control", "")
 
 class TestEditorJsonSurvivesALiveBattle:
     """``/editor.json`` must answer even when the session is not plain JSON.

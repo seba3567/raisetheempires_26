@@ -25,6 +25,7 @@ from quest_engine import (
     simple_list,
 )
 from save_engine import ensure_fleets, get_save_by_uid, get_saves, store_session
+from save_store import save_invaders
 
 
 class StaleBattleReference(Exception):
@@ -48,6 +49,24 @@ def battle_complete_response(params):
         and player_unit_id is not None
         and 0 <= enemy_unit_id < len(baddies)
         and 0 <= player_unit_id < len(friendlies)
+        # These two bounds are the ones that were missing, and they are why
+        # log.txt carried 26 IndexErrors out of this function.
+        #
+        # ``init_battle`` rebuilds the unit lists from the fleet on every turn,
+        # but the strength lists come out of ``session["battle"]``, which survives
+        # between turns. So a reinforcement landing, an allied fleet joining, or
+        # an admin editing the save mid-battle leaves the two disagreeing -- and
+        # the client then sends a unit id that is perfectly valid against
+        # ``friendlies`` and out of range for ``friendly_strengths``.
+        #
+        # The check further down that does look at the strength lists runs after
+        # the damage has been computed, so it never saw this: the body below
+        # indexes the strengths with the very id the bounds above just approved
+        # against a different list. Failing the guard here instead sends the turn
+        # down the re-pick branch, which is the same graceful answer the stale
+        # unit id gets.
+        and 0 <= enemy_unit_id < len(baddie_strengths)
+        and 0 <= player_unit_id < len(friendly_strengths)
     ):
         ally_target = ("ally", player_unit_id)
         enemy_target = ("enemy", enemy_unit_id)
@@ -346,8 +365,9 @@ def cancel_unstarted_invasions():
     all. It does get the guarded write from store_session now.
     """
     for save in get_saves():
-        if save['user_object']["pvp"]["invaders"].get("u" + str(get_zid()), {}).get("status") == 1:
-            del save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]
+        invaders = save_invaders(save)
+        if invaders.get("u" + str(get_zid()), {}).get("status") == 1:
+            del invaders["u" + str(get_zid())]
             store_session(save)
 
 

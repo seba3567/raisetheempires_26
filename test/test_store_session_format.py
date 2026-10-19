@@ -22,6 +22,7 @@ that replaces what the old ones checked.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -216,6 +217,37 @@ class TestAMissingRowIsNotACrash:
 
             assert store.load(key).data["user_object"]["level"] == 1, \
                 "a refused write must not have changed anything"
+
+    def test_a_refused_write_is_logged_as_an_error(self, gateway_app, client, caplog):
+        """A dropped write that nobody can see is indistinguishable from a bug.
+
+        Every caller that reaches this path has just discarded a real change --
+        an invasion placed, a pillage taken, an ally tended -- and none of them
+        checks the return value, so each still answers the client with
+        `errorType: 0`. The player is told it worked and it did not happen. That
+        is only survivable if the loss leaves a record an operator can find, so
+        this is an ERROR with the save and the revision in it, not a print.
+        """
+        from save_engine import store_session
+
+        seed(client)
+        store = store_of(gateway_app)
+
+        with caplog.at_level(logging.ERROR, logger="save_engine"):
+            with gateway_app.app_context():
+                key = "session:acct-refusal-" + uuid.uuid4().hex[:12]
+                save = {"session_id": key, "__save_revision": 1,
+                        "user_object": {"level": 1}}
+                store.store(key, {"user_object": {"level": 1}})
+                store_session(save)          # True
+                assert store_session(save) is False   # refused
+
+        refusals = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert refusals, "a refused write logged nothing above INFO"
+
+        message = refusals[-1].getMessage()
+        assert key in message, "the refusal must name the save it dropped"
+        assert "REFUSED" in message
 
 
 class TestTheAdminRouteStillWorks:

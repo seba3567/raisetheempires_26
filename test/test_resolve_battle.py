@@ -123,6 +123,70 @@ class TestOutOfRangeUnitId:
             assert resolve({"id": [0, 99], "fleet": "fleet1_1", "map": "C037"}).status_code == 200
 
 
+class TestFleetLongerThanStrengths:
+    """The shape behind the 26 IndexErrors still sitting in log.txt.
+
+    ``init_battle`` rebuilds the unit lists from the fleet on every turn, but the
+    strength lists come out of ``session["battle"]``, which survives between
+    them. So the two can disagree -- a reinforcement landing, an allied fleet
+    joining, an admin editing the save mid-battle -- and the client then sends
+    a unit id that is valid against ``friendlies`` and out of range for
+    ``friendly_strengths``. The bounds check before the turn approved the id
+    against ``friendlies`` only, and the turn then indexed the strengths with it.
+
+    What is pinned here is the **contract**, not the crash: whatever the two
+    lists look like, the gateway answers 200 with an empty result and leaves the
+    rest of the batch alone. Asserting the absence of the IndexError would need
+    a full game session to reach the body of the turn at all -- these stubs only
+    ever exercise the re-pick branch -- so the bounds fix in
+    ``battle_engine.battle_complete_response`` rests on the code, not on these
+    tests.
+    """
+
+    @pytest.fixture
+    def two_units_one_strength(self, monkeypatch):
+        """Two units on the player's side, one entry in the strength list."""
+        _stub_init_battle(
+            monkeypatch,
+            friendlies=["a,b,c", "d,e,f"],
+            strengths=[100],
+            baddies=["g,h,i"],
+            baddie_strengths=[100],
+        )
+
+    def test_the_gateway_answers_200(self, client, resolve, two_units_one_strength):
+        """Unit 1 exists in the fleet; only the strength list is short."""
+        response = resolve({"id": [1, 0], "fleet": "fleet1_1", "map": "C037"})
+
+        assert response.status_code == 200
+
+    def test_it_answers_with_an_empty_result_not_a_crash(
+            self, client, resolve, two_units_one_strength):
+        """A 500 would read as "the gateway is unreachable" on the front end."""
+        response = resolve({"id": [1, 0], "fleet": "fleet1_1", "map": "C037"})
+
+        assert b"onResult" in response.get_data()
+
+    def test_the_enemy_side_is_the_same_case(self, client, resolve, monkeypatch):
+        """Not only the player's units: baddies is rebuilt the same way."""
+        _stub_init_battle(
+            monkeypatch,
+            friendlies=["a,b,c"],
+            strengths=[100],
+            baddies=["d,e,f", "g,h,i"],
+            baddie_strengths=[100],
+        )
+
+        response = resolve({"id": [0, 1], "fleet": "fleet1_1", "map": "C037"})
+
+        assert response.status_code == 200
+
+    def test_it_does_not_poison_the_next_turn(
+            self, client, resolve, two_units_one_strength):
+        for _ in range(3):
+            assert resolve({"id": [1, 0], "fleet": "fleet1_1", "map": "C037"}).status_code == 200
+
+
 class TestNothingLeftStanding:
     """The case the re-pick turns into a TypeError instead."""
 

@@ -47,7 +47,7 @@ class FlakyStore:
 
 
 @pytest.fixture
-def flush(gateway_app):  # noqa: F811 - the fixture this module needs
+def flush(gateway_app):
     """Swap in a store double and hand back the interface."""
     interface = gateway_app.session_interface
 

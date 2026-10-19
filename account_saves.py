@@ -128,7 +128,7 @@ class AccountBoundSqlAlchemySessionInterface(SqlAlchemySessionInterface):
         The parent has no save store of its own -- it persists through the
         sessions table -- so there is nothing to move and nothing to say.
         """
-        return None
+        return
 
     def _get_store_id(self, sid: str) -> str:
         zid = self._supplied_zid()

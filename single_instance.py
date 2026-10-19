@@ -3,6 +3,7 @@
 import contextlib
 import os
 import tempfile
+from pathlib import Path
 
 
 class SingleInstanceException(Exception):
@@ -16,14 +17,14 @@ class SingleInstance:
         self.flavor_id = flavor_id
         # Safe filename in the temp directory
         lock_filename = f"raisetheempires_{flavor_id or 'default'}.lock"
-        self.lockfile = os.path.join(tempfile.gettempdir(), lock_filename)
+        self.lockfile = str(Path(tempfile.gettempdir()) / lock_filename)
         self.file_handle = None
         self._lock()
 
     def _lock(self):
         try:
             # We deliberately keep the file handle open for the lifetime of the process to maintain the lock
-            self.file_handle = open(self.lockfile, "w")  # noqa: SIM115
+            self.file_handle = Path(self.lockfile).open("w")  # noqa: SIM115
             self.file_handle.write(f"{os.getpid()}\n")
             self.file_handle.flush()
 
@@ -57,8 +58,7 @@ class SingleInstance:
 
                     fcntl.flock(self.file_handle.fileno(), fcntl.LOCK_UN)
                 self.file_handle.close()
-                if os.path.exists(self.lockfile):
-                    os.remove(self.lockfile)
+                Path(self.lockfile).unlink(missing_ok=True)
             except Exception:  # noqa: S110
                 pass
             finally:

@@ -14,10 +14,11 @@ El frontend principal y moderno del proyecto está completamente migrado y desac
 
 | Archivo / Carpeta | Estado | Propósito |
 |-------------------|--------|-----------|
-| `ruffle.html` | **Fallback de Diagnóstico** | Reproductor standalone directo en Flask (sin SvelteKit). Redirige a `/juego` por defecto; se renderiza con `?raw=1` o `?fallback=1` para tests automatizados de integración (`test/test_gateway_e2e.py`). |
+| `ruffle.html` | **Eliminado** | Reproductor standalone en Jinja. Se fue cuando `/juego` (SvelteKit) pasó a ser el único player: era una segunda copia de los FlashVars y pineaba Ruffle en unpkg. La ruta `/ruffle.html` redirige a `/juego`. |
 | `nodebug.html` | **Eliminado** | Eliminado por obsolescencia técnica (Flash NPAPI ya no está soportado en navegadores modernos). La ruta `/nodebug.html` redirige automáticamente a `/juego`. |
 | `new.html` | **Deprecado** | Antigua cuadrícula Jinja de avatares. La ruta `/new.html` redirige automáticamente a `/juego`. |
 | `changelog.txt` | **Histórico** | Registro de cambios y parches históricos de la emulación de servidor. |
-| `css/`, `img/`, `js/` | **Compatibilidad** | Recursos estáticos servidos por Flask (`/css`, `/img`, `/js`) para soportar la visualización del reproductor de respaldo `ruffle.html?raw=1`. |
+| `css/facebook.css`, `js/session.js` | **Compatibilidad** | Lo único que queda de la maquetación 2013: los necesita `new.html`. Servidos por Flask en `/css` y `/js`. |
+| `img/` | **Mixto** | `motds/` y `avatars/` los leen `/motd.json` y `/avatar.json`; el resto son sprites y fondos que `facebook.css` referencia. La web moderna sirve los suyos desde `web/static/`. |
 
 > **Nota:** Todas las rutas web históricas en [`empires-server.py`](../empires-server.py) (`/`, `/game`, `/play`, `/home.html`, `/new.html`, `/nodebug.html`, `/ruffle.html`) redirigen limpiamente al cliente web moderno en `/juego`.

@@ -7,8 +7,7 @@ from save_engine import my_games_path
 
 
 def read_quest_settings():
-    with open(quest_settings_path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(Path(quest_settings_path).read_text(encoding="utf-8"))
 
 
 def simple_list(raw_list):

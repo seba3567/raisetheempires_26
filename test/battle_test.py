@@ -203,10 +203,10 @@ def assert_result(active_consumables, baddie_strengths, baddies, friendlies, fri
 def assert_dynamic_result(active_consumables, baddie_strengths, baddies, friendlies, friendly_strengths,
                           expected_friendlies_json, expected_friendly_strengths, expected_baddies_json,
                           expected_baddie_strengths, expected_active_consumables):
-    with open(TEST_DIR / expected_friendlies_json) as f:
+    with (TEST_DIR / expected_friendlies_json).open(encoding="utf-8") as f:
         assert friendlies == json.load(f)
     assert friendly_strengths == expected_friendly_strengths
-    with open(TEST_DIR / expected_baddies_json) as f:
+    with (TEST_DIR / expected_baddies_json).open(encoding="utf-8") as f:
         assert baddies == json.load(f)
     assert baddie_strengths == expected_baddie_strengths
     assert active_consumables == expected_active_consumables

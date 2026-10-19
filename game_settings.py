@@ -1,6 +1,5 @@
 import copy
 import json
-import os
 import random
 from datetime import datetime
 from pathlib import Path
@@ -25,13 +24,11 @@ PLAYER_ZID_HEADER = "x-player-zid"
 MAX_SAFE_ZID = 2**53 - 1
 
 def read_games_settings():
-    with open(game_settings_path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(Path(game_settings_path).read_text(encoding="utf-8"))
 
 
 def read_initial_island():
-    with open(initial_island_path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(Path(initial_island_path).read_text(encoding="utf-8"))
 
 
 game_settings = json.loads(mod_engine.mod.get(game_settings_path)()) if game_settings_path in mod_engine.mod else read_games_settings()
@@ -43,15 +40,22 @@ print("Initial island template", len(initial_island["objects"]), "objects loaded
 # game_objects = [o for o in game_objects_2 if int(o["position"].split(",")[0]) > 62 and int(o["position"].split(",")[1]) > 58]
 
 def read_island_file(file_path):
-    with open(file_path, encoding="utf-8") as island_file:
-        return json.load(island_file)
+    return json.loads(Path(file_path).read_text(encoding="utf-8"))
 
+
+# Every ally island, and only those. The files are named after the empire that
+# owns them (``AcidCaos-island.json``, ``TheDevs-island.json``), so the match is
+# on the name containing ``island.json`` -- not on the name being exactly that,
+# which would match none of them. ``initial-island.json`` is the blank template
+# the game starts from, not a player, so it stays out.
+_island_files = [
+    path
+    for path in sorted(Path(my_games_path(), "allies").rglob("*"))
+    if path.is_file() and "island.json" in path.name and path.name != "initial-island.json"
+]
 
 allies = {str(e["info"]["uid"] if e["info"] else e["friend"]["uid"]): e for e in
-          [read_island_file(os.path.join(root, file_name)) for root, _, file_names in
-           os.walk(os.path.join(my_games_path(), "allies")) for
-           file_name in
-           file_names if 'island.json' in file_name and file_name != "initial-island.json"]}
+          [read_island_file(island) for island in _island_files]}
 print("Ally islands")
 print("-", len(allies.keys()), "allies loaded")
 for key in allies:

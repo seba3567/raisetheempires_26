@@ -35,11 +35,11 @@ has to change when the game does.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
-SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+SCHEMA_PATH = str(Path(__file__).resolve().parent / "schema.sql")
 
 #: How many snapshots to keep per save. Ten was the old in-blob limit; here it is
 #: a delete of old rows rather than a slice of a nested list.
@@ -273,6 +273,33 @@ def save_uid(data) -> int | None:
     return uid if isinstance(uid, int) and not isinstance(uid, bool) else None
 
 
+def save_invaders(data) -> dict:
+    """The invasion map of a save, or an empty one.
+
+    ``user_object.pvp.invaders`` is written by ``init_user`` on first boot, so a
+    save that has it is normal and a save that does not is either an older
+    build, a restored backup or a half-finished paste. Every caller of this is a
+    sweep over *other players* -- the neighbour list, the invasion cleanup --
+    and they index the chain directly, which is what put 121 ``KeyError: 'pvp'``
+    in the log and, worse, made one player's corrupt row take down the sign-up
+    of whoever was creating their empire.
+
+    An empty dict is the right answer for a save with nothing pending, and it is
+    also the safe one: callers that only read counters see zeros, and callers
+    that delete a key can check membership first.
+    """
+    if not isinstance(data, dict):
+        return {}
+    user_object = data.get("user_object")
+    if not isinstance(user_object, dict):
+        return {}
+    pvp = user_object.get("pvp")
+    if not isinstance(pvp, dict):
+        return {}
+    invaders = pvp.get("invaders")
+    return invaders if isinstance(invaders, dict) else {}
+
+
 class Store:
     """MariaDB-backed save storage.
 
@@ -338,8 +365,7 @@ class Store:
         """
         from urllib.parse import urlparse, urlunparse
 
-        with open(SCHEMA_PATH, encoding="utf-8") as handle:
-            script = handle.read().lstrip("\ufeff")
+        script = Path(SCHEMA_PATH).read_text(encoding="utf-8").lstrip("\ufeff")
 
         database = urlparse(self.path).path.strip("/")
         if not database:

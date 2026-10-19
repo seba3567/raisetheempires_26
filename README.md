@@ -34,7 +34,8 @@ the accounts, the friend list, the progress page and the game itself. Sign in
 and open `/juego`: the original client runs through [Ruffle](https://ruffle.rs)
 **embedded in that page**, so there is no Adobe Flash Player and no second
 origin. The SWF behind it is the same one, with the same FlashVars and player
-options; `/ruffle.html` still exists for working on the client directly.
+options; `/ruffle.html` is just a redirect to `/juego` now that the 2013
+standalone template is gone.
 
 If you get `Error #2126: NetConnection object must be connected`, the client
 fell back to the host compiled into the SWF (`127.0.0.1`) instead of the served
