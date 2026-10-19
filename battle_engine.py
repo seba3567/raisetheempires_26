@@ -260,6 +260,13 @@ def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
     if sum(baddie_strengths) == 0:
         print("Enemy defeated")
         session["last_battle"] = session["battle"]
+        # The battle is over, so its strength arrays must not outlive it.
+        # `handle_loss` has always cleared them here; winning used to keep
+        # them, and the next battle -- with a different fleet -- reused them
+        # instead of computing its own. The client then received one unit
+        # list and another one's strengths, and stopped with
+        # "TResolveBattle: unit strength out of sync".
+        session["battle"] = None
 
         replaying = session["battle"][3].replaying
         battle_island = session["battle"][3].island
@@ -564,6 +571,32 @@ def init_battle(params):
                 active_consumables[:] = [(consumable, target, tries) for consumable, target, tries
                                          in active_consumables if target[0] == "ally"]
                 session["battle"] = (friendly_strengths, baddie_strengths, active_consumables, battle_context)
+            elif (len(friendly_strengths) != len(friendlies)
+                    or len(baddie_strengths) != len(baddies)):
+                # The stored strengths do not describe these units.
+                #
+                # The unit lists are rebuilt from the fleet on every call, but
+                # the strengths come out of `session["battle"]`, which is
+                # written once when the battle opens. A battle the player
+                # walked away from leaves that entry behind, and the next one
+                # -- with a different fleet -- picks it up and answers with
+                # strengths for units that are no longer there. The client
+                # compares the two and halts with "unit strength out of sync".
+                #
+                # Rebuilding is the honest answer: a strength belongs to the
+                # unit it was measured for, so a unit that is not in this
+                # battle cannot inherit one's strength.
+                print("Battle strengths do not match the fleets; starting fresh:",
+                      len(friendly_strengths), "!=", len(friendlies), "/",
+                      len(baddie_strengths), "!=", len(baddies))
+                baddie_strengths = [get_unit_max_strength(baddie, False, params)
+                                    for baddie in baddies]
+                friendly_strengths = [get_unit_max_strength(friendly, True)
+                                      for friendly in friendlies]
+                active_consumables = []
+                defenseshield_upgrade_activate(friendlies, active_consumables)
+                session["battle"] = (friendly_strengths, baddie_strengths,
+                                     active_consumables, battle_context)
         return friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables
     except Exception as ex:
         # requires python >=3.11
