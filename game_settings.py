@@ -230,10 +230,21 @@ def replenish_energy():
 
 
 def unlock_expansion(index):
+    """Set one expansion bit in the player's expansion map.
+
+    The map is a list of 32-bit words: ``index >> 5`` is the word and
+    ``index & 31`` is the bit inside it.
+
+    The list grew when the player bought an expansion past the end of it, which
+    used to raise IndexError and take the whole ``buyExpansion`` call with it.
+    The line that used to do the growing is back, commented out in the source
+    it came from.
+    """
     expansions = session['user_object']["userInfo"]["player"]["expansions"]["data"]
 
     i = index >> 5
-    #expansions = expansions + [0 for t in range(i + 1 - len(expansions))]
+    if i >= len(expansions):
+        expansions.extend([0 for _ in range(i + 1 - len(expansions))])
     e = index - (i << 5)
     expansions[i] = expansions[i] | 1 << e
 

@@ -361,6 +361,15 @@ def snapi_bridge():
 # Resource keys, in the order the original editor showed them.
 RESOURCE_ORDER = ("coins", "wood", "oil", "aluminum", "copper", "gold", "iron", "uranium")
 
+#: The resources the world keeps in `world["resources"]`.
+#:
+#: A catalogue item's ``-resourceType`` is not always one of these: the ore
+#: contracts are ``rare``, the minigame fuel is ``fuel`` and the powerup
+#: factory is ``powerup``. Those are not resources the world counts, so they
+#: cannot be added to it -- an item that carries one is an object the player
+#: gets, not a pile of a resource that does not exist.
+WORLD_RESOURCES = frozenset(RESOURCE_ORDER)
+
 #: Stand-in for anything the session holds that plain JSON cannot express.
 #: Same marker the 2013 editor used when it dumped the save into its textarea.
 NOT_SERIALIZABLE = "<not serializable>"
@@ -2862,145 +2871,351 @@ def add_fleet_response(param):
     return add_fleet_response
 
 def buy_item_response(param):
+    """`UserService.buyItem` -- comprar un item suelto del mercado."""
     meta = {"newPVE": 0}
-    print(param)
-    buy_item(meta, param["code"], param["amount"])
-    buy_item_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                      "data": []}
-    return buy_item_response
-    #TODO buy powerup in combact
+    if not isinstance(param, dict):
+        logger.warning("buyItem without a parameter object: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    buy_item(meta, param.get("code"), param.get("amount"))
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
 
 def buy_item(meta, code, amount):
-    item = lookup_item_by_code(code)
+    """Compra un item del mercado y lo entrega.
+
+    El precio sale del catalogo (`cost` e `itemcost`), nunca de una cuenta
+    hecha aqui: el servidor cobra lo que el juego dice que cuesta, y lo cobra
+    en la moneda que el item declara.
+
+    Antes se cobraba siempre `cost["-cash"]`, que hacia tres cosas mal a la
+    vez: reventaba con los items que no cuestan cash (una KeyError que se
+    llevaba la llamada entera), cobraba cash a items que cuestan coins, y
+    cobraba de mas a los que no tienen `cost` (774 de los 3990 items del
+    catalogo no lo tienen, y son los que el juego regala).
+    """
+    item = _catalogue_item(code)
+    if item is None:
+        return False
+
+    amount = _purchase_amount(amount)
     player = session['user_object']["userInfo"]["player"]
     world = session['user_object']["userInfo"]["world"]
     resources = world['resources']
-    # standard_resources = ["coins", "oil", "wood", "aluminum", "copper", "gold", "iron", "uranium"]
-    # resources[standard_resources[int(market["item"])]] += market["units"]
-    if item["-type"] == 'mercenary':
-        print("Buying mercenary")
-    elif item.get("-subtype") == "expansion":
-        print("Buying expansion")
-    elif "-resourceType" in item and item["-resourceType"] != "energy":
-        resources[item["-resourceType"]] += amount * int(item.get("resourceYield", "1"))
+    inventory = player["inventory"]["items"]
 
-        print("Buy: received", item["-resourceType"] + ":", str(amount) +
-              "(" + str(resources[item["-resourceType"]]) + ")")
+    price = _item_price(item, amount)
+    key_costs = _item_key_costs(item, amount)
+    if not _can_afford(player, resources, inventory, price, key_costs):
+        logger.warning("Purchase refused, cannot afford %r x%s (price %s, keys %s)",
+                       code, amount, price, key_costs)
+        return False
+
+    # Entrega: un item que da un recurso lo da; el resto es un objeto que
+    # acaba en el inventario.
+    #
+    # El `-resourceType` de un item no es siempre un recurso del mundo: los
+    # contratos de mina son `rare`, el fuel es `fuel` y la fabrica de powerups
+    # es `powerup`. Esos no se pueden sumar a `resources` (KeyError), y un
+    # contrato de mina no da 8 de rare al comprarlo: da el contrato.
+    resource_type = item.get("-resourceType")
+    resource_yield = item.get("resourceYield")
+    if resource_type in WORLD_RESOURCES and resource_yield is not None:
+        resources[resource_type] += amount * int(resource_yield)
+        print("Buy: received", resource_type + ":", str(amount) +
+              "(" + str(resources[resource_type]) + ")")
     else:
-        # param["useCash"]
-        item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
-        item_inventory[code] = item_inventory.get(code, 0) + 1
-    player['cash'] -= get_cash_cost(item, amount)
+        inventory[code] = inventory.get(code, 0) + amount
+
+    _charge(player, resources, inventory, price, key_costs)
     handle_quest_progress(meta, progress_buy_consumable(item))
+    return True
 
 
 def buy_items_response(param):
-    print(repr(param))
+    """`UserService.buyItems` -- comprar varios items de una vez."""
     meta = {"newPVE": 0}
-    resource_Dict = dict(param["itemData"])
-    for Res_code in resource_Dict:
-        buy_item(meta, Res_code,resource_Dict[Res_code])
-    buy_items_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                      "data": []}
-    return buy_items_response
+    if not isinstance(param, dict):
+        logger.warning("buyItems without a parameter object: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    for code, amount in _purchase_batch(param.get("itemData")):
+        buy_item(meta, code, amount)
+
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
 
 def use_item_response(param):
-    print(param)
+    """`UserService.useItem` -- gastar un item del inventario.
+
+    Antes: `item_inventory[param] -= 1`, sin mirar si el item existia. Gastar
+    un item que el jugador no tiene reventaba con KeyError, y gastar el
+    ultimo dejaba el contador en -1: un item que el jugador no tiene pero que
+    el cliente cuenta.
+    """
+    code = param
+    if isinstance(param, dict):
+        code = param.get("code") or param.get("itemCode") or param.get("item")
+
     item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
-    item_inventory[param] -= 1
-    use_item_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                      "data": []}
+    if isinstance(code, str) and item_inventory.get(code, 0) > 0:
+        item_inventory[code] -= 1
+    else:
+        logger.warning("Use of an item the player does not have: %r", code)
 
-    return use_item_response
+    return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
 
 
-
-# TODO
 def purchase_energy_refill_response(param):
-    print(repr(param))
+    """`UserService.purchaseEnergyRefill` -- rellenar la energia.
 
+    El coste se calcula con la energia *antes* del refill. Antes se rellenaba
+    primero y luego se hacia `energyMax - energy`, con la energia ya llena:
+    el coste salia cero y el refill era gratis.
+
+    El precio por punto de energia es el del catalogo: el consumible EN4
+    cuesta 5 de cash y da 5 de energia, o sea 1 de cash por punto.
+    """
     player = session['user_object']["userInfo"]["player"]
-    world = session['user_object']["userInfo"]["world"]
-    resources = world['resources']
 
-    player['energy'] += int(player['energyMax']-player['energy'])  # TODO put item in inventory (storable?)
+    energy_max = int(player.get('energyMax', 0))
+    energy = int(player.get('energy', 0))
+    missing = energy_max - energy
 
-    player['cash'] -= int(player['energyMax']-player['energy'])
+    if missing > 0:
+        player['energy'] = energy_max
+        player['cash'] = int(player.get('cash', 0)) - missing
+    else:
+        # Nada que rellenar: no se cobra y no se toca la energia. Un jugador
+        # por encima del tope (un item de energia de mas) no pierde lo que
+        # tiene por pedir un refill.
+        logger.info("Energy refill with nothing to refill: %s/%s", energy, energy_max)
 
-    purchase_energy_refill_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                      "data": []}
-    return purchase_energy_refill_response
+    return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
 
 
 def buy_quest_task_response(param):
-    print(param,type(param))
-    
-    # reqq.params[2][0].get('referenceItem')
-    # player = session['user_object']["userInfo"]["player"]
-    # world = session['user_object']["userInfo"]["world"]
-
+    """`UserService.buyQuestTask` -- comprar un task de quest."""
     meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_quest_task(param["name"], param["taskIndex"]))
-    buy_quest_task_response = {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
-    return buy_quest_task_response
+    if not isinstance(param, dict):
+        logger.warning("buyQuestTask without a parameter object: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    name = param.get("name")
+    task_index = param.get("taskIndex")
+    if name is None or task_index is None:
+        logger.warning("buyQuestTask without a name or a task index: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    handle_quest_progress(meta, progress_quest_task(name, task_index))
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
 
 def buy_expansion_response(param):
-    print(repr(param))
-    unlock_expansion(param['index'])
+    """`UserService.buyExpansion` -- encender una expansion de la isla.
+
+    Las expansiones se guardan como un mapa de bits: `index >> 5` es la
+    palabra y `index & 31` es el bit dentro de esa palabra. El precio lo cobra
+    la compra del item de expansion (`x01` y hermanos), no esta llamada: esta
+    enciende el bit que el jugador ya pagado.
+    """
     meta = {"newPVE": 0}
+    if not isinstance(param, dict):
+        logger.warning("buyExpansion without a parameter object: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    index = param.get('index')
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        logger.warning("buyExpansion without a usable index: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    unlock_expansion(index)
     handle_quest_progress(meta, progress_action("expansionsPurchased"))
-    buy_expansion_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                      "data": []}
-    return buy_expansion_response
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
 
 def purchase_contact_unlock(param):
-    print(repr(param))
-    item = lookup_item_by_code(param["itemCode"])
+    """`UserService.purchaseContractUnlock` -- desbloquear un contrato.
 
-    #TODO specops contractMultiple
-    unlock_cost = int(game_settings['settings']['gamesettings']['-contractUnlockMultiple']) * get_cash_cost(item, 1)
+    El precio sale del catalogo: el item que se desbloquea mas el multiplicador
+    que el propio juego dice (`-contractUnlockMultiple`).
+    """
+    meta = {"newPVE": 0}
+    if not isinstance(param, dict):
+        logger.warning("purchaseContractUnlock without a parameter object: %r", param)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    item_code = param.get("itemCode")
+    item = _catalogue_item(item_code)
+    if item is None:
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    # Un unlock abre varios contratos a la vez, y se paga por cada uno.
+    multiple = int(game_settings['settings']['gamesettings'].get('-contractUnlockMultiple', 1))
+    price = {resource: units * multiple
+             for resource, units in _item_price(item, 1).items()}
+    key_costs = _item_key_costs(item, 1)
 
     player = session['user_object']["userInfo"]["player"]
-    player['cash'] -= unlock_cost
-    item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
-    item_inventory[param["itemCode"]] = item_inventory.get(param["itemCode"], 0) + 1
-    player['unlockedContracts'].append(param["itemCode"])
+    resources = session['user_object']["userInfo"]["world"]['resources']
+    inventory = player["inventory"]["items"]
+    if not _can_afford(player, resources, inventory, price, key_costs):
+        logger.warning("Contract unlock refused, cannot afford %r (price %s)",
+                       item_code, price)
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
-    meta = {"newPVE": 0}
-    purchase_contact_unlock = {"errorType": 0, "userId": 1, "metadata": meta,
-                              "data": []}
-    return purchase_contact_unlock
+    _charge(player, resources, inventory, price, key_costs)
+
+    unlocked = player.setdefault("unlockedContracts", [])
+    if item_code not in unlocked:
+        unlocked.append(item_code)
+    inventory[item_code] = inventory.get(item_code, 0) + 1
+
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
 
-def get_cash_cost(item, amount):
-    #TODO unit price expirements cost
-    #TODO priceTestSettings
-    #TODO EXPERIMENT_LE_DISCOUNT_SALE
-    cash_cost = float(item["cost"]["-cash"])
+def _catalogue_item(code):
+    """El item del catalogo con ese codigo, o None si no existe.
 
+    `lookup_item_by_code` levanta ValueError cuando no encuentra el codigo, y
+    un ValueError a mitad de una compra se lleva por delante la llamada
+    entera: el cliente se queda sin respuesta y el turno se descuadra.
+    """
+    if not isinstance(code, str) or not code:
+        logger.warning("Purchase of an item without a code: %r", code)
+        return None
+    try:
+        return lookup_item_by_code(code)
+    except ValueError:
+        logger.warning("Purchase of an item code the catalogue does not know: %r", code)
+        return None
+
+
+def _purchase_amount(amount):
+    """La cantidad que pidio el cliente, como un entero positivo."""
+    try:
+        value = int(amount)
+    except (TypeError, ValueError):
+        return 1
+    return value if value > 0 else 1
+
+
+def _purchase_batch(item_data):
+    """Los pares (codigo, cantidad) de un `buyItems`, sea como llegue.
+
+    El cliente manda esto como un mapa. Se acepta tambien como lista de pares
+    y como lista de objetos, porque el juego tiene mas de un sitio desde el
+    que se compra y no todas mandan lo mismo.
+    """
+    if isinstance(item_data, dict):
+        return list(item_data.items())
+    if isinstance(item_data, list):
+        batch = []
+        for entry in item_data:
+            if isinstance(entry, dict):
+                code = entry.get("code") or entry.get("itemCode")
+                batch.append((code, entry.get("amount", 1)))
+            elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                batch.append((entry[0], entry[1]))
+        return batch
+    return []
+
+
+def _level_discount(item):
+    """El descuento por nivel que el propio catalogo implica."""
     required_level = int(item.get("requiredLevel", "0"))
-    player_level = session["user_object"]["userInfo"]["player"]["level"]
+    player_level = session["user_object"]["userInfo"]["player"].get("level", 1)
 
-    le_discount = 0
-    if "requiredDate" in item:
-        if required_level >= 25:
-            if player_level >= 51:
-                le_discount = .25
-            elif player_level >= 35:
-                le_discount = .15
-        elif required_level >= 15:
-            if player_level >= 51:
-                le_discount = .30
-            elif player_level >= 35:
-                le_discount = .20
-            elif player_level >= 20:
-                le_discount = .10
+    if "requiredDate" not in item:
+        return 0
 
-    return math.ceil(cash_cost * amount * (1 - le_discount))
+    if required_level >= 25:
+        if player_level >= 51:
+            return .25
+        if player_level >= 35:
+            return .15
+    elif required_level >= 15:
+        if player_level >= 51:
+            return .30
+        if player_level >= 35:
+            return .20
+        if player_level >= 20:
+            return .10
+    return 0
+
+
+def _item_price(item, amount):
+    """Lo que cuesta un item, por moneda.
+
+    `cost` es un mapa de `-<recurso>` a cantidad: cash es del jugador, el
+    resto son recursos del mundo. Un item sin `cost` es gratis, que es
+    exactamente lo que dice el catalogo (los regalos de recursos lo tienen
+    vacio).
+    """
+    cost = item.get("cost") or {}
+    price = {}
+    for key, value in cost.items():
+        resource = str(key).lstrip("-")
+        try:
+            units = float(value)
+        except (TypeError, ValueError):
+            continue
+        price[resource] = price.get(resource, 0.0) + units
+
+    discount = _level_discount(item)
+    for resource in list(price):
+        units = price[resource] * amount
+        if resource == "cash":
+            units *= (1 - discount)
+        price[resource] = math.ceil(units)
+    return price
+
+
+def _item_key_costs(item, amount):
+    """Las llaves que un item exige (`itemcost`), por codigo de item.
+
+    Una expansion cuesta coins *y* llaves de expansion (`xk01`), y las llaves
+    se llevan del inventario: son un item mas, y se gastan.
+    """
+    item_cost = item.get("itemcost") or {}
+    keys = {}
+    for key, value in item_cost.items():
+        code = str(key).lstrip("-")
+        try:
+            units = int(value)
+        except (TypeError, ValueError):
+            continue
+        keys[code] = units * amount
+    return keys
+
+
+def _can_afford(player, resources, inventory, price, key_costs):
+    """Se puede pagar este precio con lo que el jugador tiene."""
+    for resource, units in price.items():
+        if resource == "cash":
+            if player.get("cash", 0) < units:
+                return False
+        elif resource in WORLD_RESOURCES:
+            if resources.get(resource, 0) < units:
+                return False
+        else:
+            # Una moneda que ni el jugador ni el mundo llevan: no se puede
+            # pagar, y cobrar de mas no es una opcion.
+            return False
+
+    return all(inventory.get(code, 0) >= units for code, units in key_costs.items())
+
+
+def _charge(player, resources, inventory, price, key_costs):
+    """Cobra el precio, que ya se ha comprobado que se puede pagar."""
+    for resource, units in price.items():
+        if resource == "cash":
+            player["cash"] = int(player.get("cash", 0)) - units
+        else:
+            resources[resource] = resources.get(resource, 0) - units
+
+    for code, units in key_costs.items():
+        inventory[code] = inventory.get(code, 0) - units
 
 
 def select_response(param):
