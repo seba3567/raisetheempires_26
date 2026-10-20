@@ -576,7 +576,7 @@ class Store:
             connection.execute("START TRANSACTION")
             existing = self._exec(
                 connection,
-                "SELECT id, revision FROM saves WHERE store_id = %s",
+                "SELECT id, revision, data FROM saves WHERE store_id = %s",
                 (store_id,)).fetchone()
 
             if existing is None:
@@ -593,16 +593,40 @@ class Store:
                 return 1
 
             current = existing["revision"]
+            # Keep what is being replaced, not what is replacing it. It comes
+            # from the same read as the revision, so there is one query instead
+            # of two.
+            previous = existing["data"]
+
+            # Nothing to write: the row already holds exactly this payload.
+            #
+            # This is not a rare corner. flask-session persists the session at
+            # the end of *every* request, and the game client fetches ten
+            # assets to start -- so a page load used to write the save ten
+            # times, each write bumping the revision and snapshotting an
+            # identical copy of the empire. The history the editor offers to
+            # restore from was ten identical copies of the same 37 KB, and the
+            # real history -- the level 50 the player wants back -- was trimmed
+            # away to make room for it.
+            #
+            # It was worse than noise: every one of those writes moved the
+            # revision, so the requests that ran at the same time -- the asset
+            # downloads, mostly -- collided on the optimistic lock and the
+            # loser was dropped with a "the row moved underneath" in the log.
+            # The write that lost was not always the useless one.
+            #
+            # Comparing the payload with the stored one is enough to know
+            # there is nothing to write, so nothing is written: no revision
+            # bump, no snapshot, and no chance to collide with anybody.
+            if previous == blob:
+                connection.execute("COMMIT")
+                return current
+
             if expected_revision is not None and expected_revision != current:
                 raise WriteConflict(
                     f"{store_id}: read revision {expected_revision}, row is at "
                     f"{current}; someone else wrote in between")
 
-            # Keep what is being replaced, not what is replacing it.
-            previous = self._exec(
-                    connection, 
-                "SELECT data FROM saves WHERE id = %s",
-                (existing["id"],)).fetchone()["data"]
             self._exec(
                     connection, 
                 "INSERT INTO save_backups (save_id, revision, reason, data, "

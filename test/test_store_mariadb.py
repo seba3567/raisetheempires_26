@@ -180,6 +180,68 @@ class TestHistory:
         assert [row.revision for row in store.history("acct1")] == [7, 6, 5]
 
 
+class TestAnUnchangedSaveIsNotWritten:
+    """Writing the same empire again is not a change, and must not look like one.
+
+    flask-session persists the session at the end of *every* request, and the
+    game client downloads ten assets to start. So a page load used to write the
+    save ten times: the revision climbed, the history filled up with identical
+    copies of the same empire, and the real history was trimmed away to make
+    room for it.
+
+    It was not only noise. Every one of those writes moved the revision, so the
+    requests that ran at the same time collided on the optimistic lock, and the
+    loser was dropped. The write that lost was not always the useless one.
+    """
+
+    def test_the_revision_does_not_move(self):
+        store = fresh_store()
+        store.store("acct1", empire(level=1))
+
+        assert store.store("acct1", empire(level=1)) == 1
+        assert store.load("acct1").revision == 1
+
+    def test_no_snapshot_is_taken(self):
+        store = fresh_store()
+        store.store("acct1", empire(level=1))
+
+        store.store("acct1", empire(level=1))
+
+        assert store.history("acct1") == []
+
+    def test_a_real_change_is_still_written(self):
+        """The other half of the rule: a change is a change."""
+        store = fresh_store()
+        store.store("acct1", empire(level=1))
+
+        assert store.store("acct1", empire(level=2)) == 2
+        assert len(store.history("acct1")) == 1
+
+    def test_two_writers_of_the_same_thing_do_not_collide(self):
+        """The collision the asset downloads caused, at the level it happens.
+
+        Two requests read the same revision and both write the same empire
+        back. That used to be a conflict: the first bumped the revision and
+        the second was told the row had moved underneath it.
+        """
+        store = fresh_store()
+        store.store("acct1", empire(level=1))
+        stale = store.load("acct1").revision
+
+        store.store("acct1", empire(level=1), expected_revision=stale)
+        assert store.store("acct1", empire(level=1), expected_revision=stale) == stale
+
+    def test_the_revision_guard_still_guards(self):
+        """Skipping a redundant write must not turn a stale one into a success."""
+        store = fresh_store()
+        store.store("acct1", empire(level=1))
+        stale = store.load("acct1").revision
+        store.store("acct1", empire(level=2), expected_revision=stale)
+
+        with pytest.raises(WriteConflict):
+            store.store("acct1", empire(level=3), expected_revision=stale)
+
+
 class TestRestore:
     def test_it_brings_the_old_state_back(self):
         store = fresh_store()

@@ -214,9 +214,19 @@ class TestAMissingRowIsNotACrash:
             store.store(key, {"user_object": {"level": 1}})
 
             assert store_session(save) is True      # revision 1, current is 1
-            assert store_session(save) is False     # revision 1, current is 2
 
-            assert store.load(key).data["user_object"]["level"] == 1, \
+            # The row moved on, and this save carries a real change, so the
+            # store must refuse it rather than overwrite the turn that won.
+            #
+            # The change has to be a real one: writing the same empire again is
+            # not a write at all, so it can never be the stale one.
+            store.store(key, {"user_object": {"level": 2}}, expected_revision=1)
+            stale = {"session_id": key, "__save_revision": 1,
+                     "user_object": {"level": 3}}
+
+            assert store_session(stale) is False     # revision 1, current is 2
+
+            assert store.load(key).data["user_object"]["level"] == 2, \
                 "a refused write must not have changed anything"
 
     def test_a_refused_write_is_logged_as_an_error(self, gateway_app, client, caplog):
@@ -237,11 +247,12 @@ class TestAMissingRowIsNotACrash:
         with caplog.at_level(logging.ERROR, logger="save_engine"):
             with gateway_app.app_context():
                 key = "session:acct-refusal-" + uuid.uuid4().hex[:12]
-                save = {"session_id": key, "__save_revision": 1,
-                        "user_object": {"level": 1}}
                 store.store(key, {"user_object": {"level": 1}})
-                store_session(save)          # True
-                assert store_session(save) is False   # refused
+                store.store(key, {"user_object": {"level": 2}}, expected_revision=1)
+                stale = {"session_id": key, "__save_revision": 1,
+                         "user_object": {"level": 3}}
+
+                assert store_session(stale) is False   # refused
 
         refusals = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert refusals, "a refused write logged nothing above INFO"
