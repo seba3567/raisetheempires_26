@@ -116,5 +116,5 @@ def serve(app, host: str | None = None, port: int | None = None, debug: bool = F
 
     for name in order:
         print(f"Serving on {host}:{port} with {name}")
-        runners[name]()
-        return
+        if runners[name]():
+            return

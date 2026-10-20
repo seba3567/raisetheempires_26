@@ -30,7 +30,6 @@ if os.name == 'nt':
 
 from builtins import print
 from datetime import timedelta
-from time import sleep
 
 from flask import (
     Flask,
@@ -511,7 +510,7 @@ def editor_state():
                 "message": row.reason or "",
                 "size": row.size,
                 "created": row.created_at,
-                **_backup_summary_payload(_current_store_id(), row.revision),
+                **(_backup_summary_payload(_current_store_id(), row.revision) if i < 25 else {"level": None, "empirePoints": None, "coins": None}),
             }
             for i, row in enumerate(_backup_chain())
         ],
@@ -986,10 +985,13 @@ def record_stats():
     return ('', 204)
 
 
+ASSET_MAX_AGE = 60 * 60 * 24 * 7
+
+
 @app.route("/files/empire-s.assets.zgncdn.com/assets/109338/ZGame.109338.swf")
 def flashFile():
     # return send_from_directory_mod("assets", "ZGame.109338.swf")
-    return send_from_directory_mod("assets", "ZGame.109338_tracer2.swf")  # regular one
+    return send_from_directory_mod("assets", "ZGame.109338_tracer2.swf", max_age=ASSET_MAX_AGE)  # regular one
     # return send_from_directory_mod("assets", "ZGame.109338_tracer2a.swf")  # with extra debug logging
 
 
@@ -999,20 +1001,20 @@ def game_settings_file():
     # return send_from_directory_mod("assets/32995", "gameSettings.xml")
     # return send_from_directory_mod("assets/29oct2012", "gameSettings.xml")
     # return send_from_directory_mod("assets/29oct2012", "gameSettings_placeholders.xml")
-    return send_from_directory_mod("assets/29oct2012", "gameSettings_with_fixes.xml")
+    return send_from_directory_mod("assets/29oct2012", "gameSettings_with_fixes.xml", max_age=ASSET_MAX_AGE)
 
 
 @app.route("/en_US.xml")
 @app.route("/127.0.0.1en_US.xml")
 def en_us_file():
     # return send_from_directory_mod("assets/32995", "en_US.xml")
-    return send_from_directory_mod("assets/29oct2012", "en_US.xml")
+    return send_from_directory_mod("assets/29oct2012", "en_US.xml", max_age=ASSET_MAX_AGE)
 
 
 @app.route("/questSettings.xml")
 @app.route("/127.0.0.1questSettings.xml")
 def quest_settings_file():
-    return send_from_directory_mod("assets/29oct2012", "questSettings_with_fixes.xml")
+    return send_from_directory_mod("assets/29oct2012", "questSettings_with_fixes.xml", max_age=ASSET_MAX_AGE)
 
 @app.route("/friends.html")
 def friends_page():
@@ -1295,6 +1297,11 @@ def send_sol_assets_alternate(path):
     return send_from_directory_mod('assets/sol_assets_octdict/assets', path, max_age=ASSET_MAX_AGE)
 
 
+KNOWN_ASSET_FALLBACKS = {
+    'displays/dialogs/PU_OutOfResources.swf': 'displays/dialogs/PU_GenericPopUp.swf',
+}
+
+
 def send_from_directory_mod(directory, filename, max_age=None, **options):
     """Serve one file, letting a mod override win if one is loaded.
 
@@ -1304,6 +1311,9 @@ def send_from_directory_mod(directory, filename, max_age=None, **options):
     like everything else did.
     """
     absolute_directory = str(Path(install_path()) / directory)
+    if not (Path(absolute_directory) / filename).is_file() and filename in KNOWN_ASSET_FALLBACKS:
+        filename = KNOWN_ASSET_FALLBACKS[filename]
+
     path = safe_join(os.fspath(absolute_directory), os.fspath(filename))
 
     if path in mod_engine.mod:
@@ -1954,7 +1964,7 @@ def user_response():
         print("Trying migration")
         migrate(meta, session.get('save_version'), version)
 
-    sleep(0.05)  # bugfix required delay for loading entire screen
+    # sleep(0.05)  # Legacy delay no longer needed with MariaDB & Granian
 
     # for e in session['user_object']["userInfo"]["world"]["objects"]:
     #     e['lastUpdated'] = 1308211628  #1 minute earlier to test
