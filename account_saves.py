@@ -37,12 +37,23 @@ before exposing the port.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from flask import Flask
 from flask.wrappers import Request
 from flask_session import Session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
+
+#: Where the three "the save was not written" messages go.
+#:
+#: They used to be ``print`` calls, which meant they went to stdout and
+#: nowhere else: the gateway's log file never saw them, and the only way to
+#: know a save had been dropped was to read the console of the process. A
+#: dropped save is the worst thing that can happen here -- the player loses
+#: their empire -- so it has to be in the log where the rest of the trouble
+#: is.
+logger = logging.getLogger(__name__)
 
 #: Marks a storage key as account-bound. A cookie-keyed row keeps its bare sid,
 #: which is urlsafe base64 and never starts with this.
@@ -266,7 +277,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         payload.pop(self.REASON_KEY, None)
         self.save_store.store(account_key, payload)
         self.save_store.delete(cookie_key)
-        print("Adopted anonymous save", cookie_key, "into", account_key)
+        logger.info("Adopted anonymous save %s into %s", cookie_key, account_key)
 
         # Read back rather than reusing `payload`: the revision has to be the
         # one the row is at now, or the write at the end of this request would
@@ -305,7 +316,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
                 if attempt == 2:
                     raise TransientStoreError(
                         f"{store_id}: lock collision survived one retry") from error
-                print("Session save hit a lock collision, retrying once:", error)
+                logger.warning("Session save hit a lock collision, retrying once: %s", error)
         raise AssertionError("unreachable")
 
     def _upsert_session(self, session_lifetime, session, store_id) -> None:
@@ -341,7 +352,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             # The row belongs to whoever wrote last, and the response in hand was
             # computed from the session in hand, so this write is redundant
             # rather than lost. Say so, and let the response through.
-            print("Session save skipped, the row moved underneath:", conflict)
+            logger.error("Session save skipped, the row moved underneath: %s", conflict)
             session.modified = False
             return
         except TransientStoreError as error:
@@ -349,7 +360,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             # player cannot read anything we could put in an error body. A
             # collision that survived its retry is worth shouting about in the
             # log, and not worth a 500.
-            print("Session save dropped after a retry:", error)
+            logger.error("Session save dropped after a retry: %s", error)
             session.modified = False
             return
         except Exception as error:
@@ -366,7 +377,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             # write is the part that hid it for so long.
             #
             # Log loudly, let the response out. The next request tries again.
-            print("Session save failed during response finalisation:", repr(error))
+            logger.error("Session save failed during response finalisation: %r", error)
             session.modified = False
             return
 
