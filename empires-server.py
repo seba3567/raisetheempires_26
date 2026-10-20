@@ -2870,11 +2870,28 @@ def add_fleet_response(param):
     print("Player fleet:", param['units'])
     return add_fleet_response
 
+def _economy_session():
+    """The player's save, or None if there is no session to charge.
+
+    A purchase that arrives before `initUser` has no player to charge, and
+    `session['user_object']` raises KeyError when it is not there -- a KeyError
+    that took the whole call, and with it the rest of the batch, down. There
+    is nothing to buy and nobody to buy it for, so the answer is the same
+    empty one an unimplemented service gives.
+    """
+    save = session.get('user_object')
+    if not save:
+        logger.warning("Purchase without a session to charge")
+        return None
+    return save
+
+
 def buy_item_response(param):
     """`UserService.buyItem` -- comprar un item suelto del mercado."""
     meta = {"newPVE": 0}
-    if not isinstance(param, dict):
-        logger.warning("buyItem without a parameter object: %r", param)
+    if not isinstance(param, dict) or _economy_session() is None:
+        if not isinstance(param, dict):
+            logger.warning("buyItem without a parameter object: %r", param)
         return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
     buy_item(meta, param.get("code"), param.get("amount"))
@@ -2935,8 +2952,9 @@ def buy_item(meta, code, amount):
 def buy_items_response(param):
     """`UserService.buyItems` -- comprar varios items de una vez."""
     meta = {"newPVE": 0}
-    if not isinstance(param, dict):
-        logger.warning("buyItems without a parameter object: %r", param)
+    if not isinstance(param, dict) or _economy_session() is None:
+        if not isinstance(param, dict):
+            logger.warning("buyItems without a parameter object: %r", param)
         return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
     for code, amount in _purchase_batch(param.get("itemData")):
@@ -2957,7 +2975,11 @@ def use_item_response(param):
     if isinstance(param, dict):
         code = param.get("code") or param.get("itemCode") or param.get("item")
 
-    item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
+    save = _economy_session()
+    if save is None:
+        return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+
+    item_inventory = save["userInfo"]["player"]["inventory"]["items"]
     if isinstance(code, str) and item_inventory.get(code, 0) > 0:
         item_inventory[code] -= 1
     else:
@@ -2976,7 +2998,11 @@ def purchase_energy_refill_response(param):
     El precio por punto de energia es el del catalogo: el consumible EN4
     cuesta 5 de cash y da 5 de energia, o sea 1 de cash por punto.
     """
-    player = session['user_object']["userInfo"]["player"]
+    save = _economy_session()
+    if save is None:
+        return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+
+    player = save["userInfo"]["player"]
 
     energy_max = int(player.get('energyMax', 0))
     energy = int(player.get('energy', 0))
@@ -2997,8 +3023,9 @@ def purchase_energy_refill_response(param):
 def buy_quest_task_response(param):
     """`UserService.buyQuestTask` -- comprar un task de quest."""
     meta = {"newPVE": 0}
-    if not isinstance(param, dict):
-        logger.warning("buyQuestTask without a parameter object: %r", param)
+    if not isinstance(param, dict) or _economy_session() is None:
+        if not isinstance(param, dict):
+            logger.warning("buyQuestTask without a parameter object: %r", param)
         return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
     name = param.get("name")
@@ -3020,8 +3047,9 @@ def buy_expansion_response(param):
     enciende el bit que el jugador ya pagado.
     """
     meta = {"newPVE": 0}
-    if not isinstance(param, dict):
-        logger.warning("buyExpansion without a parameter object: %r", param)
+    if not isinstance(param, dict) or _economy_session() is None:
+        if not isinstance(param, dict):
+            logger.warning("buyExpansion without a parameter object: %r", param)
         return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
     index = param.get('index')
@@ -3041,8 +3069,9 @@ def purchase_contact_unlock(param):
     que el propio juego dice (`-contractUnlockMultiple`).
     """
     meta = {"newPVE": 0}
-    if not isinstance(param, dict):
-        logger.warning("purchaseContractUnlock without a parameter object: %r", param)
+    if not isinstance(param, dict) or _economy_session() is None:
+        if not isinstance(param, dict):
+            logger.warning("purchaseContractUnlock without a parameter object: %r", param)
         return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
 
     item_code = param.get("itemCode")

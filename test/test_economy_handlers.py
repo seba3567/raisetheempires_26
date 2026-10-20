@@ -525,3 +525,32 @@ class TestTheHandlersAreWired:
     ])
     def test_it_is_registered_on_the_dispatch_table(self, method):
         assert method in empires_server.AMF_HANDLERS
+
+
+class TestAPurchaseWithoutASession:
+    """Una compra que llega antes de que exista la partida.
+
+    ``session['user_object']`` levanta KeyError cuando no hay partida, y esa
+    KeyError se llevaba por delante la llamada entera y con ella el resto
+    del batch. No hay a quien cobrarle: la respuesta es la misma vacia que
+    da un servicio sin implementar.
+    """
+
+    @pytest.mark.parametrize("handler,param", [
+        (empires_server.buy_item_response, {"code": "RS01", "amount": 1}),
+        (empires_server.buy_items_response, {"itemData": {"RS01": 1}}),
+        (empires_server.use_item_response, "N01"),
+        (empires_server.buy_expansion_response, {"index": 3}),
+        (empires_server.buy_quest_task_response, {"name": "Q0001", "taskIndex": 0}),
+        (empires_server.purchase_contact_unlock, {"itemCode": "UL2"}),
+        (empires_server.purchase_energy_refill_response, {}),
+    ])
+    def test_it_answers_instead_of_crashing(self, handler, param):
+        with app.test_request_context():
+            session.sid = "0"
+            session['quests'] = []
+
+            response = handler(param)
+
+            assert response["errorType"] == 0
+            assert response["data"] == []
