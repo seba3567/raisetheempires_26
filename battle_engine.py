@@ -554,11 +554,31 @@ def init_battle(params):
             enemy_fleet = lookup_item_by_code(task["_item"])
             baddies = [lookup_item_by_code(baddie_slot["-item"]) for baddie_slot in simple_list(enemy_fleet["baddie"])]
             if not friendlies:
+                # The fleet the client named is the army it is drawing. If it
+                # is in the registry, that is the fight.
+                #
+                # This used to ask only whether the registry was *not empty*,
+                # and refuse the fight if it was. The fleet the client named
+                # was right there in the registry -- the log said so, in the
+                # same breath: "session has ['fleet1_2361750976462848']" --
+                # and the fight was refused anyway, because nothing ever
+                # looked the name up.
+                #
+                # The client got an empty answer instead of the battle, had no
+                # `ps` to compare its own units against, and stopped with
+                # "TResolveBattle: unit strength out of sync". The army was
+                # there the whole time; it just was not the one being asked
+                # for.
+                #
                 # `ensure_fleets`, not `session['fleets']`: a session can
                 # arrive without the key at all, and the old direct index
                 # raised KeyError on exactly the path this guard is about.
                 known_fleets = ensure_fleets()
-                if known_fleets:
+                named = known_fleets.get(params.get('fleet')) if params.get('fleet') else None
+                if named and isinstance(simple_list(named)[0], str):
+                    friendlies = [lookup_item_by_code(friendly.split(',')[0]) for friendly in
+                                  named]
+                elif known_fleets:
                     # The session knows about fleets, and this is not one of
                     # them. That is the state fault, not a loan: the client
                     # named a fleet it is drawing and we do not have it, so
@@ -575,8 +595,9 @@ def init_battle(params):
                         params.get('fleet'), sorted(known_fleets))
                     raise StaleBattleReference(
                         f"fleet {params.get('fleet')!r} is not registered")
-                friendlies = [lookup_item_by_code(friendly[1:]) for friendly, count in task["fleet"].items() for i in
-                              range(int(count))]
+                else:
+                    friendlies = [lookup_item_by_code(friendly[1:]) for friendly, count in task["fleet"].items() for i in
+                                  range(int(count))]
 
         if not has_battle() or (session["battle"][0] is None and session["battle"][1] is None and session["battle"][2] is None):
             baddie_strengths = [get_unit_max_strength(baddie, False, params) for baddie in baddies]

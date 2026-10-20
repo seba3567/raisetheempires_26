@@ -87,6 +87,51 @@ def test_a_session_with_no_fleet_at_all_still_gets_the_quest_garrison():
         assert len(friendly_strengths) == len(friendlies)
 
 
+def test_the_fleet_the_client_named_is_the_army():
+    """The client registers its garrison and then names it in the fight.
+
+    This is the shape of the wave attack: the client sends `addFleet` with the
+    troops it is drawing and then `resolveBattle` naming that fleet, and the
+    server has it -- the log said so, in the same breath as the refusal:
+    "session has ['fleet1_2361750976462848']".
+
+    It refused the fight anyway, because the check asked whether the registry
+    was empty rather than whether the *named* fleet was in it. The client got
+    an empty answer, had no `ps` to compare its own units against, and stopped
+    with "TResolveBattle: unit strength out of sync".
+    """
+    with app.test_request_context():
+        session.sid = "0"
+        session.setdefault('quests', default=list(QUEST))
+        session['user_object'] = _user_object()
+        session['fleets'] = {"fleet1_123": ["U01,,,", "U01,,,", "U01,,,"]}
+
+        friendlies, friendly_strengths, baddies, baddie_strengths, _ = \
+            battle_engine.init_battle(
+                {'fleet': 'fleet1_123', 'target': 'Q6016', 'ch': 1, 'map': None})
+
+        assert len(friendlies) == 3, \
+            "the army must be the one the client registered"
+        assert len(friendly_strengths) == len(friendlies)
+
+
+def test_a_fleet_that_is_not_the_named_one_is_still_refused():
+    """The guard is about the named fleet, not about the registry being full.
+
+    A registry with other fleets in it does not make the client's missing one
+    appear: that is still the state fault, and still a refusal.
+    """
+    with app.test_request_context():
+        session.sid = "0"
+        session.setdefault('quests', default=list(QUEST))
+        session['user_object'] = _user_object()
+        session['fleets'] = {"otra_flota": ["U1,1,0,0,0"]}
+
+        with pytest.raises(battle_engine.StaleBattleReference):
+            battle_engine.init_battle(
+                {'fleet': 'fleet1_123', 'target': 'Q6016', 'ch': 1, 'map': None})
+
+
 class TestLoginKeepsTheFleets:
     """`initUser` must not wipe the fleet registry.
 
