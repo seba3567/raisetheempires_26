@@ -1020,6 +1020,23 @@ def en_us_file():
     return send_from_directory_mod("assets/29oct2012", "en_US.xml", max_age=ASSET_MAX_AGE)
 
 
+@app.route("/zh_CN.xml")
+@app.route("/127.0.0.1zh_CN.xml")
+def zh_cn_file():
+    """La traduccion china, servida donde el cliente la pide.
+
+    El fichero estaba en `assets/` pero no en el directorio que se sirve, y
+    ademas no se podia parsear: 77 ampersands sin escapar. Un parser de XML
+    los rechaza, asi que el fichero estaba muerto donde estaba, y ni siquiera
+    como eso: un `&` suelto es un error de sintaxis, no un caracter raro.
+
+    Ahora escapa, parsea, y llega al cliente. La cobertura es parcial (el
+    chino tiene 13.978 de las 35.488 cadenas del ingles) pero lo que hay esta
+    traducido: 92,6% de las compartidas.
+    """
+    return send_from_directory_mod("assets", "zh_CN.xml", max_age=ASSET_MAX_AGE)
+
+
 @app.route("/questSettings.xml")
 @app.route("/127.0.0.1questSettings.xml")
 def quest_settings_file():
