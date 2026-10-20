@@ -142,7 +142,7 @@
 				backgroundColor: PLAYER_BACKGROUND,
 				allowScriptAccess: true,
 				allowFullscreen: true,
-				quality: 'high',
+				quality: 'medium',
 				autoplay: true,
 				parameters: data.flashVars
 			});

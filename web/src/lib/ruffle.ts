@@ -132,6 +132,7 @@ export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 			logLevel: 'error',
 			autoplay: 'on',
 			openUrlMode: 'confirm',
+			quality: 'medium',
 			...(window.RufflePlayer.config || {})
 		};
 	}
