@@ -27,6 +27,9 @@
 /_gw[0-9].*.log
 /_mysqld.*.log
 /_*.py
+# Copia de seguridad de las partidas basura que se borraron de MariaDB. Vive
+# en la raiz para poder recuperarla, pero no es contenido del proyecto.
+/_junk_saves_backup.json
 /chromium
 /chromium-profile
 /cache
