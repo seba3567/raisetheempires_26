@@ -23,13 +23,19 @@ import { db } from '#lib/server/db/client';
  * * AUTO_INCREMENT reset. Otherwise `ana` is created as id 6, 7, 8 across a
  *   run, and the zid tests that derive an id from the account break.
  */
+import { config } from '#lib/server/config';
+
 export async function resetDb(): Promise<void> {
 	const sql = await db();
 
 	for (const table of ['activity', 'friendships', 'progress', 'users']) {
-		await sql.unsafe(`DELETE FROM \`${table}\``);
+		await sql.unsafe(`DELETE FROM ${table}`);
 	}
-	await sql.unsafe('ALTER TABLE `users` AUTO_INCREMENT = 1');
+	if (config.database.url.startsWith('postgres')) {
+		await sql.unsafe('ALTER SEQUENCE users_id_seq RESTART WITH 1');
+	} else {
+		await sql.unsafe('ALTER TABLE `users` AUTO_INCREMENT = 1');
+	}
 }
 
 /** Close the shared connection. Used by tests that opened one. */

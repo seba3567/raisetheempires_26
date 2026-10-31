@@ -287,10 +287,9 @@ class TestRetired2013Pages:
 
     def test_the_changelog_is_still_served(self, client):
         """Data, not a 2013 page: nothing renders it, but it is still content."""
-        response = client.get("/changelog.txt")
-
-        assert response.status_code == 200
-        assert response.get_data(as_text=True).strip()
+        with client.get("/changelog.txt") as response:
+            assert response.status_code == 200
+            assert response.get_data(as_text=True).strip()
 
 
 class TestPlayerPages:

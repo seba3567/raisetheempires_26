@@ -92,8 +92,21 @@ export async function readSession(req: Request): Promise<number | null> {
 	}
 	if (diff !== 0) return null;
 
-	const userId = Number.parseInt(payload.split('.')[0] ?? '', 10);
-	return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
+	const [userIdRaw, issuedAtRaw] = payload.split('.');
+	const userId = Number.parseInt(userIdRaw ?? '', 10);
+	if (!Number.isSafeInteger(userId) || userId <= 0) return null;
+
+	if (issuedAtRaw) {
+		const issuedAt = Number.parseInt(issuedAtRaw, 36);
+		if (Number.isFinite(issuedAt)) {
+			const ageMs = Date.now() - issuedAt;
+			if (ageMs < -60_000 || ageMs > config.session.maxAgeSeconds * 1000) {
+				return null;
+			}
+		}
+	}
+
+	return userId;
 }
 
 export async function setSessionCookie(

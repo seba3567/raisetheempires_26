@@ -15,6 +15,8 @@
 
 /** Exact paths that mutate the game or leak other players' data. */
 const ADMIN_ONLY_EXACT: readonly string[] = [
+  // Deletes any save row. Must be strictly admin-only.
+  "/save",
   "/save-editor",
   "/gazillionaire",
   "/deprogress",
@@ -42,6 +44,8 @@ const ADMIN_ONLY_EXACT: readonly string[] = [
 
 /** Prefixes, for routes that carry a parameter after them. */
 const ADMIN_ONLY_PREFIXES: readonly string[] = [
+  // Internal server-to-server endpoints (must not be callable externally through the proxy)
+  "/api/",
   "/patch/",
   "/unlock_quest/",
   "/complete_quest/",
@@ -58,10 +62,49 @@ const ADMIN_ONLY_PREFIXES: readonly string[] = [
 
 export type GatewayAccess = "open" | "admin";
 
+/**
+ * Decode a path until it stops changing, so an encoded route cannot walk past
+ * the gate.
+ *
+ * `event.url.pathname` is the **raw** path: it still has `%61` where the
+ * player typed `a`. Werkzeug, which routes the request on the other side,
+ * **decodes** it before matching a rule. So `/gazillionaire` was refused and
+ * `/%67azillionaire` was not, and the second one reached the route that adds
+ * ten thousand coins to the caller's empire. The same trick read every
+ * player's session id out of `/list%5Fsession`, and replaced a save outright
+ * through `/editor%2Fsave`.
+ *
+ * The gate compares what the route matcher will see, so it has to decode too.
+ * Decoding stops when it reaches a fixed point, with a bound on the passes:
+ * `%252F` is `%25` encoded twice, and a bounded number of rounds still lands
+ * on the same string the matcher sees.
+ *
+ * A path that will not decode is refused. A rule that cannot be read cannot
+ * be classified, and the safe reading of "cannot tell" is "no".
+ */
+export function safeDecodePath(pathname: string): string | null {
+	let current = pathname;
+	for (let pass = 0; pass < 3; pass += 1) {
+		let next: string;
+		try {
+			next = decodeURIComponent(current);
+		} catch {
+			return null;
+		}
+		if (next === current) break;
+		current = next;
+	}
+	return current;
+}
+
 /** True when the path may only be reached by an account with the admin role. */
 export function accessDenied(pathname: string): boolean {
-  if (ADMIN_ONLY_EXACT.includes(pathname)) return true;
-  return ADMIN_ONLY_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+	// Undecodable is admin-only: the gate cannot tell what it is, so it says
+	// no.
+	const decoded = safeDecodePath(pathname);
+	if (decoded === null) return true;
+	if (ADMIN_ONLY_EXACT.includes(decoded)) return true;
+	return ADMIN_ONLY_PREFIXES.some((prefix) => decoded.startsWith(prefix));
 }
 
 /** The admin-only paths, for the operator CLI and for the admin UI. */

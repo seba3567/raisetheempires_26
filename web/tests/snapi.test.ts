@@ -77,10 +77,40 @@ describe('installSnapiBridge', () => {
 			'showStreamPermissions',
 			'showBookmarkDialog',
 			'showEmailPermission',
-			'requestSend'
+			'requestSend',
+			'creditsAcquisition',
+			'openInAppPurchaseAPI',
+			'windowOpen',
+			'windowClose',
+			'getNetworkId',
+			'getHasActivities',
+			'startActivity',
+			'PublishWithCallback',
+			'callExternalInterface'
 		]) {
 			expect(typeof installed()[name]).toBe('function');
 		}
+
+		// Verify expected return values for Flash
+		const scope = installed() as Record<string, (...args: unknown[]) => unknown>;
+		expect(scope['creditsAcquisition']()).toBe(true);
+		expect(scope['getNetworkId']()).toBe('facebook');
+		expect(scope['getHasActivities']()).toBe(false);
+		expect(scope['startActivity']()).toBe(false);
+		expect(scope['openInAppPurchaseAPI']({ id: 1 })).toEqual({ success: true });
+
+		// Verify 2012 legacy structures
+		const tracker = (installed() as Record<string, unknown>)['statTracker'] as Record<string, (...args: unknown[]) => void>;
+		expect(typeof tracker?.logLoadApp).toBe('function');
+		expect(typeof tracker?.logInitActions).toBe('function');
+		expect(typeof tracker?.logLoadComplete).toBe('function');
+
+		const frame = (installed() as Record<string, unknown>)['ZYFrameManager'] as Record<string, (...args: unknown[]) => void>;
+		expect(typeof frame?.reloadApp).toBe('function');
+		expect(typeof frame?.navigateTo).toBe('function');
+
+		const zynga = (installed() as Record<string, unknown>)['zynga'] as Record<string, unknown>;
+		expect(zynga).toBeDefined();
 	});
 });
 

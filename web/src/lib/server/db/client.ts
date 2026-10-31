@@ -1,20 +1,7 @@
 /**
  * Database access.
  *
- * MariaDB, through Bun's own SQL client. Everything above this file talks in
- * plain SQL with ``?`` placeholders and a small set of helpers -- which was the
- * point of the original bun:sqlite version: changing the engine is a driver
- * swap underneath, not a rewrite of the queries. Every query below is unchanged
- * from when this was SQLite.
- *
- * Two things did change underneath:
- *
- * bun:sqlite handed back a query object with ``.all()``/``.get()``/``.run()``
- * on it. Bun's client returns plain arrays of row objects, so ``one`` reads the
- * first row and ``run`` returns nothing rather than a row-count nobody used.
- *
- * And the connection is a network one, so everything is async. Holding a
- * synchronous handle open across a round trip is not something to do.
+ * PostgreSQL 18, through Bun's SQL client.
  */
 import { SQL } from 'bun';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -36,10 +23,6 @@ export type Params = Array<string | number | boolean | null | Date>;
  * ENOENT. `bun test` runs outside Vite and takes the filesystem path instead.
  */
 function loadMigrations(): MigrationMap {
-	// The call has to be a literal: Vite rewrites this expression at build time,
-	// and anything wrapping it (optional chaining included) is left alone, which
-	// silently falls through to the filesystem branch below and then fails with
-	// ENOENT because the compiled chunk has no migrations directory next to it.
 	let bundled: MigrationMap | undefined;
 	try {
 		bundled = import.meta.glob('./migrations/*.sql', {
@@ -51,7 +34,6 @@ function loadMigrations(): MigrationMap {
 		bundled = undefined;
 	}
 
-	// bun test runs outside Vite, where the glob yields nothing.
 	if (bundled && Object.keys(bundled).length > 0) {
 		return bundled;
 	}
@@ -65,70 +47,79 @@ function loadMigrations(): MigrationMap {
 }
 
 /**
- * Split a migration file into statements.
+ * The name a migration is recorded under.
  *
- * ``--`` comment lines go first: a semicolon inside one would otherwise cut a
- * statement in half and the server would reject the fragment, which points at
- * the schema rather than at the comment.
+ * The glob and the readdir fallback produce different keys -- the first is a
+ * path, the second a bare filename -- so the name is the last segment of
+ * either, with either separator.
  */
-function splitStatements(script: string): string[] {
-	return script
-		.split('\n')
-		.filter((line) => !line.trimStart().startsWith('--'))
-		.join('\n')
-		.split(';')
-		.map((statement) => statement.trim())
-		.filter(Boolean);
+function migrationName(path: string): string {
+	return path.split(/[/\\]/).pop() ?? path;
 }
 
-/** Apply any migration whose filename has not been recorded yet. */
+/**
+ * Apply any migration whose filename has not been recorded yet.
+ *
+ * The SQL is executed. It used to be only *recorded*: the schema lived in an
+ * inline copy of the same DDL, and the files in migrations/ were never run. A
+ * migration added to the directory did nothing at all while still being marked
+ * as applied, so the directory described the schema instead of building it.
+ *
+ * Each migration runs in its own transaction together with the row that
+ * records it. PostgreSQL's DDL is transactional, so a migration that fails
+ * leaves nothing behind and is retried whole on the next start, instead of
+ * being half-applied and marked as done.
+ *
+ * The gateway's own tables -- `saves` and `save_backups` -- are not here. They
+ * belong to the save store, which owns them through schema.sql and creates
+ * them when the store is built. Nothing on this side reads or writes them.
+ */
 export async function migrate(sql: SQL): Promise<string[]> {
 	await sql.unsafe(
 		'CREATE TABLE IF NOT EXISTS schema_migrations (' +
 			'name VARCHAR(191) NOT NULL PRIMARY KEY, ' +
-			'applied_at DATETIME NOT NULL' +
-			') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+			'applied_at TIMESTAMP NOT NULL' +
+			')'
 	);
 
 	const applied = new Set(
 		((await sql.unsafe('SELECT name FROM schema_migrations')) as any[]).map((row) => row.name)
 	);
-
 	const migrations = Object.entries(loadMigrations())
-		// Normalise the key to a bare filename. Vite's glob yields
-		// "./migrations/001_init.sql" while the filesystem branch yields
-		// "001_init.sql", and recording both made the same migration run twice.
-		.map(([path, content]) => [path.split('/').pop() ?? path, content] as const)
-		.sort(([a], [b]) => a.localeCompare(b));
+		.map(([path, statement]) => [migrationName(path), statement] as const)
+		// By codepoint, not by locale. `localeCompare` is ICU collation, which
+		// weighs punctuation differently depending on the machine's locale: the
+		// same set of migrations could then apply in a different order on a
+		// developer's box than on CI, and the order is load-bearing --
+		// `004_clans.sql` references `users(id)`.
+		.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 
 	const ran: string[] = [];
-	for (const [name, content] of migrations) {
+	for (const [name, statement] of migrations) {
 		if (applied.has(name)) continue;
-		for (const statement of splitStatements(content)) {
-			await sql.unsafe(statement);
-		}
-		await sql.unsafe('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)', [
-			name,
-			new Date()
-		]);
+		await sql.begin(async (tx) => {
+			await tx.unsafe(statement);
+			await tx.unsafe('INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)', [
+				name,
+				new Date()
+			]);
+		});
 		ran.push(name);
 	}
 	return ran;
 }
 
 async function ensureDatabase(url: string): Promise<void> {
-	/**
-	 * CREATE DATABASE cannot run inside the database it creates, so this opens a
-	 * second connection with no database named. Every deploy pointing at a fresh
-	 * MariaDB hits this once.
-	 */
-	const withoutDatabase = url.replace(/\/([^/?]+)(\?|$)/, '/$2');
+	const withoutDatabase = url.replace(/\/([^/?]+)(\?|$)/, '/postgres$2');
 	const bootstrap = new SQL(withoutDatabase);
 	try {
-		await bootstrap.unsafe(
-			`CREATE DATABASE IF NOT EXISTS \`${config.database.name}\` ` +
-				'CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+		const exists = await bootstrap.unsafe(
+			'SELECT 1 FROM pg_database WHERE datname = $1',
+			[config.database.name]
 		);
+		if (!exists || (exists as any[]).length === 0) {
+			await bootstrap.unsafe(`CREATE DATABASE "${config.database.name}"`);
+		}
 	} finally {
 		await bootstrap.close();
 	}
@@ -157,8 +148,6 @@ async function openConnection(url: string): Promise<SQL> {
 export function db(): Promise<SQL> {
 	if (!opening) {
 		opening = openConnection(config.database.url).catch((error) => {
-			// A failed open must not be cached, or one transient failure would
-			// poison every later request for the life of the process.
 			opening = null;
 			throw error;
 		});
@@ -177,69 +166,55 @@ export async function closeDb(): Promise<void> {
 
 /* ---------------------------------------------------------------- queries -- */
 
-/**
- * The transaction currently in flight, if any.
- *
- * Every helper below routes through here rather than through ``db()`` directly.
- * Without it a caller inside ``transact`` would silently write on the shared
- * connection instead of inside its transaction: those writes would commit
- * immediately, and a failure halfway through would leave half a user created.
- * Bun's ``begin`` hands the transaction to the callback, but the model
- * functions never see it, so it is parked here for the duration.
- */
-let activeTx: any = null;
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const txStorage = new AsyncLocalStorage<any>();
 
 async function current(): Promise<any> {
-	return activeTx ?? (await db());
+	return txStorage.getStore() ?? (await db());
+}
+
+function formatQuery(query: string): string {
+	let paramIdx = 1;
+	return query.replace(/'(?:[^'\\]|\\.)*'|\?/g, (match) => {
+		if (match === '?') {
+			return `$${paramIdx++}`;
+		}
+		return match;
+	});
 }
 
 export async function all<T>(sql: string, ...params: Params): Promise<T[]> {
-	return (await (await current()).unsafe(sql, params as any)) as T[];
+	return (await (await current()).unsafe(formatQuery(sql), params as any)) as T[];
 }
 
 export async function one<T>(sql: string, ...params: Params): Promise<T | null> {
-	// Both awaits matter. The first gets the connection; the second gets the
-	// rows out of the promise `unsafe` returns. Without the second, `rows[0]` is
-	// `undefined` on a Promise and this silently answers null for every lookup --
-	// which is how createUser reported "user insert did not persist" about a row
-	// that was sitting there the whole time.
-	const rows = await (await current()).unsafe(sql, params as any);
+	const rows = await (await current()).unsafe(formatQuery(sql), params as any);
 	return (rows[0] as T) ?? null;
 }
 
 export async function run(sql: string, ...params: Params): Promise<void> {
-	await (await current()).unsafe(sql, params as any);
+	await (await current()).unsafe(formatQuery(sql), params as any);
 }
 
 /**
  * Run `fn` inside a transaction.
  *
- * Bun's client opens one with a callback and commits when the callback returns,
- * which is the same shape bun:sqlite's `transaction()` had -- so the call sites
- * read the same, but the body has to be async.
+ * Uses AsyncLocalStorage to ensure concurrent transactions in different
+ * async execution contexts do not collide or share transaction handles.
  */
 export async function transact<T>(fn: () => Promise<T> | T): Promise<T> {
-	if (activeTx) {
-		// Bun has no nested transactions. Reusing the outer one silently would
-		// be a lie about the scope the caller asked for.
+	if (txStorage.getStore()) {
 		throw new Error('transact() called inside another transact()');
 	}
 	const sql = await db();
 	return (await sql.begin(async (tx: any) => {
-		activeTx = tx;
-		try {
-			return await fn();
-		} finally {
-			activeTx = null;
-		}
+		return await txStorage.run(tx, () => fn());
 	})) as T;
 }
 
 /**
- * A timestamp for a DATETIME column.
- *
- * ISO-8601 with a `T` and a `Z` -- what `toISOString()` gives -- is rejected by
- * MariaDB with error 1292. This is the spelling both engines take.
+ * A timestamp formatted for PostgreSQL TIMESTAMP columns.
  */
 export function now(): string {
 	return new Date().toISOString().replace('T', ' ').slice(0, 19);

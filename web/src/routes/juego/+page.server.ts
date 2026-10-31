@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 
 import { chooseAvatar, fetchAvatarState } from '#lib/server/avatar';
 import { buildFlashVars } from '#lib/server/flashvars';
+import { resolveRequestOrigin } from '#lib/server/config';
 import { fetchMotdState } from '#lib/server/motd';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -12,8 +13,9 @@ export const load: PageServerLoad = async ({ url, request, locals }) => {
 	if (!user) redirect(303, '/registro');
 
 	return {
-		// Same origin the proxy puts in the Host header. See #lib/flashvars.
-		flashVars: buildFlashVars(process.env['PUBLIC_ORIGIN'] ?? url.origin),
+		// The same origin the proxy puts in the Host header, resolved by the
+		// same function. See #lib/server/config.
+		flashVars: buildFlashVars(resolveRequestOrigin(url)),
 		zid: user.zid,
 		role: user.role,
 		// Null when the gateway cannot be reached, in which case the picker

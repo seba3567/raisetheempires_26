@@ -207,7 +207,26 @@
 		</div>
 	{/if}
 
-	<h2 class="mt-12 text-xl font-semibold">Amigos</h2>
+	<!-- Alianzas & PvP Hub Callout -->
+	<div class="mt-12 panel border-gold-600/40 bg-gradient-to-r from-empire-900 via-empire-950 to-empire-900 flex flex-wrap items-center justify-between gap-4 p-5 shadow-lg">
+		<div>
+			<div class="flex items-center gap-2">
+				<span class="rounded bg-gold-500/20 text-gold-400 text-[11px] font-bold px-2 py-0.5 uppercase border border-gold-500/30">
+					Nuevo Sistema Social Web
+				</span>
+			</div>
+			<h2 class="text-xl font-bold text-white mt-1">⚔️ Centro de Alianzas, Duelos PvP y Regalos</h2>
+			<p class="text-xs text-slate-300 mt-0.5 max-w-xl">
+				Envía suministros a tus amigos, desafía a otros comandantes en la Arena Táctica y recluta aliados sin pasar por Facebook.
+			</p>
+		</div>
+		<a href="/amigos" class="btn-primary !py-2.5 !px-5 text-sm font-bold flex items-center gap-2 shadow-md">
+			<span>Abrir Centro de Alianzas</span>
+			<span>&rarr;</span>
+		</a>
+	</div>
+
+	<h2 class="mt-8 text-xl font-semibold">Amigos</h2>
 	{#if data.friends.length === 0}
 		<p class="mt-2 text-slate-400">Todavía no tienes amigos.</p>
 	{:else}

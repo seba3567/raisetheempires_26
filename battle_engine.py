@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import math
+from typing import Any
 
 import msgspec
 from flask import session
@@ -33,16 +36,37 @@ class StaleBattleReference(Exception):
     (e.g. a queued client request replayed after the battle/session was reset)."""
 
 
-def battle_complete_response(params):
+def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
     friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables = init_battle(params)
     meta = {"newPVE": 0}
 
-    if 'id' in params:
-        [player_unit_id, enemy_unit_id] = params['id']  #player turn
+    raw_id = params.get('id')
+    target_ids: list[int] = []
+    if isinstance(raw_id, (list, tuple)):
+        try:
+            target_ids = [int(x) for x in raw_id if x is not None]
+        except (ValueError, TypeError):
+            target_ids = []
+    elif isinstance(raw_id, dict):
+        try:
+            sorted_keys = sorted(
+                raw_id.keys(),
+                key=lambda k: int(k) if str(k).isdigit() else 999
+            )
+            target_ids = [
+                int(raw_id[k]) for k in sorted_keys
+                if raw_id[k] is not None and str(k).isdigit()
+            ]
+        except (ValueError, TypeError):
+            target_ids = []
+
+    if len(target_ids) >= 2:
+        player_unit_id, enemy_unit_id = target_ids[0], target_ids[1]
         player_turn = True
     else:
         player_turn = False
-        enemy_unit_id, _, player_unit_id = ai_best_attack(friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables)
+        attack_res = ai_best_attack(friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables)
+        enemy_unit_id, _, player_unit_id = attack_res if attack_res else (None, 0, None)
 
     if (
         enemy_unit_id is not None
@@ -237,16 +261,16 @@ def is_consumable_for_turn(target, player_turn):
     return (target[0] == "ally" and player_turn) or (target[0] in ["enemy", "AI"] and not player_turn)
 
 
-def apply_dot_damage(consumable, selected_unit, strengths, target_description):
-    dot_damage = int(consumable["consumable"].get("-dot", "0"))
+def apply_dot_damage(consumable: dict[str, Any], selected_unit: int | None, strengths: list[int], target_description: str) -> None:
+    if selected_unit is None or not (0 <= selected_unit < len(strengths)):
+        return
+    dot_damage = int(consumable.get("consumable", {}).get("-dot", "0"))
     if dot_damage:
         print("Applying", dot_damage, "damage over time")
-
         if strengths[selected_unit] > 0:
-            strengths[selected_unit] -= dot_damage
+            strengths[selected_unit] = max(0, strengths[selected_unit] - dot_damage)
             print(target_description, selected_unit, "strength", strengths[selected_unit])
-            if strengths[selected_unit] <= 0:
-                strengths[selected_unit] = 0
+            if strengths[selected_unit] == 0:
                 print(target_description, selected_unit, "down by consumable")
 
 
@@ -259,18 +283,14 @@ def handle_loss(friendly_strengths):
 def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
     if sum(baddie_strengths) == 0:
         print("Enemy defeated")
-        session["last_battle"] = session["battle"]
-        # The battle is over, so its strength arrays must not outlive it.
-        # `handle_loss` has always cleared them here; winning used to keep
-        # them, and the next battle -- with a different fleet -- reused them
-        # instead of computing its own. The client then received one unit
-        # list and another one's strengths, and stopped with
-        # "TResolveBattle: unit strength out of sync".
-        session["battle"] = None
+        battle_ctx = session.get("battle")
+        session["last_battle"] = battle_ctx
 
-        replaying = session["battle"][3].replaying
-        battle_island = session["battle"][3].island
-
+        replaying = False
+        battle_island = None
+        if isinstance(battle_ctx, (list, tuple)) and len(battle_ctx) > 3 and battle_ctx[3] is not None:
+            replaying = bool(getattr(battle_ctx[3], "replaying", False))
+            battle_island = getattr(battle_ctx[3], "island", None)
 
         handle_quest_progress(meta, all_lambda(progress_action("fight"),
                                                progress_parameter_implies("_fleetname", params.get("target"))))
@@ -288,18 +308,28 @@ def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
                 a * reward_multiplier if a <= combat_replay_reward_minimum else max(a * reward_multiplier,
                                                                                     combat_replay_reward_minimum))) if replaying else lambda a: a
             item_modifier = (lambda a: 0) if replaying else lambda a: a
-            do_rewards("Campaign", map_item['island'][current_island].get("reward"), meta, inc_modifier=modifier, item_modifier=item_modifier)
+            if map_item and 'island' in map_item and current_island < len(map_item['island']):
+                do_rewards("Campaign", map_item['island'][current_island].get("reward"), meta, inc_modifier=modifier, item_modifier=item_modifier)
             if not replaying:
                 do_rewards("Liberty Bond", {"_type": "item", "_item": "xk01", "_count": "1"}, meta)
 
             if not replaying:
-                next_island_id = map_item['island'][current_island].get('-unlocks')
-                if next_island_id is not None:
-                    print("Activating next island", map_name, next_island_id)
-                    set_active_island_by_map(map_name, int(next_island_id))
-                else:
-                    print("Current island group finished", map_name)
-                    set_active_island_by_map(map_name, len(map_item['island']))
+                if map_item and 'island' in map_item and current_island < len(map_item['island']):
+                    next_island_id = map_item['island'][current_island].get('-unlocks')
+                    if next_island_id is not None:
+                        print("Activating next island", map_name, next_island_id)
+                        set_active_island_by_map(map_name, int(next_island_id))
+                    else:
+                        print("Current island group finished", map_name)
+                        set_active_island_by_map(map_name, len(map_item['island']))
+                        next_map_code = map_item.get('-unlocks') or map_item.get('unlocks')
+                        if next_map_code:
+                            world = session.get('user_object', {}).get('userInfo', {}).get('world', {})
+                            campaign = world.setdefault('campaign', {})
+                            active_maps = campaign.setdefault('active', {})
+                            if next_map_code not in active_maps:
+                                print("Unlocking next campaign map:", next_map_code)
+                                active_maps[next_map_code] = {"status": 0, "fleets": []}
             else:
                 print("Currently replaying no island activation needed")
             tokens_before = get_min_island_mastery_from_battle()
@@ -312,28 +342,36 @@ def handle_win(baddie_strengths, meta, params, friendlies, friendly_strengths):
             print("challenge won")
             invasion_complete(params["attackHostId"], params, friendlies, friendly_strengths)
         elif params.get('target') == "FleetName":
-            if session["fleets"]["FleetName"].get("invaded_uid"):
-                print("neighbor repel won")
-                neighbor_repelled(session["fleets"]["FleetName"])
-            elif session["fleets"]["FleetName"]["status"] == 4096:
-                print("survival won")
-            else:
-                print("repel won")
-                del session['user_object']["pvp"]["invaders"]["u" + session["fleets"]["FleetName"]["uid"]]
-        elif params.get('name') == "FleetName":
-            [(_fleet_name, enemy_fleet)] = [(k, v) for k, v in session['fleets'].items() if isinstance(v, dict) and v.get('name') == "FleetName"]
-            if enemy_fleet["invader"]:
-                if enemy_fleet.get("invaded_uid"):
-                    print("neighbor repel with consumable won")
-                    neighbor_repelled(enemy_fleet)
-                elif session["fleets"]["FleetName"]["status"] == 4096:
-                    print("survival with consumable won")
+            fleets = session.get("fleets", {})
+            if "FleetName" in fleets and isinstance(fleets["FleetName"], dict):
+                if fleets["FleetName"].get("invaded_uid"):
+                    print("neighbor repel won")
+                    neighbor_repelled(fleets["FleetName"])
+                elif fleets["FleetName"].get("status") == 4096:
+                    print("survival won")
                 else:
-                    print("repel with consumable won")
-                    del session['user_object']["pvp"]["invaders"]["u" + enemy_fleet['uid']]
-            else:
-                print("challenge with consumable won")
-                invasion_complete(enemy_fleet['uid'], params, friendlies, friendly_strengths)
+                    print("repel won")
+                    pvp_invaders = session.get('user_object', {}).get("pvp", {}).get("invaders", {})
+                    invader_key = "u" + str(fleets["FleetName"].get("uid", ""))
+                    pvp_invaders.pop(invader_key, None)
+        elif params.get('name') == "FleetName":
+            fleets = session.get("fleets", {})
+            fleet_matches = [(k, v) for k, v in fleets.items() if isinstance(v, dict) and v.get('name') == "FleetName"]
+            if fleet_matches:
+                _fleet_name, enemy_fleet = fleet_matches[0]
+                if enemy_fleet.get("invader"):
+                    if enemy_fleet.get("invaded_uid"):
+                        print("neighbor repel with consumable won")
+                        neighbor_repelled(enemy_fleet)
+                    elif fleets.get("FleetName", {}).get("status") == 4096:
+                        print("survival with consumable won")
+                    else:
+                        print("repel with consumable won")
+                        pvp_invaders = session.get('user_object', {}).get("pvp", {}).get("invaders", {})
+                        pvp_invaders.pop("u" + str(enemy_fleet.get('uid', "")), None)
+                else:
+                    print("challenge with consumable won")
+                    invasion_complete(enemy_fleet.get('uid'), params, friendlies, friendly_strengths)
         session["battle"] = None
 
 
@@ -349,7 +387,15 @@ def neighbor_repelled(enemy_fleet):
         print("WARNING: no save for the repelled defender",
               enemy_fleet.get("invaded_uid"))
         return
-    save['user_object']["pvp"]["invaders"]["u" + str(enemy_fleet.get("uid"))]["dID"] = get_zid()
+    # The invader's entry is created when the invasion starts, but it can be
+    # gone: the invasion was withdrawn, the save was restored from a backup,
+    # or the save has no pvp section at all. Indexing it unconditionally
+    # raised KeyError -- after the battle was already decided -- and the
+    # gateway turned that into a dummy response, so the client never learned
+    # it had won.
+    invaders = save['user_object'].setdefault("pvp", {}).setdefault("invaders", {})
+    invader = invaders.setdefault("u" + str(enemy_fleet.get("uid")), {})
+    invader["dID"] = get_zid()
     store_session(save)
 
 
@@ -359,8 +405,12 @@ def invasion_complete(enemy_fleet_uid, params, friendlies, friendly_strengths):
     if save is None:
         print("WARNING: no save to mark the invasion complete for", enemy_fleet_uid)
         return
-    save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["status"] = 2
-    save['user_object']["pvp"]["invaders"]["u" + str(get_zid())]["attacker_fleet"] = [format_player_fleet(friendlies[i]["-code"]) for i in get_alive_unit_index(friendly_strengths)]
+    # As above: the record can be missing, and the battle has already been
+    # won by the time this runs. A KeyError here voided the whole turn.
+    invaders = save['user_object'].setdefault("pvp", {}).setdefault("invaders", {})
+    invader = invaders.setdefault("u" + str(get_zid()), {})
+    invader["status"] = 2
+    invader["attacker_fleet"] = [format_player_fleet(friendlies[i]["-code"]) for i in get_alive_unit_index(friendly_strengths)]
     store_session(save)
 
 
@@ -383,11 +433,11 @@ def get_next_fleet(fleet_name):
 
 
 def handle_damage_upgrades(damage, friendlies, player_unit_id):
-    research = session['user_object']["userInfo"]["world"]["research"]
+    research = session.get('user_object', {}).get("userInfo", {}).get("world", {}).get("research", {})
     upgrades = research.get(friendlies[player_unit_id]["-code"], [])
     for upgrade in upgrades:
         upgrade_item = lookup_item_by_code(upgrade)
-        mod_damage = upgrade_item["modifier"].get("-damage")
+        mod_damage = upgrade_item.get("modifier", {}).get("-damage")
         if mod_damage:
             if upgrade_item["modifier"].get("-percent"):
                 damage *= 1 + float(mod_damage) / 100
@@ -399,11 +449,11 @@ def handle_damage_upgrades(damage, friendlies, player_unit_id):
 
 
 def handle_accurancy_upgrades(crit, direct, friendlies, player_unit_id):
-    research = session['user_object']["userInfo"]["world"]["research"]
+    research = session.get('user_object', {}).get("userInfo", {}).get("world", {}).get("research", {})
     upgrades = research.get(friendlies[player_unit_id]["-code"], [])
     for upgrade in upgrades:
         upgrade_item = lookup_item_by_code(upgrade)
-        mod_accuracy = upgrade_item["modifier"].get("-accuracy")
+        mod_accuracy = upgrade_item.get("modifier", {}).get("-accuracy")
         if mod_accuracy:
             crit -= float(mod_accuracy) / 100
             direct -= float(mod_accuracy) / 100
@@ -413,11 +463,11 @@ def handle_accurancy_upgrades(crit, direct, friendlies, player_unit_id):
 
 
 def handle_strength_upgrades(strength, unit):
-    research = session['user_object']["userInfo"]["world"]["research"]
+    research = session.get('user_object', {}).get("userInfo", {}).get("world", {}).get("research", {})
     upgrades = research.get(unit["-code"], [])
     for upgrade in upgrades:
         upgrade_item = lookup_item_by_code(upgrade)
-        mod_damage = upgrade_item["modifier"].get("-strength")
+        mod_damage = upgrade_item.get("modifier", {}).get("-strength")
         if mod_damage:
             if upgrade_item["modifier"].get("-percent"):
                 strength *= 1 + float(mod_damage) / 100
@@ -429,11 +479,11 @@ def handle_strength_upgrades(strength, unit):
 
 
 def handle_shield_upgrades(friendlies, player_unit_id):
-    research = session['user_object']["userInfo"]["world"]["research"]
+    research = session.get('user_object', {}).get("userInfo", {}).get("world", {}).get("research", {})
     upgrades = research.get(friendlies[player_unit_id]["-code"], [])
     for upgrade in upgrades:
         upgrade_item = lookup_item_by_code(upgrade)
-        mod_shield = upgrade_item["modifier"].get("-shields")
+        mod_shield = upgrade_item.get("modifier", {}).get("-shields")
         if mod_shield:
             return True
     return False
@@ -794,7 +844,10 @@ def next_campaign_response(params):
     # raw paste through /editor/save leaves behind.
     ensure_fleets()
 
-    enemy_fleet = map_item["island"][island]['fleet']
+    if map_item and "island" in map_item and 0 <= island < len(map_item["island"]):
+        enemy_fleet = map_item["island"][island].get('fleet', {})
+    else:
+        enemy_fleet = {}
     #TODO what if defeated?
     fleet_name = get_new_enemy_fleet_name()
 
@@ -854,10 +907,17 @@ def get_mastery_units(enemy_fleet, mastery):
 
 
 def increment_mastery():
-    campaign = session['user_object']['userInfo']['world']['campaign']
     if not has_battle_context():
         return
+    user_obj = session.get('user_object')
+    if not user_obj or "userInfo" not in user_obj:
+        return
+    campaign = user_obj['userInfo'].get('world', {}).get('campaign', {})
+    if "mastery" not in campaign:
+        campaign["mastery"] = {}
     battle_context = session["battle"][3]
+    if not battle_context or battle_context.map_name is None or battle_context.island is None:
+        return
 
     if battle_context.map_name not in campaign["mastery"]:
         campaign["mastery"][battle_context.map_name] = 0
@@ -875,7 +935,11 @@ def get_island_mastery_from_battle():
 
 
 def get_island_mastery(map_name, island):
-    island_mastery = session['user_object']['userInfo']['world']['campaign']["mastery"].get(map_name, 0)
+    if island is None:
+        return 0
+    user_obj = session.get('user_object', {})
+    campaign = user_obj.get('userInfo', {}).get('world', {}).get('campaign', {})
+    island_mastery = campaign.get("mastery", {}).get(map_name, 0)
 
     return island_mastery >> island * 2 & 0b11
 
@@ -891,7 +955,9 @@ def get_min_island_mastery_from_battle():
 
 
 def get_min_island_mastery(map_name):
-    return min(get_island_mastery(map_name, i) for i in range(len(lookup_item_by_code(map_name).get('island',[]))))
+    item = lookup_item_by_code(map_name) if map_name else None
+    islands = item.get('island', []) if item else []
+    return min((get_island_mastery(map_name, i) for i in range(len(islands))), default=0)
 
 
 def get_mastery_scalar():
@@ -927,26 +993,42 @@ def get_reward_multiplier():
     current_map_item = lookup_item_by_code(battle_context.map_name)
 
     if lead_map != battle_context.map_name or lead_island_id != battle_context.island:
-        #overleveled distance till current island
-        factor = combat_replay_reward_span - min(int(lead_map_item["island"][lead_island_id]["-globalIslandIndex"]) -
-            int(current_map_item["island"][battle_context.island]["-globalIslandIndex"]), combat_replay_reward_span)
-        return factor * (1/combat_replay_reward_span) if factor > 0 else 0.01
+        # overleveled distance till current island
+        try:
+            lead_islands = lead_map_item.get("island", []) if lead_map_item else []
+            curr_islands = current_map_item.get("island", []) if current_map_item else []
+            if lead_island_id is not None and 0 <= lead_island_id < len(lead_islands) and \
+               battle_context.island is not None and 0 <= battle_context.island < len(curr_islands):
+                lead_idx = int(lead_islands[lead_island_id].get("-globalIslandIndex", "0"))
+                curr_idx = int(curr_islands[battle_context.island].get("-globalIslandIndex", "0"))
+                factor = combat_replay_reward_span - min(lead_idx - curr_idx, combat_replay_reward_span)
+                return factor * (1 / combat_replay_reward_span) if factor > 0 else 0.01
+        except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError):
+            return 1.0
     return 1
 
 def get_lead_map():
     initial_map = "C001"
 
-    campaign = session['user_object']['userInfo']['world']['campaign']
+    user_obj = session.get('user_object', {})
+    campaign = user_obj.get('userInfo', {}).get('world', {}).get('campaign', {})
+    active = campaign.get('active', {})
     lead_map = initial_map
+    visited = set()
 
-    while True:
+    while lead_map and lead_map not in visited:
+        visited.add(lead_map)
         map_item = lookup_item_by_code(lead_map)
-        _, island = get_active_island_by_map(lead_map) if lead_map in campaign['active'] else (None, 0)
-        if island < len(map_item.get("island", [])):
+        if not map_item:
+            return initial_map
+        _, island = get_active_island_by_map(lead_map) if lead_map in active else (None, 0)
+        islands = map_item.get("island", [])
+        if island is not None and island < len(islands):
             return lead_map
         if "-unlocks" not in map_item:
             return initial_map
         lead_map = map_item["-unlocks"]
+    return initial_map
 
 
 def register_fleetname_fleet(enemy_fleet):
@@ -978,10 +1060,16 @@ def get_new_enemy_fleet_name():
 
 
 def get_survival_player_fleet():
-    player_units = session["fleets"][get_last_fleet_name()]
-    subtype = lookup_item_by_code(player_units[0].split(',')[0])["-subtype"]
-    research = session['user_object']["userInfo"]["world"]["research"]
+    player_units = session.get("fleets", {}).get(get_last_fleet_name(), [])
+    subtype = lookup_item_by_code(player_units[0].split(',')[0])["-subtype"] if player_units else "infantry"
+    research = session.get('user_object', {}).get("userInfo", {}).get("world", {}).get("research", {})
 
+    last_battle = session.get("last_battle")
+    last_strengths = last_battle[0] if last_battle and len(last_battle) > 0 and last_battle[0] is not None else []
+    last_consumables = last_battle[2] if last_battle and len(last_battle) > 2 and last_battle[2] is not None else []
+
+    def get_unit_strength(i):
+        return last_strengths[i] if i < len(last_strengths) else 100
 
     fleet = {
     "type": subtype,
@@ -1002,10 +1090,10 @@ def get_survival_player_fleet():
     "ransomRandom": None,
     "ransomResource": None,
     "ransomAmount": None,
-    "units": [f"{p.split(',')[0]},{session['last_battle'][0][i]},{int(is_shielded(('ally', i), session['last_battle'][2]))},," for i, p in enumerate(player_units) if session["last_battle"][0][i] != 0],
+    "units": [f"{p.split(',')[0]},{get_unit_strength(i)},{int(is_shielded(('ally', i), last_consumables))},," for i, p in enumerate(player_units) if get_unit_strength(i) != 0],
     "store": [0],  # [0, 0, 0],
     "fleets": [],
-    "upgrades": {p.split(',')[0]: ",".join(research.get(p.split(',')[0])) for i, p in enumerate(player_units) if session["last_battle"][0][i] != 0 and research.get(p.split(',')[0])},
+    "upgrades": {p.split(',')[0]: ",".join(research.get(p.split(',')[0], [])) for i, p in enumerate(player_units) if get_unit_strength(i) != 0 and research.get(p.split(',')[0])},
     "hp": None,
     "invader": False
     }
@@ -1058,8 +1146,8 @@ def assign_consumable_response(params):
         if len(secondaries) > 1:
             print("WARN: more that one secondary", repr(secondaries))
         if not secondaries:
-            print("ERROR: no secondary", repr(secondaries))
-            raise Exception("ERROR: no secondary", repr(secondaries))
+            print("INFO: no secondary available to cast", repr(secondaries))
+            raise StaleBattleReference("No secondary ability available to cast for AI units")
 
         selected_consumable = lookup_item_by_code(secondaries[0])
         enemy_turn = True
@@ -1087,10 +1175,17 @@ def assign_consumable_response(params):
             if (selected_consumable["consumable"].get("-target") == 'enemy') ^ enemy_turn:
                 live_baddies_index = get_alive_unit_index(baddie_strengths)
                 if targeted:
-                    targeted_baddie = int(params["id"])
+                    raw_pid = params["id"]
+                    if isinstance(raw_pid, (list, tuple)) and raw_pid:
+                        targeted_baddie = int(raw_pid[0])
+                    elif isinstance(raw_pid, dict):
+                        first_k = min(raw_pid.keys()) if raw_pid else 0
+                        targeted_baddie = int(raw_pid[first_k])
+                    else:
+                        targeted_baddie = int(raw_pid)
                 #TODO enemy support heals, accuracy,...
                 else:
-                    targeted_baddie = live_baddies_index[round(roll_random_between(0, round(len(live_baddies_index) - 1)))] if len(live_baddies_index) > 1 else live_baddies_index[0]
+                    targeted_baddie = live_baddies_index[round(roll_random_between(0, round(len(live_baddies_index) - 1)))] if len(live_baddies_index) > 1 else (live_baddies_index[0] if live_baddies_index else 0)
                 apply_consumable_direct_impact(meta, selected_consumable, targeted_baddie, baddies, baddie_strengths, params, False, active_consumables)
                     # session["battle"] = None`
                 # handle_win(baddie_strengths, meta, {})  #TODO next map?
@@ -1100,11 +1195,20 @@ def assign_consumable_response(params):
             else:
                 live_friendly_index = get_alive_unit_index(friendly_strengths)
                 if targeted:
-                    targeted_friendly = int(params["id"])
+                    raw_pid = params["id"]
+                    if isinstance(raw_pid, (list, tuple)) and raw_pid:
+                        targeted_friendly = int(raw_pid[0])
+                    elif isinstance(raw_pid, dict):
+                        first_k = min(raw_pid.keys()) if raw_pid else 0
+                        targeted_friendly = int(raw_pid[first_k])
+                    else:
+                        targeted_friendly = int(raw_pid)
                 elif enemy_turn:
                     targeted_friendly = next(
-                        i for s, i in zip(friendly_strengths, range(len(friendly_strengths))) if
-                        s > 0 and not is_affected_by_consumable(("ally", i), selected_consumable, active_consumables))
+                        (i for s, i in zip(friendly_strengths, range(len(friendly_strengths))) if
+                        s > 0 and not is_affected_by_consumable(("ally", i), selected_consumable, active_consumables)),
+                        live_friendly_index[0] if live_friendly_index else 0
+                    )
                 else:
                     targeted_friendly = live_friendly_index[
                         round(roll_random_between(0, round(len(live_friendly_index) - 1)))] if len(
@@ -1219,9 +1323,24 @@ def apply_consumable_direct_impact(meta, selected_consumable, targeted_unit, uni
     if "-chipFactor" in selected_consumable["consumable"]:
         # dead units are removed from battle side so units adjacent to the dead unit are now counted as adjacent to
         # each other for collateral damage
+        #
+        # The formation is the one that was alive when the cast was aimed --
+        # the epicenter stays in it even when the direct impact kills it,
+        # because it is still the centre of the blast. (test/battle_test.py
+        # pins the numbers for that case.)
+        if targeted_unit not in live_index:
+            # The target was already dead: the direct impact did nothing (see
+            # the branch above), and it is not in the formation, so there is
+            # no epicenter to spread collateral damage from. Indexing the list
+            # with a unit that is not in it raised ValueError, which the
+            # gateway swallowed -- the player lost the consumable and the
+            # damage with it.
+            print("Consumable", selected_consumable["-code"], "not used to dead unit, no collateral damage")
+            return
+        epicenter = live_index.index(targeted_unit)
         for i in range(len(live_index)):
             collateral_unit_current_strength = units_strengths[live_index[i]]
-            colateral_damage = math.ceil(get_adjacent_factor(live_index.index(targeted_unit), i, len(live_index)) *
+            colateral_damage = math.ceil(get_adjacent_factor(epicenter, i, len(live_index)) *
                                          int(selected_consumable["consumable"]["-chipFactor"]) *
                                          int(selected_consumable["consumable"].get("-di", 0)) / 100)
             for a in against:
@@ -1311,47 +1430,66 @@ def get_consumable_int(target, active_consumables, field):
 # all alive attackers select defender with best value and select attacker for that value if more attackers with same value (and not m_shouldFocusFire) then conditionally roll between len of those attackers
 # when m_shouldFocusFire(and a defender was found) then it's found and returns
 # FindBestDefendingUnitAgainstBestAttacker
-# best valued alive defender: required roll
-# FindBestDefendingUnit required roll combatAISwitchPercent 0.2
-# consumables used?
+# FindBestDefendingUnit and FindBestDefendingUnitAgainstAttackers
 def ai_best_attack(player_units, player_units_strengths, baddies, baddies_strengths, active_consumables):
+    """Replicates Flash BattleAI.FindBestDefendingUnit and FindBestDefendingUnitAgainstAttackers.
+
+    In Flash (BattleAI.as):
+    1. rand_float = ZGameRandom.instance.float()
+    2. res = FindBestDefendingUnitAgainstAttackers(rand_float)
+       - Iterates each alive, non-stunned baddie in m_attackers
+       - For that baddie, evaluates get_hit_chance(baddie, defender) against all alive, non-stunned friendlies
+       - Finds best defending friendly (ties broken by int(round(rand_float * (len(ties) - 1))))
+       - Among all baddies, finds the best baddie(s) with max hit value
+       - If multiple best baddies tie: rolls ONE random float to pick: int(round(float * (len - 1)))
+       - If only 1 best baddie: NO extra random float rolled!
+    3. If not m_shouldFocusFire (player level < combatAIFocusFireMinLevel=25):
+       Returns (chosen_baddie, max_grade, chosen_defender) directly without further rolls.
+    """
     first_random = roll_random_float()
 
-    players_tuple = zip(player_units, player_units_strengths, range(len(player_units)))
-    best_units = [ai_best_unit(baddies, baddies_strengths, player_unit, first_random, active_consumables, "enemy") + (i,) for player_unit, strength, i in players_tuple if strength > 0]
-    max_grade = max([grade for baddie_index, grade, player_index in best_units])
-    best_pairings = [(baddie_index, grade, player_index) for baddie_index, grade, player_index in best_units if grade == max_grade and grade >= 0]
-    if best_pairings:
-        best_pairing = best_pairings[round(roll_random_between(0, len(best_pairings) - 1)) if len(best_pairings) > 1 else 0]  #optional roll
-        best_pairing = (best_pairings[0][0],) + best_pairing[1:]  # bugged pairings
-        print("best AI pairing method 1 (baddie, grade, friendly)", repr(best_pairing))
-    else:
-        best_pairing = None, 0, None
+    best_attackers = []
+    best_value = -1
 
-    baddies_tuple = zip(baddies, baddies_strengths, range(len(baddies)))
-    best_units_2 = [ai_best_unit(player_units, player_units_strengths,  baddie, first_random, active_consumables, "ally") + (i,) for baddie, strength, i in baddies_tuple if strength > 0]
-    max_grade_2 = max([grade for player_index, grade, baddie_index  in best_units_2])
-    best_players = [player_index for player_index, grade, baddie_index in best_units_2 if grade == max_grade_2]
-    if best_players:
-        best_player = best_players[0]
-        second_random = roll_random_float()
-        best_pairing_2 = ai_best_unit(baddies, baddies_strengths, player_units[best_player], second_random, active_consumables, "enemy") + (best_player,)
-        print("best AI pairing method 2 (baddie, grade, friendly)", repr(best_pairing_2))
-    else:
-        best_pairing_2 = None, 0, None
+    baddies_alive = [
+        (b_idx, baddie) for b_idx, (baddie, strength) in enumerate(zip(baddies, baddies_strengths))
+        if strength > 0 and not is_stunned(("enemy", b_idx), active_consumables)
+    ]
+    friendlies_alive = [
+        (p_idx, friendly) for p_idx, (friendly, strength) in enumerate(zip(player_units, player_units_strengths))
+        if strength > 0 and not is_stunned(("ally", p_idx), active_consumables)
+    ]
 
-    #the poorer the better? if all units are poor against the best defender then select that one?
-    ratio = best_pairing_2[1]/ max_grade if max_grade > 0 else 0
-    third_random = roll_random_float()
-    opposite_day =  third_random < 0.2
-    if (ratio < 0.5) ^ opposite_day:  # basically only if either method 1 or 2 is poor
-        print("Using basic method 1", "opposite day", opposite_day)
-        used_pairing = best_pairing
-    else:
-        print("Using method 2", "opposite day", opposite_day)
-        used_pairing = best_pairing_2
+    if not baddies_alive or not friendlies_alive:
+        return None, 0, None
 
-    return used_pairing
+    for b_idx, baddie in baddies_alive:
+        cand_grades = [(p_idx, get_hit_chance(baddie, friendly)) for p_idx, friendly in friendlies_alive]
+        max_grade = max(g for _, g in cand_grades)
+        best_cand_defenders = [p_idx for p_idx, g in cand_grades if g == max_grade]
+
+        if len(best_cand_defenders) > 1:
+            chosen_def = best_cand_defenders[round(first_random * (len(best_cand_defenders) - 1))]
+        else:
+            chosen_def = best_cand_defenders[0]
+
+        if max_grade > best_value:
+            best_value = max_grade
+            best_attackers = [(b_idx, chosen_def)]
+        elif max_grade == best_value:
+            best_attackers.append((b_idx, chosen_def))
+
+    if not best_attackers:
+        return None, 0, None
+
+    if len(best_attackers) > 1:
+        f = roll_random_float()
+        idx = round(f * (len(best_attackers) - 1))
+        chosen_baddie, chosen_player = best_attackers[idx]
+    else:
+        chosen_baddie, chosen_player = best_attackers[0]
+
+    return chosen_baddie, best_value, chosen_player
 
 
 def ai_best_unit(first_units, first_units_strengths, second_unit, random, active_consumables, target_group):
@@ -1367,11 +1505,15 @@ def ai_best_unit(first_units, first_units_strengths, second_unit, random, active
 
 
 def get_unit_type(unit):
-    return unit["unit"].get("-type", ",").split(',')[0]
+    raw_type = unit.get("unit", {}).get("-type", ",") if isinstance(unit, dict) else ","
+    parts = raw_type.split(',')
+    return parts[0] if parts else ""
 
 
 def get_unit_terrain(unit):
-    return unit["unit"].get("-type", ",").split(',')[1]
+    raw_type = unit.get("unit", {}).get("-type", ",") if isinstance(unit, dict) else ","
+    parts = raw_type.split(',')
+    return parts[1] if len(parts) > 1 else ""
 
 
 def get_unit_secondary(unit):
@@ -1383,7 +1525,14 @@ def get_unit_max_strength(unit, ally, params=None):
     _, island, map_item = get_current_island(params)
     if has_battle_context() and session["battle"][3].replaying:
         island = session["battle"][3].island
-    if not ally and island is not None and "strength" in map_item["island"][island]:
+    if (
+        not ally
+        and island is not None
+        and map_item
+        and "island" in map_item
+        and 0 <= island < len(map_item["island"])
+        and "strength" in map_item["island"][island]
+    ):
         strengths = simple_list(map_item["island"][island]["strength"])
         strength = apply_map_mod_strength(unit, strength, strengths)
         # print("Mod strenghts",repr(strengths))
@@ -1411,21 +1560,35 @@ def get_current_island(params):
     return None, None, None
 
 
-def get_active_island_by_map(map_name, index=-1):
-    campaign = session['user_object']['userInfo']['world']['campaign']
+def get_active_island_by_map(map_name: str, index: Any = -1) -> tuple[str, int]:
+    world = session.get('user_object', {}).get('userInfo', {}).get('world', {})
+    if 'campaign' not in world:
+        world['campaign'] = {'current': 'camp001', 'active': {}}
+    campaign = world['campaign']
+    if 'active' not in campaign:
+        campaign['active'] = {}
     if map_name not in campaign['active']:
         campaign['active'][map_name] = {"status": 0, "fleets": []}
 
-    status = campaign['active'][map_name]["status"]
+    status = campaign['active'][map_name].get("status", 0)
     island_id = (status & 4293918720) >> 20
-    return map_name, island_id if index is None or index < 0 else index
+    try:
+        idx_val = int(index) if index is not None else -1
+    except (ValueError, TypeError):
+        idx_val = -1
+    return map_name, island_id if idx_val < 0 else idx_val
 
 def set_active_island_by_map(map_name, island_id):
-    campaign = session['user_object']['userInfo']['world']['campaign']
+    world = session.get('user_object', {}).get('userInfo', {}).get('world', {})
+    if 'campaign' not in world:
+        world['campaign'] = {'current': 'camp001', 'active': {}}
+    campaign = world['campaign']
+    if 'active' not in campaign:
+        campaign['active'] = {}
     if map_name not in campaign['active']:
         campaign['active'][map_name] = {"status": island_id << 20, "fleets": []}
     else:
-        status = campaign['active'][map_name]["status"]
+        status = campaign['active'][map_name].get("status", 0)
         status = (status & 1048575) | (island_id << 20)
         campaign['active'][map_name]["status"] = status
 
@@ -1503,18 +1666,30 @@ def doBattleRewards(hit_type, max_strength, damage, friendly_max_strength):
     if mastery_scalar != 1:
         energy = 0
 
-    world = session['user_object']["userInfo"]["world"]
-    resources = world['resources']
-    resources['coins'] += coin_amount
+    user_obj = session.get('user_object')
+    if not user_obj or "userInfo" not in user_obj:
+        return
 
-    player = session['user_object']["userInfo"]["player"]
-    player['xp'] += xp
+    world = user_obj["userInfo"].get("world", {})
+    resources = world.get('resources', {})
+    # The mastery scalar is a float, so these became floats too -- and a
+    # float balance stays a float through every later battle. Coins, XP and
+    # rare resources are counts; the int() is the same fix that was already
+    # applied to the energy below.
+    if 'coins' in resources:
+        resources['coins'] += int(coin_amount)
 
-    print("Combat rewards", hit_type ,  "coins:", coin_amount, "(" + str(resources['coins']) + ")")
-    if rare_amount:
+    player = user_obj["userInfo"].get("player", {})
+    if 'xp' in player:
+        player['xp'] += int(xp)
+
+    print("Combat rewards", hit_type ,  "coins:", coin_amount, "(" + str(resources.get('coins', 0)) + ")")
+    if rare_amount and 'resourceOrder' in world and rare_type < len(world['resourceOrder']):
         resource_order = world['resourceOrder']
-        resources[resource_order[rare_type]] += rare_amount
-        print("Combat rewards", hit_type ,  "rare" + str(rare_type) + ":", rare_amount, "(" + str(resources[resource_order[rare_type]]) + ")")
+        rare_resource = resource_order[rare_type]
+        if rare_resource in resources:
+            resources[rare_resource] += int(rare_amount)
+        print("Combat rewards", hit_type ,  "rare" + str(rare_type) + ":", rare_amount, "(" + str(resources.get(rare_resource, 0)) + ")")
         #Todo quest added
 
     print("Combat rewards", hit_type ,  "xp:", xp, "(" + str(player['xp']) + ")")

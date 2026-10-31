@@ -31,11 +31,29 @@ const HOP_BY_HOP = new Set([
 /**
  * Where the signed-in account's id travels to the gateway.
  *
- * Kept in sync with `PLAYER_ZID_HEADER` in `game_settings.py`, which is where
- * it is read. The gateway trusts it only because it is loopback-only and this
- * service is its sole door — the same reasoning that puts the admin gate here.
+ * The name lives in `contract/runtime.json`, which is where the Python side
+ * reads it from (`PLAYER_ZID_HEADER` in `game_settings.py`). Two spellings
+ * would mean the account's id never arrives, and the game falls back to
+ * filing the player under a hash of the gateway's own cookie -- a login that
+ * does not stick, with no error anywhere.
+ *
+ * The gateway trusts the header only because it is loopback-only and this
+ * service is its sole door -- the same reasoning that puts the admin gate here.
  */
-export const PLAYER_ZID_HEADER = "x-player-zid";
+export const PLAYER_ZID_HEADER = config.headers.playerZid;
+
+/**
+ * Where the signed-in account's role travels to the gateway.
+ *
+ * The gateway needs it to enforce its own lock on the admin tools, and the
+ * front door is the only half that knows the role: the accounts are its own.
+ * Asking the gateway to look the role up in the accounts table would make it
+ * depend on another runtime's schema, which is how the two halves drifted
+ * apart in the first place.
+ *
+ * Like the id, it is set here and never forwarded from the browser.
+ */
+export const PLAYER_ROLE_HEADER = config.headers.playerRole;
 
 function shouldForwardRequestHeader(name: string): boolean {
   const lower = name.toLowerCase();
@@ -63,7 +81,8 @@ function shouldForwardResponseHeader(name: string): boolean {
 function buildHeaders(
   req: Request,
   publicOrigin: string,
-  playerZid?: string | null
+  playerZid?: string | null,
+  playerRole?: string | null
 ): Headers {
   const headers = new Headers();
   for (const [name, value] of req.headers) {
@@ -97,6 +116,16 @@ function buildHeaders(
     headers.delete(PLAYER_ZID_HEADER);
   }
 
+  // The role, for the same reason: the gateway enforces its own lock on the
+  // admin tools, and it can only do that from what the front door vouches
+  // for. Set, never forwarded, so a player cannot send their way into the
+  // cheat tools.
+  if (playerRole) {
+    headers.set(PLAYER_ROLE_HEADER, playerRole);
+  } else {
+    headers.delete(PLAYER_ROLE_HEADER);
+  }
+
   return headers;
 }
 
@@ -118,12 +147,15 @@ export type ProxyResult = Response | "websocket-unsupported";
  *
  * `playerZid` is the signed-in account's id, or null/undefined for anonymous
  * traffic. See {@link PLAYER_ZID_HEADER}.
+ *
+ * `playerRole` is the signed-in account's role. See {@link PLAYER_ROLE_HEADER}.
  */
 export async function proxyToGateway(
   req: Request,
   publicOrigin: string,
   origin: string = config.gateway.origin,
   playerZid?: string | null,
+  playerRole?: string | null,
 ): Promise<ProxyResult> {
   // socket.io currently runs in long-polling mode on Werkzeug, so an upgrade
   // would mean something changed upstream. Fail loudly instead of silently
@@ -145,7 +177,7 @@ export async function proxyToGateway(
   try {
     const upstream = await fetch(target, {
       method: req.method,
-      headers: buildHeaders(req, publicOrigin, playerZid),
+      headers: buildHeaders(req, publicOrigin, playerZid, playerRole),
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       ...(body === null ? {} : { body }),

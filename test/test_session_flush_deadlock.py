@@ -1,6 +1,6 @@
 """A lock collision during the end-of-request session flush.
 
-MariaDB picks one side of a deadlock as the victim and rolls it back; the other
+PostgreSQL picks one side of a deadlock as the victim and rolls it back; the other
 carries on. That is not a lost write and not a broken statement, so the flush is
 retried once and the response goes out normally. Only if the retry collides too
 does the write get abandoned -- and even then the response still goes out,
@@ -23,7 +23,10 @@ from save_store import TransientStoreError, is_transient_store_error
 
 
 class DriverError(Exception):
-    """Shaped like pymysql's, which is what ``is_transient_store_error`` reads."""
+    """Shaped like psycopg2's error, which is what ``is_transient_store_error`` reads."""
+    def __init__(self, code, message):
+        super().__init__(code, message)
+        self.pgcode = str(code)
 
 
 class FlakyStore:
@@ -33,7 +36,7 @@ class FlakyStore:
         self.failures = failures
         self.calls = 0
         self.written = None
-        self._error = error or DriverError(1213, "Deadlock found when trying to get lock")
+        self._error = error or DriverError("40P01", "Deadlock detected")
         self._succeeds = succeeds
 
     def store(self, store_id, payload, reason=None, expected_revision=None):
@@ -87,9 +90,9 @@ class TestOnlyLockCollisionsAreRetried:
         assert double.calls == 1
 
     @pytest.mark.parametrize("errno, text", [
-        (1062, "Duplicate entry"),
-        (1146, "No such table"),
-        (1054, "Unknown column"),
+        ("23505", "Duplicate entry"),
+        ("42P01", "No such table"),
+        ("42703", "Unknown column"),
     ])
     def test_a_real_error_propagates_without_retrying(self, flush, errno, text):
         _, use = flush
@@ -141,7 +144,8 @@ class TestTheResponseSurvivesAFailedFlush:
     def _flush_with(self, gateway_app, error):
         interface = gateway_app.session_interface
         original = type(interface).save_store
-        type(interface).save_store = property(lambda self: self.Recorder(error))
+        recorder = self.Recorder(error)
+        type(interface).save_store = property(lambda _self: recorder)
         try:
             from flask import session as flask_session
 
@@ -176,17 +180,12 @@ def _request():
 
 class TestWhatCountsAsTransient:
     def test_the_retryable_errnos(self):
-        # 1020 is here because it arrived in the log while serving a static file:
-        # writing the snapshot of a replaced row aborts under REPEATABLE READ if
-        # anyone touched the history table in between. It is not even a lock.
-        assert is_transient_store_error(DriverError(1213, "Deadlock"))
-        assert is_transient_store_error(DriverError(1205, "Lock wait timeout"))
-        assert is_transient_store_error(
-            DriverError(1020, "Record has changed since last read in table 'save_backups'")
-        )
+        assert is_transient_store_error(DriverError("40P01", "Deadlock detected"))
+        assert is_transient_store_error(DriverError("40001", "Serialization failure"))
+        assert is_transient_store_error(DriverError("55P03", "Lock not available"))
 
     def test_everything_else(self):
-        assert not is_transient_store_error(DriverError(1062, "Duplicate entry"))
+        assert not is_transient_store_error(DriverError("23505", "Duplicate entry"))
         assert not is_transient_store_error(ValueError("not a database error"))
 
     def test_a_message_with_an_errno_is_not_mistaken_for_one(self):

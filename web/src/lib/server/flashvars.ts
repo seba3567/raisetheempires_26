@@ -24,14 +24,14 @@ export function buildFlashVars(publicOrigin: string): string {
 
 	return [
 		`serverTime=${Date.now() / 1000}`,
-		'is_staging=true',
-		'debugMode=true',
-		'generateSchema=1',
+		'is_staging=false',
+		'debugMode=false',
+		'generateSchema=0',
 		`app_url=${origin}/`,
 		// Config.SN_APP_URL, a different endpoint this server does not
 		// implement. It must stay empty rather than be removed: the client reads
 		// it as a string either way.
 		'sn_app_url=',
-		'stats=1',
+		'stats=0',
 	].join('&');
 }

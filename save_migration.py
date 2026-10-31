@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any
+
 from flask import session
 
 from game_settings import unlock_expansion
@@ -5,7 +9,7 @@ from quest_engine import handle_quest_progress
 from save_engine import create_backup
 
 
-def migrate(meta, version, target_version):
+def migrate(meta: dict[str, Any], version: str | None, target_version: str) -> None:
     if version == "0.02a" and version != target_version:
         for q in session["quests"]:
             if not q["complete"]:
@@ -67,19 +71,37 @@ def migrate(meta, version, target_version):
         session['user_object']["experiments"]["empire_campaign_mastery"] = 2
         session['save_version'] = version
     if version and version.startswith("0.08a") and version != target_version:  # upcoming
-        pass
+        create_backup(f"Update to {target_version}")
+        crew_fixer()
+        exp = session['user_object'].setdefault("experiments", {})
+        exp["empire_combataicancritical"] = 2
+        exp["empire_domination_master"] = 4
+        exp["empire_domination_warchest"] = 2
+        exp["empire_globalpvp_master"] = 2
+        exp["empire_globalpvp_strangerbar_enable"] = 2
+        exp["empire_alliances_master"] = 3
+        exp["empire_alliances_phase_4"] = 3
+        exp["empire_alliances_quest_connections"] = 3
+        exp["empire_alliances_quest_power"] = 3
+        exp["empire_survivalmode3_master"] = 3
+        exp["empire_survivalMode_master"] = 2
+        exp["empire_survivalmode_enhancements"] = 2
+        exp["empire_leaderboard_summary"] = 1
+        exp["empire_blackmarket_master"] = 2
+        version = target_version
+        session['save_version'] = version
 
 
-def is_0_08a_preview(version):
+def is_0_08a_preview(version: str | None) -> bool:
     return version == "0.08a" and "empire_mech_lab_master" not in session['user_object']["experiments"]
 
 
-def zero_yield(extra):
+def zero_yield(extra: dict[str, Any]) -> bool:
     extra["yield"] = 0
     return True
 
 
-def govt_fixer():
+def govt_fixer() -> None:
     govt_staff = {"Parliament": 3,
                   "Executive Mansion": 4,
                   "Federal Courthouse": 4,
@@ -98,14 +120,13 @@ def govt_fixer():
 
     for decoration in session['user_object']["userInfo"]["world"]["objects"]:
         if "crewInfo" not in decoration and decoration["itemName"] in govt_staff \
-            and int(decoration.get("state")) >= 8 :
+            and int(decoration.get("state", 0)) >= 8 :
 
-            for _reapet_number in range(govt_staff.get(decoration["itemName"])):
+            for _reapet_number in range(govt_staff.get(decoration["itemName"], 0)):
                 decoration["crewInfo"] = decoration.get("crewInfo", []) + [-1]
 
-def crew_fixer():
+def crew_fixer() -> None:
     for decoration in session['user_object']["userInfo"]["world"]["objects"]:
         if "crewInfo" in decoration:
             old_crew = decoration.get("crewInfo", [])
             decoration["crewInfo"] = [str(x) for x in old_crew]
-

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import atexit
 import configparser
 import logging
@@ -5,19 +7,22 @@ import os
 import subprocess
 import sys
 from functools import reduce
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
-from flask import current_app, has_request_context, session
+from flask import current_app, has_app_context, has_request_context, session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
 from flask_sqlalchemy import SQLAlchemy
 
+import contract
 from save_store import WriteConflict, save_uid
 
 crash_log = True
 
 db = SQLAlchemy()
 
-def ensure_fleets(save=None):
+def ensure_fleets(save: dict[str, Any] | None = None) -> dict[str, Any]:
     """``session['fleets']`` as a dict, creating or repairing it if needed.
 
     The fleet registry is the most-mutated corner of the save -- battle_engine
@@ -47,24 +52,158 @@ def ensure_fleets(save=None):
     return target['fleets']
 
 
-def lookup_object(id):
-    [game_object] = [e for e in session['user_object']["userInfo"]["world"]["objects"] if e['id'] == id]
-    return game_object
+def query_db_rows(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+    """Helper seguro para consultar PostgreSQL. Devuelve lista vacia si la BD no esta disponible."""
+    try:
+        import psycopg2.extras
+
+        from save_store import connect
+        url = save_store_url()
+        with connect(url) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        return []
 
 
-def lookup_object_save(save, id):
-    [game_object] = [e for e in save['user_object']["userInfo"]["world"]["objects"] if e['id'] == id]
-    return game_object
+def execute_db(sql: str, params: tuple = ()) -> int:
+    """Helper seguro para escribir en PostgreSQL. Devuelve las filas afectadas, 0 si falla.
+
+    The counterpart of :func:`query_db_rows`. The connection is opened in
+    autocommit mode, so a write lands as soon as it succeeds.
+
+    Statements that have to stand or fall together should be written as one
+    statement with a data-modifying CTE rather than several calls here: this
+    helper gives each call its own connection.
+    """
+    try:
+        from save_store import connect
+        url = save_store_url()
+        with connect(url) as conn:
+            cursor = conn.execute(sql, params)
+            return cursor.rowcount
+    except Exception as e:
+        logger.debug("Failed to write to the database: %s", e)
+        return 0
 
 
-def lookup_objects_by_item_name(id):
-    return [e for e in session['user_object']["userInfo"]["world"]["objects"] if e['itemName'] == id]
+def sync_account_progress(save: dict[str, Any]) -> None:
+    """Sincroniza nivel, XP y world_name desde la partida hacia la tabla `progress` de PostgreSQL."""
+    try:
+        uinfo = get_dict(save, "user_object", "userInfo")
+        player = uinfo.get("player")
+        if not isinstance(player, dict):
+            return
+        uid = player.get("uid")
+        if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
+            return
+        level = int(player.get("level", 1) or 1)
+        xp = int(player.get("xp", 0) or 0)
+        world_name = str(uinfo.get("worldName") or player.get("name") or "Empire")[:255]
+        execute_db(
+            """
+            INSERT INTO progress (user_id, level, xp, world_name, updated_at)
+            SELECT id, %s, %s, %s, CURRENT_TIMESTAMP
+              FROM users
+             WHERE zid = %s
+            ON CONFLICT (user_id) DO UPDATE
+               SET level = EXCLUDED.level,
+                   xp = EXCLUDED.xp,
+                   world_name = EXCLUDED.world_name,
+                   updated_at = CURRENT_TIMESTAMP
+            """,
+            (level, xp, world_name, uid),
+        )
+    except Exception as e:
+        logger.debug("Failed to sync account progress: %s", e)
 
 
-def lookup_objects_save_by_position(save, x, y, r):
-    return [e for e in save['user_object']["userInfo"]["world"]["objects"]
-            if x <= int(e["position"].split(",")[0]) <= (x + r) and
-            y <= int(e["position"].split(",")[1]) <= (y + r)]
+def fetch_all_commanders() -> list[dict[str, Any]]:
+    """Devuelve la lista de comandantes reales registrados en PostgreSQL."""
+    sql = """
+        SELECT u.id, u.zid, u.username, 
+               COALESCE(p.level, 10) as level, 
+               COALESCE(p.xp, 0) as xp, 
+               COALESCE(p.world_name, u.username) as world_name
+        FROM users u
+        LEFT JOIN progress p ON p.user_id = u.id
+        ORDER BY p.xp DESC, p.level DESC
+        LIMIT 50
+    """
+    rows = query_db_rows(sql)
+    commanders: list[dict[str, Any]] = []
+    for r in rows:
+        uid = r["zid"]
+        commanders.append({
+            "uid": uid,
+            "zid": uid,
+            "name": r["world_name"] or r["username"],
+            "first_name": r["username"],
+            "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
+            "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
+            "picture_url": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
+            "country": "ES",
+            "level": int(r["level"]),
+            "xp": int(r["xp"]),
+            "rating": 1200 + int(r["level"]) * 25,
+            "score": int(r["xp"]),
+            "engagement_7day": 1,
+            "is_real": True,
+        })
+    return commanders
+
+
+def _get_world_objects(container: Any) -> list[dict[str, Any]]:
+    if not isinstance(container, dict):
+        return []
+    user_obj = container.get('user_object')
+    if not isinstance(user_obj, dict):
+        return []
+    user_info = user_obj.get("userInfo")
+    if not isinstance(user_info, dict):
+        return []
+    world = user_info.get("world")
+    if not isinstance(world, dict):
+        return []
+    objs = world.get("objects")
+    return objs if isinstance(objs, list) else []
+
+
+def lookup_object(id: Any) -> dict[str, Any]:
+    objects = _get_world_objects(session)
+    target = str(id)
+    matches = [e for e in objects if isinstance(e, dict) and str(e.get('id')) == target]
+    return matches[0] if matches else {}
+
+
+def lookup_object_save(save: dict[str, Any], id: Any) -> dict[str, Any]:
+    objects = _get_world_objects(save)
+    target = str(id)
+    matches = [e for e in objects if isinstance(e, dict) and str(e.get('id')) == target]
+    return matches[0] if matches else {}
+
+
+def lookup_objects_by_item_name(id: Any) -> list[dict[str, Any]]:
+    objects = _get_world_objects(session)
+    return [e for e in objects if isinstance(e, dict) and e.get('itemName') == id]
+
+
+def lookup_objects_save_by_position(save: dict[str, Any], x: int, y: int, r: int) -> list[dict[str, Any]]:
+    objects = _get_world_objects(save)
+    results = []
+    for e in objects:
+        if not isinstance(e, dict):
+            continue
+        pos = e.get("position", "")
+        parts = pos.split(",")
+        if len(parts) >= 2:
+            try:
+                px, py = int(parts[0]), int(parts[1])
+                if x <= px <= (x + r) and y <= py <= (y + r):
+                    results.append(e)
+            except ValueError:
+                continue
+    return results
 
 
 # What one backup holds: the save itself plus the backup it replaced. Kept in
@@ -88,7 +227,7 @@ BACKUP_REASON_KEY = "__backup_reason"
 MAX_BACKUPS = 10
 
 
-def backup_chain(save=None):
+def backup_chain(save: dict[str, Any] | None = None) -> list[Any]:
     """The snapshots for the current save, newest first.
 
     Used to walk ``save['backup']``, a chain of nested copies living inside the
@@ -113,7 +252,7 @@ def _current_store_id() -> str | None:
     return current_app.session_interface._get_store_id(session.sid)
 
 
-def create_backup(message, limit=MAX_BACKUPS):
+def create_backup(message: str, limit: int = MAX_BACKUPS) -> str:
     """Say why the next write happens. It does not write anything itself.
 
     It used to deepcopy the save into ``session['backup']``, which made the row
@@ -136,73 +275,42 @@ def pending_backup_reason() -> str | None:
     """The reason create_backup recorded, or None if it was not called."""
     return session.get(BACKUP_REASON_KEY)
 
-def save_store_url():
-    """The one database URL this project stores everything in.
+def save_store_url() -> str:
+    """The one database URL this project stores everything in (PostgreSQL 18).
 
-    MariaDB, like the web front door. It used to build a ``sqlite:///`` URI for
-    a ``save.db`` next to the install and, when that file was missing, quietly
-    create the folder and start a *second* database nobody was looking at -- so
-    the sessions table and the saves table could disagree about which store was
-    real. That whole branch is gone: one URL, one database, and a deployment
-    change is a different value of ``SAVE_STORE_PATH`` rather than a different
-    kind of code.
-
-    The same value configures flask-session's own ``sessions`` table. Our
-    session interface overrides reads and writes so that table is never touched,
-    but Flask-SQLAlchemy still insists on a valid URI to attach to, and pointing
-    it at MariaDB costs nothing -- except that the ``save.db`` on disk stops
-    being something the process needs in order to start.
-
-    ``mysql+pymysql`` rather than the shorter ``mariadb``: both consumers read
-    this one string, and they disagree about what to make of the scheme.
-    SQLAlchemy reads ``mariadb`` as ``mysql+mysqldb`` and then fails to import
-    MySQLdb, which is not installed -- this project uses PyMySQL. Store ignores
-    the scheme entirely and reads host, port, credentials and path. One URL,
-    named after the driver that is actually installed.
-
-    That mismatch is not hypothetical: it took the server down on 2026-10-18
-    with ``ModuleNotFoundError: No module named 'MySQLdb'`` raised from
-    ``configure_app()``, before it had served a single request. A
-    ``ModuleNotFoundError`` about a driver nobody asked for is a bad way to
-    learn that a URL is spelled differently from the default, so
-    :func:`_with_installed_driver` accepts the spellings people actually write
-    and returns the one SQLAlchemy can use.
+    The app's configuration wins over the environment. The test suite points
+    the app at a throwaway database, and a helper that read the environment
+    instead would quietly reach into the real one: the suite would be writing
+    to the live database while believing it was not.
     """
-    return _with_installed_driver(os.environ.get(
-        "SAVE_STORE_PATH",
-        "mysql+pymysql://root:2001@127.0.0.1:3306/raisetheempires"))
+    configured = None
+    if has_request_context() or has_app_context():
+        configured = current_app.config.get("SAVE_STORE_PATH")
+    return _with_installed_driver(configured or contract.env_value(
+        contract.ENV_DATABASE_URL) or contract.DATABASE_URL)
 
 
 def _with_installed_driver(url: str) -> str:
-    """Spell the scheme as ``mysql+pymysql`` whatever the operator wrote.
-
-    ``mariadb://`` is the natural thing to write and is what several test
-    fixtures and at least one deployment used, but SQLAlchemy resolves it to
-    the MySQLdb driver rather than the PyMySQL one this project installs. Only
-    the scheme is rewritten; host, port, credentials and database are passed
-    through untouched, and Store ignores the scheme anyway. Anything else --
-    including a bare ``host:port/db`` -- is returned as it came in, so this
-    never invents a connection it was not given.
-    """
-    for shorthand in ("mariadb://", "mysql://"):
+    """Spell the scheme as ``postgresql+psycopg2`` whatever the operator wrote."""
+    for shorthand in ("postgres://", "postgresql://"):
         if url.startswith(shorthand):
-            return "mysql+pymysql://" + url[len(shorthand):]
+            return "postgresql+psycopg2://" + url[len(shorthand):]
     return url
 
 
-def my_games_path():
+def my_games_path() -> str:
     return config['InstallFolders']['MyGamesPath']
 
 
-def install_path():
+def install_path() -> str:
     return config['InstallFolders']['InstallPath']
 
 
-def base_path():
+def base_path() -> Path:
     return Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 
 
-def log_path():
+def log_path() -> str:
     p = Path(my_games_path())
     if p.exists():
         return str(p)
@@ -210,13 +318,25 @@ def log_path():
     return "."
 
 
-def set_crash_log(toggle):
+def log_file_name() -> str:
+    """The file the gateway writes its log to.
+
+    ``RTE_LOG_FILE`` points it somewhere else, and the test suite uses that.
+    Both runtimes share this logging setup, so without it the suite's
+    deliberate failures -- it patches handlers to raise, on purpose, to prove
+    the gateway survives them -- landed in the server's own log and made it
+    look as though the server were the thing that was broken.
+    """
+    return os.environ.get("RTE_LOG_FILE") or "log.txt"
+
+
+def set_crash_log(toggle: bool) -> None:
     global crash_log
 
     crash_log = toggle
 
 
-def _crash_editor_allowed():
+def _crash_editor_allowed() -> bool:
     """Whether an unhandled exception may pop up the log editor.
 
     ``editor.edit()`` blocks until the window is closed, so a single unhandled
@@ -229,7 +349,7 @@ def _crash_editor_allowed():
     return "pytest" not in sys.modules
 
 
-def exception_handler(exc_type, exc_value, exc_traceback):
+def exception_handler(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: Any) -> None:
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
@@ -256,7 +376,16 @@ logging.basicConfig(
     format=log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(Path(log_path()) / "log.txt"), encoding="utf-8")
+        # Rotating, not growing. The file used to reach six megabytes and
+        # keep going, which made "read the log" a chore rather than a step.
+        # Five megabytes, three backups: enough history for a bad afternoon,
+        # small enough to open.
+        RotatingFileHandler(
+            str(Path(log_path()) / log_file_name()),
+            encoding="utf-8",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+        ),
     ],
     # `force=True` is load-bearing, not tidiness. `basicConfig()` does nothing at
     # all when the root logger already has handlers, and Granian installs its
@@ -275,7 +404,7 @@ logger = logging.getLogger(__name__)
 sys.excepthook = exception_handler
 
 
-def decode_save(serialized_save):
+def decode_save(serialized_save: bytes) -> dict[str, Any] | None:
     try:
         sess_int: SqlAlchemySessionInterface = current_app.session_interface
         return sess_int.serializer.decode(serialized_save)
@@ -285,7 +414,30 @@ def decode_save(serialized_save):
         return None
 
 
-def get_saves():
+#: The unusable saves already reported, so the operator hears about each one
+#: once instead of on every scan.
+#:
+#: ``get_saves()`` walks the whole table, and several callers ask for it on
+#: every request -- the neighbour list, the quest counter, the leaderboard, the
+#: admin session list. With a handful of unusable rows in the table that used
+#: to mean five lines of output *per request*: three quarters of everything the
+#: gateway wrote to stdout, all of it the same five lines. The information is
+#: worth having; repeating it three hundred times a session is not.
+_reported_unusable_saves: set[str] = set()
+
+
+def _report_unusable_save(store_id: str, user_object: Any) -> None:
+    """Log a save that has to be skipped, once per row and per process."""
+    if store_id in _reported_unusable_saves:
+        return
+    _reported_unusable_saves.add(store_id)
+    logger.warning(
+        "Skipping save with no usable user_object: %s (%s)",
+        store_id, type(user_object).__name__,
+    )
+
+
+def get_saves() -> list[dict[str, Any]]:
     """Every save in the database, each stamped with the revision it was read at.
 
     Reads through the interface, which now persists into ``save_store`` rather
@@ -334,8 +486,7 @@ def get_saves():
         # One unusable row should cost that row, not the whole session list.
         user_object = loaded.data.get("user_object")
         if not isinstance(user_object, dict) or not user_object.get("userInfo"):
-            print("Skipping save with no usable user_object:",
-                  loaded.store_id, type(user_object).__name__)
+            _report_unusable_save(loaded.store_id, user_object)
             continue
         loaded.data["session_id"] = loaded.store_id
         loaded.data["__save_revision"] = loaded.revision
@@ -354,7 +505,7 @@ class SaveNotFound(Exception):
     """
 
 
-def get_save_by_uid(wanted, required=False):
+def get_save_by_uid(wanted: int | str, required: bool = False) -> dict[str, Any] | None:
     """One save, looked up by the game's player id, or None.
 
     ``neighbor_repelled``, ``invasion_complete``, ``pillage_response`` and the
@@ -399,7 +550,7 @@ def get_save_by_uid(wanted, required=False):
     return loaded.data
 
 
-def store_session(save):
+def store_session(save: dict[str, Any]) -> bool:
     """Persist one save, in the format the reader expects.
 
     This function had two independent faults and had never once written a save.
@@ -468,10 +619,11 @@ def store_session(save):
     # a game.
     if has_request_context() and session_id == sess_int._get_store_id(session.sid):
         session["__save_revision"] = written
+    sync_account_progress(payload)
     return True
 
 
-def validate_save(save, blank_allowed = False):
+def validate_save(save: dict[str, Any], blank_allowed: bool = False) -> bool:
     player = get_dict(save, "user_object", "userInfo", "player")
     return (isinstance(player.get("level"), int) and
             isinstance(player.get("uid", {}), int) and
@@ -486,8 +638,13 @@ def validate_save(save, blank_allowed = False):
            (blank_allowed and 'user_object' not in save)
 
 
-def get_dict(*args):
-    return reduce((lambda a, b: a.get(b, {}) if isinstance(a.get(b, {}), dict) else {}), args)
+def get_dict(*args: Any) -> dict[str, Any]:
+    def _step(acc: Any, key: Any) -> Any:
+        if isinstance(acc, dict):
+            val = acc.get(key)
+            return val if isinstance(val, dict) else {}
+        return {}
+    return reduce(_step, args) if args else {}
 
 
 class InvalidSaveException(Exception):

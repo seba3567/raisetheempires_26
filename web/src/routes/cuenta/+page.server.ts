@@ -86,12 +86,19 @@ export const actions: Actions = {
 		if (!locals.user) redirect(303, '/entrar');
 
 		const form = await request.formData();
-		const target = await findByUsername(String(form.get('friend') ?? ''));
-		if (target) {
-			await addFriend(locals.user.id, target.id);
-			await recordActivity(locals.user.id, 'friend.add', target.username);
+		const username = String(form.get('friend') ?? '').trim();
+		const target = await findByUsername(username);
+
+		if (!target) {
+			return fail(404, { friendMessage: `No se encontró al comandante "${username}".` });
 		}
-		return { added: target?.username ?? null };
+		if (target.id === locals.user.id) {
+			return fail(400, { friendMessage: 'No puedes forjar una alianza contigo mismo.' });
+		}
+
+		await addFriend(locals.user.id, target.id);
+		await recordActivity(locals.user.id, 'friend.add', target.username);
+		return { added: target.username };
 	},
 
 	remove: async ({ request, locals }) => {

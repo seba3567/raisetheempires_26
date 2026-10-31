@@ -205,3 +205,39 @@ class TestNothingLeftStanding:
         response = resolve({"id": [0, 0], "fleet": "fleet1_1", "map": "C037"})
 
         assert response.status_code == 200, response.get_data()[:400]
+
+
+class TestAIAttackTurn:
+    def test_ai_attack_without_id_resolves_cleanly(self, client, resolve, one_each_side):
+        """When the AI attacks, Flash sends no unit IDs and ai_best_attack determines attacker & defender."""
+        response = resolve({"fleet": "fleet1_1", "map": "C037"})
+        assert response.status_code == 200
+        assert b"onResult" in response.get_data()
+
+
+def test_campaign_group_completion_unlocks_next_chapter(monkeypatch):
+    from flask import session
+
+    import battle_engine
+
+    test_save = {
+        "user_object": {
+            "userInfo": {
+                "world": {
+                    "campaign": {
+                        "current": "camp001",
+                        "active": {"C000": {"status": 0, "fleets": []}}
+                    }
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(battle_engine, "session", test_save)
+
+    # Calling set_active_island_by_map
+    battle_engine.set_active_island_by_map("C000", 2)
+    campaign = test_save["user_object"]["userInfo"]["world"]["campaign"]
+    assert "C000" in campaign["active"]
+    # Check island id bit shift
+    status = campaign["active"]["C000"]["status"]
+    assert (status >> 20) == 2

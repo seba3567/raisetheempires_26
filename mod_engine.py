@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import configparser
 import sys
 from base64 import b32encode
+from collections.abc import Callable
 from pathlib import Path
 
 from jsonpatch import apply_patch
@@ -12,25 +15,28 @@ from save_engine import install_path, my_games_path
 
 config = configparser.ConfigParser()
 
-def read_file(file_name):
+
+def read_file(file_name: str | Path) -> bytes:
     return Path(file_name).read_bytes()
 
-def write_file(file_name, content):
+
+def write_file(file_name: str | Path, content: bytes) -> int:
     return Path(file_name).write_bytes(content)
 
-def is_mod(file_name):
+
+def is_mod(file_name: str | Path) -> bool:
     return is_xml_diff(file_name) or is_json_patch(file_name)
 
 
-def is_xml_diff(file_name):
+def is_xml_diff(file_name: str | Path) -> bool:
     return Path(file_name).suffix == ".xmldiff"
 
 
-def is_json_patch(file_name):
+def is_json_patch(file_name: str | Path) -> bool:
     return Path(file_name).suffix == ".jsonpatch"
 
 
-def apply_mod(source, mod_file, name):
+def apply_mod(source: Callable[[], bytes], mod_file: str | Path, name: str) -> Callable[[], bytes]:
     if is_xml_diff(name):
         return lambda: patch_text(read_file(mod_file), source())
     if is_json_patch(name):
@@ -38,15 +44,15 @@ def apply_mod(source, mod_file, name):
     return lambda: read_file(mod_file)
 
 
-def get_cache_filename(original_path):
+def get_cache_filename(original_path: str) -> str:
     return b32encode(original_path.encode()).decode("utf-8")
 
 
-mod = {}
+mod: dict[str, Callable[[], bytes]] = {}
 install_p = Path(install_path())
 my_games_p = Path(my_games_path())
 mod_folders = [install_p / 'mods']
-mod_stats = []
+mod_stats: list[str] = []
 
 if my_games_p != install_p:
     mod_folders.append(my_games_p / 'mods')
@@ -150,5 +156,3 @@ if settings.caching:
 
 print("mod " + repr(mod))
 print("config " + config_raw)
-
-

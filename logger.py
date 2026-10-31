@@ -23,8 +23,10 @@ each function, before the payload is built, rather than around the emit.
 Gating on the listener count rather than removing the module keeps the feature:
 if a live log page is ever added back, it works with no change here.
 """
+from __future__ import annotations
 
 import json
+from typing import Any
 
 from flask_socketio import SocketIO
 
@@ -35,10 +37,10 @@ socketio = SocketIO()
 
 #: True once ``init_socketio`` has mounted this on an app. Before that, and on
 #: any test app that never mounted it, ``socketio.server`` has nothing to ask.
-_mounted = False
+_mounted: bool = False
 
 
-def init_socketio(app):
+def init_socketio(app: Any) -> None:
     """Mount socket.io on ``app`` and mark it live.
 
     Called by the server entry point. Until it runs, every ``report_*`` below
@@ -64,7 +66,7 @@ def has_listeners() -> bool:
         return False
 
 
-def report_tutorial_step(step, response, new_pve, sequence, endpoint):
+def report_tutorial_step(step: str, response: Any, new_pve: Any, sequence: Any, endpoint: str) -> None:
     if not has_listeners():
         return
     quest_names = [r['name'] for r in response] if response else []
@@ -72,12 +74,12 @@ def report_tutorial_step(step, response, new_pve, sequence, endpoint):
     socketio.emit('tutorial_step', [step, response, new_pve, describe_step(step), quests, sequence, endpoint])
 
 
-def describe_step(step):
-    [descr] = [e for e in game_settings['settings']['tutorial']['step'] if e['-id'] == step]
-    return descr
+def describe_step(step: str) -> dict[str, Any]:
+    steps = [e for e in game_settings['settings']['tutorial']['step'] if e.get('-id') == step]
+    return steps[0] if steps else {}
 
 
-def report_world_log(operation, response, req, sequence, endpoint, response2, new_pve):
+def report_world_log(operation: str, response: Any, req: Any, sequence: Any, endpoint: str, response2: Any, new_pve: Any) -> None:
     if not has_listeners():
         return
     quest_names = [r['name'] for r in response2] if response2 else []
@@ -87,14 +89,15 @@ def report_world_log(operation, response, req, sequence, endpoint, response2, ne
     socketio.emit('world_log', [operation, res.get("id", "response") if not isinstance(res, str) else res, req2, sequence, endpoint, response2, new_pve, quests, response])
 
 
-def report_other_log(service, response, req, endpoint):
+def report_other_log(service: str, response: Any, req: Any, endpoint: str) -> None:
     if not has_listeners():
         return
     req2 = json.loads(json.dumps(req, default=lambda o: '<not serializable>'))
-    socketio.emit('other_log', [service, response, req2, req.sequence, endpoint])
+    seq = getattr(req, 'sequence', req.get('sequence', 0) if isinstance(req, dict) else 0)
+    socketio.emit('other_log', [service, response, req2, seq, endpoint])
 
 
-def report_battle_log(friendly_strengths, baddie_strengths, player_turn, player_unit_id, enemy_unit_id, active_consumables):
+def report_battle_log(friendly_strengths: list[Any], baddie_strengths: list[Any], player_turn: bool, player_unit_id: int | None, enemy_unit_id: int | None, active_consumables: list[Any]) -> None:
     if not has_listeners():
         return
     friendly_strengths_ = [str(s) for s in friendly_strengths]
@@ -113,10 +116,10 @@ def report_battle_log(friendly_strengths, baddie_strengths, player_turn, player_
     socketio.emit('battle_log', ', '.join(friendly_strengths_) + (' => ' if player_turn else ' <= ') + ', '.join(baddie_strengths_))
 
 
-def mark_array_element(strengths, unit_id):
+def mark_array_element(strengths: list[str], unit_id: int) -> None:
     strengths[unit_id] = "[" + strengths[unit_id] + "]"
 
 
-def mark_consumable_array_element(strengths, unit_id, tries):
+def mark_consumable_array_element(strengths: list[str], unit_id: int, tries: int) -> None:
     superscript = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
     strengths[unit_id] = strengths[unit_id] + "💣" + str(tries).translate(superscript)

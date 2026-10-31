@@ -2,14 +2,8 @@
  * Message of the Day art for the loading screen.
  *
  * The 2013 player painted a random one of 139 behind the EA frame while the
- * game booted. The art still lives in `templates/img/` and is served by the
- * gateway's `/img/` route rather than copied into `static/`, unlike the avatars:
- * the avatars are 400 KB in total, while this is 139 images and 43 MB. Moving
- * them would put 43 MB into git to fetch exactly one per page load, which is
- * what the gateway route already does.
- *
- * The frame is 3.2 MB for the same reason it stays there too. The service
- * worker caches it after the first boot, so it is paid once per browser.
+ * game booted. The art lives in `static/img/` and is served directly by the
+ * web front door alongside all other static assets.
  */
 
 /** The remastered EA border drawn over the art. */

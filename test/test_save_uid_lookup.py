@@ -24,10 +24,10 @@ import pytest
 
 from save_store import Store, save_uid
 
-# Store takes a mariadb:// URL; there is no SQLite fallback any more, so each
+# Store takes a postgresql:// URL, so each
 # test names its own throwaway database on the shared server.
-SERVER = os.environ.get("RTE_TEST_MARIADB",
-                        "mariadb://root:2001@127.0.0.1:3306/rte_uid_test")
+SERVER = os.environ.get("RTE_TEST_DB",
+                        "postgresql+psycopg2://postgres:42kSM0ud2nRLlTZv6YVsXgPcbxwAx9Qe!7a@127.0.0.1:5432/rte_uid_test")
 
 
 def a_store() -> Store:

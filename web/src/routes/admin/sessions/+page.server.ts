@@ -24,7 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		error(403, 'Solo para administradores del servidor.');
 	}
 
-	const sessions = await fetchSessions();
+	const sessions = await fetchSessions(locals.user.zid, locals.user.role);
 
 	// Resolved with Promise.all rather than awaited in the loop: one lookup per
 	// session, all independent reads, and a sequential version would take the
@@ -75,7 +75,7 @@ export const actions: Actions = {
 			return fail(400, { message: 'Falta el id de la partida' });
 		}
 
-		const result = await deleteSession(request, storeId, locals.user.zid);
+		const result = await deleteSession(request, storeId, locals.user.zid, locals.user.role);
 		if (!result.ok) {
 			return fail(502, { message: result.message ?? 'No se pudo borrar la partida' });
 		}

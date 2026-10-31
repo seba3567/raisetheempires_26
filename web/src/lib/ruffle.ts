@@ -7,19 +7,15 @@
  * templates/ruffle.html, and it is the only way to pass `backgroundColor` and a
  * `LogLevel`, both of which the declarative attributes cannot express.
  *
- * Every value below was copied from the working template. Two of them are not
- * decorative and must not be dropped:
- *
- * - `allowScriptAccess: true`. The SWF calls `ExternalInterface.addCallback`
+ * Critical runtime requirements:
+ * - `allowScriptAccess: true`: The SWF calls `ExternalInterface.addCallback`
  *   during config load (MOTDManager::MessageOfTheDayManager). Without this it
  *   throws "Error #2067: The ExternalInterface is not available in this
- *   container" and aborts init::GameSettingsInit/onConfigXmlLoaded, so the game
- *   hangs on the loading screen forever. Safe here because the SWF is served by
- *   this project, not loaded from a third party.
- * - `parameters` carrying `app_url`. The client builds its AMF0 gateway URL from
- *   that FlashVar (Config.SERVICES_GATEWAY_PATH). If it points anywhere other
- *   than this origin, the game talks straight to Flask and bypasses this
- *   service, with no error anywhere.
+ *   container" and aborts init::GameSettingsInit/onConfigXmlLoaded.
+ * - `parameters` carrying `app_url`: The client builds its AMF0 gateway URL from
+ *   that FlashVar (Config.SERVICES_GATEWAY_PATH).
+ * - `frameRate: 30`: Keeps the Flash engine ticking at full 30 FPS even if legacy
+ *   AS3 routines try to throttle it.
  */
 
 export const RUFFLE_SCRIPT_URL = '/ruffle/ruffle.js';
@@ -41,6 +37,9 @@ export interface RuffleConfig {
 	autoplay?: 'on' | 'off' | 'auto';
 	splashScreen?: boolean;
 	openUrlMode?: 'allow' | 'confirm' | 'deny';
+	maxExecutionDuration?: number | { secs: number; nanos: number };
+	frameRate?: number | null;
+	backgroundExecutionMode?: 'mainThread' | 'none';
 	[key: string]: unknown;
 }
 
@@ -57,7 +56,11 @@ export interface RufflePlayerHandle {
 		allowFullscreen?: boolean;
 		quality?: 'low' | 'medium' | 'high';
 		autoplay?: boolean;
-		parameters?: string;
+		parameters?: string | Record<string, unknown>;
+		maxExecutionDuration?: number | { secs: number; nanos: number };
+		frameRate?: number | null;
+		preferredRenderer?: 'webgpu' | 'wgpu-webgl' | 'webgl' | 'canvas';
+		logLevel?: 'error' | 'warn' | 'info' | 'debug';
 	}): Promise<unknown>;
 	enterFullscreen(): void;
 	setIsMuted?(isMuted: boolean): void;
@@ -65,6 +68,10 @@ export interface RufflePlayerHandle {
 	pause?(): void;
 	play?(): void;
 	isPlaying?(): boolean;
+	traceObserver?: ((message: string) => void) | null;
+	rendererDebugInfo?: string;
+	callExternalInterface?(name: string, args: unknown[]): unknown;
+	reloadWithCanvasRenderer?(): Promise<void>;
 	width: number | string;
 	height: number | string;
 	style: string | CSSStyleDeclaration;
@@ -83,49 +90,37 @@ declare global {
 }
 
 /**
+ * Detects the most stable, high-performance renderer for Ruffle.
+ * Defaults to 'wgpu-webgl' (WebGL2) for proven stability and zero surface stalls.
+ * Allows 'webgpu' if explicitly enabled via localStorage.rte_force_webgpu === '1'.
+ */
+export async function detectBestRenderer(): Promise<'webgpu' | 'wgpu-webgl'> {
+	if (typeof window !== 'undefined' && window.localStorage?.getItem('rte_force_webgpu') === '1') {
+		if (typeof navigator !== 'undefined' && 'gpu' in navigator && (navigator as any).gpu) {
+			try {
+				const adapter = await (navigator as any).gpu.requestAdapter();
+				if (adapter) return 'webgpu';
+			} catch {
+				// Fall back to wgpu-webgl
+			}
+		}
+	}
+	return 'wgpu-webgl';
+}
+
+/**
  * Load ruffle.js once and resolve when it is ready.
- *
- * It is a plain script, not an ES module, so it cannot be imported. Injecting
- * it on demand also means the 465 KB bundle is only fetched by the page that
- * actually plays the game, instead of on the landing page.
  */
 let rufflePromise: Promise<void> | null = null;
 
-export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
-	if (rufflePromise) return rufflePromise;
-
-	// Configure Ruffle runtime options before script loads.
-	//
-	// Renderer: 'wgpu-webgl', not 'webgpu'. This is the same wgpu emulation
-	// layer -- same Flash compatibility, same feature coverage -- reached
-	// through WebGL instead of the WebGPU backend. WebGPU was picking up the
-	// player's clicks and then freezing the tab with no further requests
-	// reaching the gateway, which is what "se congela" looked like from the
-	// server side: the batch never arrived, so nothing was ever wrong here.
-	//
-	// WebGPU also warns on Windows that powerPreference is ignored, and its
-	// fallback is not chosen until a device request actually fails -- which a
-	// hang never triggers. 'wgpu-webgl' asks for WebGL up front and gets the
-	// same renderer without the gamble.
-	//
-	// If a machine is ever verified good on WebGPU, 'webgpu' is the better
-	// choice; change it back with the reason recorded here.
+export function loadRuffle(
+	url = RUFFLE_SCRIPT_URL,
+	configOverrides?: Partial<RuffleConfig>
+): Promise<void> {
 	if (typeof window !== 'undefined') {
 		window.RufflePlayer = window.RufflePlayer || {};
 		window.RufflePlayer.config = {
 			preferredRenderer: 'wgpu-webgl',
-			// Keep ticking when the tab is not in front.
-			//
-			// Ruffle's default here is to `instance.pause()` the moment
-			// `document.hidden` flips, which is what made every button feel
-			// slow: the click was queued and then fired in a burst on the way
-			// back in. It read like lag, and no amount of server time explained
-			// it -- the clicks were not reaching the gateway at all.
-			//
-			// 'mainThread' keeps the animation loop running in the background
-			// instead of parking it. The emulator is single-threaded either way,
-			// so this costs one thread's worth of CPU on a background tab and
-			// buys a game that responds the moment you look at it.
 			backgroundExecutionMode: 'mainThread',
 			letterbox: 'on',
 			warnOnUnsupportedContent: false,
@@ -133,18 +128,23 @@ export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 			autoplay: 'on',
 			openUrlMode: 'confirm',
 			quality: 'medium',
-			...(window.RufflePlayer.config || {})
+			maxExecutionDuration: 120,
+			frameRate: 30,
+			...(window.RufflePlayer.config || {}),
+			...(configOverrides || {})
 		};
 	}
+
+	if (rufflePromise) return rufflePromise;
 
 	rufflePromise = new Promise<void>((resolve, reject) => {
 		const existing = document.querySelector<HTMLScriptElement>(`script[src="${url}"]`);
 		if (existing) {
-			if (window.RufflePlayer) resolve();
+			if (window.RufflePlayer?.newest) resolve();
 			else {
 				existing.addEventListener('load', () => resolve(), { once: true });
 				existing.addEventListener('error', () => reject(new Error(`failed to load ${url}`)), {
-					once: true,
+					once: true
 				});
 			}
 			return;
@@ -153,7 +153,9 @@ export function loadRuffle(url = RUFFLE_SCRIPT_URL): Promise<void> {
 		const script = document.createElement('script');
 		script.src = url;
 		script.addEventListener('load', () => resolve(), { once: true });
-		script.addEventListener('error', () => reject(new Error(`failed to load ${url}`)), { once: true });
+		script.addEventListener('error', () => reject(new Error(`failed to load ${url}`)), {
+			once: true
+		});
 		document.head.appendChild(script);
 	});
 

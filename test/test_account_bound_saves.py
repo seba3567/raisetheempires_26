@@ -367,3 +367,66 @@ class TestOneRowPerAccount:
         self._play_then_sign_in(app, '{"user_object": null}', self.FRESH_ZID)
 
         assert "session:" + account_store_id(int(self.FRESH_ZID)) not in stored_rows(app)
+
+
+class TestConcurrentSessionMerge:
+    """When two concurrent requests land for the same player, WriteConflict triggers
+
+    a 3-way merge instead of silently dropping the losing turn's placed buildings.
+    """
+
+    def test_write_conflict_automatically_merges_world_objects(self, app):
+        store_id = "session:acct-merge-test"
+        interface = app.session_interface
+        store = interface.save_store
+
+        # Initial save: 1 object, 100 coins
+        initial_data = {
+            "user_object": {
+                "userInfo": {
+                    "player": {"coins": 100, "level": 1},
+                    "world": {
+                        "globalObjectId": 1,
+                        "objects": [{"id": 1, "itemName": "Town House", "state": 0}],
+                    },
+                }
+            }
+        }
+        rev1 = store.store(store_id, initial_data)
+        assert rev1 == 1
+
+        # Request A starts with rev1
+        import copy
+        session_a = dict(copy.deepcopy(initial_data))
+        session_a[interface.REVISION_KEY] = 1
+        session_a[interface.SNAPSHOT_KEY] = copy.deepcopy(initial_data)
+        # Request A places object 2 (Hut) and increments globalObjectId
+        session_a["user_object"]["userInfo"]["world"]["globalObjectId"] = 2
+        session_a["user_object"]["userInfo"]["world"]["objects"].append(
+            {"id": 2, "itemName": "Small Island Hut", "state": 0}
+        )
+
+        # Meanwhile, concurrent Request B modified coins (spent 20 coins) and commits first (rev 2)
+        request_b_data = copy.deepcopy(initial_data)
+        request_b_data["user_object"]["userInfo"]["player"]["coins"] = 80
+        rev2 = store.store(store_id, request_b_data, expected_revision=1)
+        assert rev2 == 2
+
+        # Now Request A finishes and flushes via _upsert_session.
+        # Its revision was 1, but the DB row is at revision 2.
+        # It must resolve the conflict and merge both object 2 and coins: 80!
+        interface._upsert_session(None, session_a, store_id)
+
+        # Verify DB row is at revision 3 and contains BOTH changes
+        latest = store.load(store_id)
+        assert latest.revision == 3
+        player = latest.data["user_object"]["userInfo"]["player"]
+        world = latest.data["user_object"]["userInfo"]["world"]
+
+        # Object from Request A is saved!
+        object_ids = [obj["id"] for obj in world["objects"]]
+        assert 1 in object_ids
+        assert 2 in object_ids
+        assert world["globalObjectId"] == 2
+        # Coin change from Request B is preserved!
+        assert player["coins"] == 80

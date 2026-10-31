@@ -233,20 +233,41 @@ todo `Number` es un `double`, y el checksum de 64 bits no cabría exacto.
 
 ## La base de datos
 
-MariaDB, la misma que usa el gateway, para que el proyecto entero tenga un solo
-almacén. `SAVE_STORE_PATH` / `RTE_DB_URL` deciden cuál es el servidor; todo el
-SQL vive en `src/lib/server/db/` y las migraciones se aplican solas al abrir la
-conexión, anotando lo aplicado en `schema_migrations`.
+PostgreSQL 18, la misma que usa el gateway, para que el proyecto entero tenga un
+solo almacén. `RTE_DB_URL` decide cuál es el servidor, y lo leen **las dos
+mitades** con ese nombre; todo el SQL vive en `src/lib/server/db/` y las
+migraciones se aplican solas al abrir la conexión, anotando lo aplicado en
+`schema_migrations`.
 
-El paso desde `bun:sqlite` dejó tres cosas que conviene no deshacer:
+`SAVE_STORE_PATH` era el nombre que usaba el gateway y sigue funcionando como
+alias, pero no se escribe más: un despliegue que pusiera uno de cada par dejaba
+las dos mitades apuntando a bases distintas.
 
-- `client.ts` sigue usando placeholders `?`. MariaDB los acepta a través del
+Cada migración es un archivo `.sql` en `src/lib/server/db/migrations/`, y **su SQL se
+ejecuta**. El runner las recorre en orden de nombre, corre cada una dentro de su
+propia transacción junto con la fila que la registra, y se salta las que ya
+figuraron en `schema_migrations`. El DDL de PostgreSQL es transaccional, así que una
+migración que falla no deja nada a medias y se reintenta entera en el siguiente
+arranque, en vez de quedar a medias y marcada como aplicada.
+
+> Antes el runner solo *anotaba* los nombres y el esquema vivía en una copia inline
+> del mismo DDL dentro de `client.ts`. Los archivos nunca se ejecutaban, de modo que
+> una migración agregada al directorio no hacía nada y aun así quedaba registrada
+> como aplicada. La copia inline ya no está: los archivos **son** el esquema.
+
+Lo que conviene no deshacer del paso desde `bun:sqlite`:
+
+- `client.ts` sigue usando placeholders `?`. PostgreSQL los acepta a través del
   driver; solo un motor que exija `$1` obligaría a tocarlos.
-- `001_init.sql` está escrito en dialecto MariaDB, con `DATETIME` donde el
-  original tenía `TEXT` (SQLite no distingue texto de fecha, así que el orden y
-  las comparaciones de fechas no funcionaban).
-- `activity.id` es `AUTO_INCREMENT` porque `recordActivity()` nunca da un id. Sin
-  eso, cada insert falla con errno 1364.
+- `001_init.sql` usa los tipos de PostgreSQL, con `TIMESTAMP` donde el original
+  tenía `TEXT` (SQLite no distingue texto de fecha, así que el orden y las
+  comparaciones de fechas no funcionaban).
+- `activity.id` es `SERIAL` porque `recordActivity()` nunca da un id. Sin eso, cada
+  insert falla con errno 1364.
+
+Las tablas del gateway (`saves`, `save_backups`) **no** están aquí: las tiene el save
+store, que las crea con su propio `schema.sql` cuando se construye. Nada de este
+lado las lee ni las escribe.
 
 Las migraciones se embeben en el bundle con `import.meta.glob(..., '?raw')`, no
 se leen del disco: tras el build, `import.meta.dir` apunta al directorio del
@@ -340,19 +361,93 @@ En otra terminal, el gateway:
 | Variable | Para qué |
 | --- | --- |
 | `SESSION_SECRET` | Firma la cookie. **Obligatoria.** |
-| `PORT` | Puerto público (8080). |
+| `PORT` | Puerto público (8080). Tiene que ser el puerto de `PUBLIC_ORIGIN`. |
+| `HOST` | Interfaz donde se binds (0.0.0.0). |
 | `GATEWAY_ORIGIN` | Gateway AMF0 en loopback. |
-| `RTE_DB_URL` | MariaDB de cuentas, amigos y progreso. Por defecto `mysql://root:2001@127.0.0.1:3306/raisetheempires`. |
+| `RTE_DB_URL` | PostgreSQL 18 de cuentas, amigos y progreso. Por defecto `postgres://postgres:42kSM0ud2nRLlTZv6YVsXgPcbxwAx9Qe!7a@127.0.0.1:5432/raisetheempires`. |
 | `RTE_DB_NAME` | Nombre suelto, para el `CREATE DATABASE` que corre antes de conectar. |
-| `PUBLIC_ORIGIN` | Origen público, si TLS termina en otro proxy. |
+| `RTE_TEST_DB_URL` | Solo para los tests: la base que `bun test` crea y usa. Por defecto `postgres://postgres:42kSM0ud2nRLlTZv6YVsXgPcbxwAx9Qe!7a@127.0.0.1:5432/rte_web_test`. |
+| `PUBLIC_ORIGIN` | Origen público, si TLS termina en otro proxy. Por defecto `http://localhost:<PORT>`. |
+| `PUBLIC_TRUSTED_ORIGINS` | Orígenes extra que pueden mandar formularios, separados por comas. |
+| `RTE_CONTRACT_FILE` | Ruta alternativa a `contract/runtime.json`. |
 | `BODY_SIZE_LIMIT` | Tope del body (6MB). El adapter-bun pone 512K por defecto y el gateway AMF0 manda binarios más grandes que eso. |
 
 `DATABASE_FILE` ya no existe: era el nombre del archivo SQLite.
 
-`PUBLIC_ORIGIN` también alimenta `paths.origin` en `vite.config.ts`. Sin él,
-SvelteKit no sabe en qué origen vive el sitio y **rechaza todos los POST de
-formulario** con *"Cross-site POST form submissions are forbidden"*, incluido el
-login.
+### El contrato entre los dos runtimes
+
+Este proyecto son dos programas en dos lenguajes: el gateway AMF0 en Python (en
+la raíz) y esta puerta web. Se encuentran por HTTP, por una base de datos
+PostgreSQL y por la identidad del jugador. **Cada valor que cruza una de esas
+costuras está escrito una sola vez**, en `contract/runtime.json`, en la raíz
+del repositorio:
+
+| Sección | Qué es |
+| --- | --- |
+| `database` | Host, puerto, usuario, clave y nombre de la base. |
+| `gateway` | Dónde escucha el gateway AMF0. |
+| `public` | Dónde escucha esta puerta. |
+| `headers` | Cómo viaja la identidad del jugador al gateway. |
+| `adminPaths` | Qué rutas del gateway son herramienta de admin. |
+| `env` | El nombre canónico de cada variable, y los alias viejos que aún funcionan. |
+| `zid` | El divisor del checksum y el máximo exacto para el cliente Flash. |
+
+Python lo lee con `contract.py`; TypeScript con `#lib/server/contract`. Los dos
+suites de tests lo leen y comprueban que lo que resolvió cada runtime es lo que
+está escrito ahí, así que un valor que se desvía rompe el build y no el juego.
+
+Las variables de entorno siguen mandando sobre el archivo: ahí viven los
+**defaults**, no la configuración de un despliegue.
+
+Esto no es purismo. El bug que arregló el turno pasado --el servidor atado al
+puerto 3000 con el origen compilado diciendo 8080, y el login respondiendo 403
+mientras todas las páginas cargaban-- era exactamente un contrato con dos
+dueños.
+
+### La puerta de admin, por los dos lados
+
+Las rutas del gateway que cambian el estado del juego o exponen los datos de
+otro jugador (`/gazillionaire`, `/patch/...`, `/list_session`, `DELETE /save`,
+`/editor/save`...) están en `adminPaths`. Las dos mitades las respetan:
+
+- **Esta puerta** las filtra antes de proxear, en `access.ts`.
+- **El gateway** las filtra en sí mismo, en `admin_gate.py`.
+
+El filtro de esta puerta decodifica el path antes de compararlo, porque
+`event.url.pathname` llega con los `%61` intactos y Werkzeug, que enruta al
+otro lado, decodifica: `/gazillionaire` se rechazaba y `/%67azillionaire` no,
+y ese segundo pedía diez mil monedas de regalo.
+
+El gateway no puede preguntar quién está conectado --no sabe de cuentas--, así
+que quien lo afirma es esta puerta, que es la única que conoce la sesión: en
+la cabecera de rol, que la puerta pone y nunca reenvía desde el navegador. El
+gateway escucha en loopback y esta puerta es su única puerta; por eso confía
+en ella, igual que en la cabecera con el id del jugador.
+
+### El puerto y el origen tienen que ser el mismo servidor
+
+`PUBLIC_ORIGIN` alimenta `paths.origin` en `vite.config.ts`, y el adapter-bun
+**reescribe cada petición** sobre ese origen antes de que SvelteKit la vea.
+SvelteKit compara el header `Origin` de la petición con el origen de la URL
+reescrita, y si no son el mismo rechaza el POST con *"Cross-site POST form
+submissions are forbidden"*.
+
+Así que el síntoma de un desajuste no es un error de puerto: es el login y el
+registro devolviendo 403 mientras todas las páginas cargan bien.
+
+Las tres cosas que tienen que coincidir salen hoy de un solo sitio,
+`src/lib/server/config.ts`, que es lo que lee `vite.config.ts`:
+
+- el puerto que se binds (`PORT`),
+- el origen que se compila dentro del build (`PUBLIC_ORIGIN`),
+- el puerto que el adapter usa cuando el entorno no dice nada (su defecto es
+  3000, y por eso se le pasa en `serverOptions`).
+
+Si el sitio se alcanza por más de un nombre —un dominio y una IP, o
+`localhost` y `127.0.0.1`— el origen que llega en el header no es el que está
+compilado, y el formulario vuelve a ser rechazado. Las alias de loopback de
+un origen de loopback se confían solas; cualquier otro nombre hay que
+declararlo en `PUBLIC_TRUSTED_ORIGINS`.
 
 ## Cuentas de administrador
 
@@ -374,7 +469,7 @@ borrar.
 ## Comandos
 
 ```powershell
-bun test          # 73 tests
+bun test          # 165 tests
 bun run check     # svelte-check, 0 errores
 bun run --bun build
 bun run dev       # desarrollo
@@ -394,7 +489,7 @@ bun run dev       # desarrollo
 | `src/routes/` | `/`, `/entrar`, `/registro`, `/cuenta`, `/juego`, `/salir`, `/admin/editor` |
 | `src/routes/+layout.server.ts` | La sesión, para que el header la vea en todas las rutas |
 
-### Los cuatro detalles que rompen el juego si se tocan
+### Los cinco detalles que rompen el juego si se tocan
 
 1. **`Host` hacia el gateway.** Flask lee el `Host` para construir el `app_url`
    que se mete en los FlashVars. Si el proxy no manda el host público, Flask ve
@@ -427,6 +522,25 @@ bun run dev       # desarrollo
    de `player.load()`; si se cargara primero y se instalara después, el cliente
    ya las llamó. Datos en `/snapi.json` (gateway), y `zid` tiene que ir como
    número JSON. Fijado por `tests/snapi.test.ts`.
+5. **El puerto que se binds contra el origen que se compila.** El adapter
+   reescribe cada petición sobre `paths.origin` y SvelteKit valida el header
+   `Origin` contra ese origen reescrito. Si el servidor escucha en un puerto y
+   el origen compilado dice otro, **todas las páginas cargan y todos los
+   formularios se rechazan con 403** — login y registro incluidos. El adapter
+   solo lee `PORT` y `HOST` del entorno, y su defecto es el 3000, así que
+   `vite.config.ts` le pasa los dos en `serverOptions` y usa el mismo valor
+   para `paths.origin`. Arriba está el detalle completo. Fijado por
+   `tests/config-env.test.ts`.
+6. **El filtro de admin sobre el path decodificado.** `event.url.pathname`
+   llega con los `%61` intactos y Werkzeug decodifica antes de enrutar, así que
+   un path codificado pasaba el filtro y `/%67azillionaire` repartía diez mil
+   monedas. `access.ts` decodifica antes de comparar. Fijado por
+   `tests/access.test.ts`.
+7. **El contrato de los dos runtimes.** Base de datos, dirección del gateway,
+   puerto público, cabeceras y rutas de admin están escritos una sola vez, en
+   `contract/runtime.json`, y los dos runtimes los leen. Un valor con dos
+   dueños es un valor que algún día discrepa. Fijado por
+   `tests/config-env.test.ts` y `test/test_contract.py`.
 
 ### Detalles de Svelte 5 que muerden
 

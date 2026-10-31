@@ -17,19 +17,8 @@ import type { Handle } from '@sveltejs/kit/hooks';
 import { adminDecision } from '#lib/access';
 import { findById, publicUser } from '#lib/server/models/accounts';
 import { proxyToGateway } from '#lib/server/proxy';
+import { resolveRequestOrigin } from '#lib/server/config';
 import { isSecureRequest, readSession } from '#lib/server/session';
-
-/**
- * The origin the browser used, without a trailing slash.
- *
- * SvelteKit 3 removed `process.env.ORIGIN`, so this is computed per request
- * from `event.url`, which does honour the incoming Host. Set `PUBLIC_ORIGIN`
- * when TLS terminates at a proxy that rewrites Host, so every layer agrees.
- */
-function publicOriginFor(url: URL): string {
-	const override = process.env['PUBLIC_ORIGIN'];
-	return (override ?? url.origin).replace(/\/$/, '');
-}
 
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.secure = isSecureRequest(event.request);
@@ -38,7 +27,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const user = userId === null ? null : await findById(userId);
 	event.locals.user = user ? publicUser(user) : null;
 
-	const publicOrigin = publicOriginFor(event.url);
+	const publicOrigin = resolveRequestOrigin(event.url);
 
 	const decision = adminDecision(event.url.pathname, user);
 	if (decision === 'redirect-login') {
@@ -57,11 +46,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 		// account instead of under a hash of the gateway's own cookie. Null for
 		// anonymous traffic, which the gateway falls back to handling exactly as
 		// it did before.
+		//
+		// The role goes along too: the gateway enforces its own lock on the
+		// admin tools, and it can only do that from what this service vouches
+		// for. It is set here and never forwarded from the browser.
 		const result = await proxyToGateway(
 			event.request,
 			publicOrigin,
 			undefined,
-			event.locals.user?.zid ?? null
+			event.locals.user?.zid ?? null,
+			event.locals.user?.role ?? null
 		);
 		if (result === 'websocket-unsupported') {
 			error(501, 'Este despliegue solo proxea HTTP; el socket.io va en long-polling.');

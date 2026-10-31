@@ -160,6 +160,32 @@ curl.exe -s -o NUL -w "%{http_code} %{content_type}`n" http://localhost:8080/ruf
 # 200 application/wasm
 ```
 
+`bun .\build` answers on the port in `web/.env` (`PORT`, 8080 by default), and
+that has to be the port of `PUBLIC_ORIGIN`. The Bun adapter rewrites every
+request onto the origin compiled into the build, and SvelteKit rejects any
+form POST whose `Origin` header names another one — so a mismatch between the
+two does not look like a port problem, it looks like a broken login: every
+page loads and every form answers 403. Both values come from
+`web/src/lib/server/config.ts`; `web/README.md` has the detail.
+
+### One settings file for the whole project
+
+`web/.env` configures **both** halves. The gateway used to read the process
+environment and nothing else, while the front door read `web/.env`, so an
+operator who edited the file moved the front door and left the gateway
+pointing somewhere else — the gateway writing saves to a database the front
+door never read.
+
+The variables are the ones in `web/.env.example`, with the same names on both
+sides: `RTE_DB_URL` for the database, `PUBLIC_ORIGIN` for the origin,
+`GATEWAY_ORIGIN` for the gateway's address. The names the gateway used before
+(`SAVE_STORE_PATH`, `WEB_ORIGIN`) still work, but they are not written down
+any more. The order is the process environment first and the file second, so
+a shell that sets a variable beats the file.
+
+`contract/runtime.json` is where those names are written down, along with
+everything else the two runtimes have to agree on.
+
 For actual play without a browser, real Flash via NPAPI still works through
 `/nodebug.html` (see `FLASH.md`).
 
@@ -209,14 +235,162 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 | Path | Purpose |
 | --- | --- |
 | `web/` | Public front end — SvelteKit 3 + Svelte 5 on Bun. See `web/README.md` |
-| `empires-server.py` | Flask app and AMF gateway (2.4k lines, entry point) |
+| `empires-server.py` | Flask app and AMF gateway (3.8k lines, entry point) |
+| `service_handlers.py` | The extended AMF services (clans, gifts, PVP, matchmaking) |
 | `battle_engine.py` | Combat resolution |
 | `quest_engine.py`, `state_machine.py` | Quest progression |
 | `game_settings.py` | Game data loading and lookups |
 | `save_engine.py` | Session store wiring and save validation |
+| `save_store.py`, `account_saves.py` | PostgreSQL save store and account binding |
+| `schema.sql` | The gateway's own tables (`saves`, `save_backups`) |
 | `mod_engine.py` | Mod loading (xmldiff / jsonpatch) |
 | `crc64_go_iso.py` | `zid` checksum — typed and strict-checked |
-| `test/` | pytest suite (`*_test.py`, legacy naming) |
+| `test/` | pytest suite (`test_*.py` and the legacy `*_test.py`) |
+
+## The database, and who owns which table
+
+Everything lives in one PostgreSQL 18 server, but the schema has two owners and
+the split is deliberate:
+
+| Owner | Files | Tables |
+| --- | --- | --- |
+| The gateway's save store | `schema.sql` | `saves`, `save_backups` |
+| The web front end | `web/src/lib/server/db/migrations/*.sql` | `users`, `friendships`, `progress`, `activity`, `clans`, `clan_members`, `clan_messages`, `gifts` |
+
+The save store applies `schema.sql` itself when it is built, and creates its
+database if it is not there yet.
+
+### The gateway reads the web's tables too
+
+Both runtimes point at the same database, so the gateway can read what the web
+wrote -- and for the parts of the game that are social, it does:
+
+- The alliance system. `ClansService.getClanInfo`, `createClan`, `updateName`,
+  `updateCrest`, `buyHealth`, `buySlots` and `postGroupFeed` work on `clans`,
+  `clan_members` and `clan_messages`, so a message posted in the game lands in
+  the same wall that `/amigos` shows. Before that, the gateway kept a fiction of
+  its own inside the player's save -- a hardcoded id and one made-up member --
+  and the two sides never agreed on anything.
+- The PvP challenges, which come from `activity` and `users`.
+
+A session is tied to a web account through the `zid`: the front door passes it
+down in `x-player-zid`, and the gateway finds the matching row in `users`. A
+session that never went through the front door has no account, and the
+alliance handlers fall back to the copy in the save.
+
+### Which database a helper talks to
+
+`save_engine.save_store_url()` prefers the app's configuration over the
+environment. The test suite points the app at a throwaway database, and a
+helper that read the environment instead would quietly reach into the real
+one -- the suite would be writing to the live database while believing it was
+not.
+
+### Two things about the connection
+
+**The client encoding is UTF-8, and it is set explicitly.** PostgreSQL reports
+errors in the server's locale and sends them in the connection's encoding,
+and psycopg2 picks that encoding from the *client's* locale -- which on
+Windows is cp1252. A server that speaks Spanish then answers with one stray
+byte where an accent should be, and psycopg2 raises `UnicodeDecodeError`
+instead of saying what went wrong. That turned "the database does not exist"
+into an unreadable error about encoding.
+
+**The suite does not hammer the store.** The cleanup between tests used to
+open a fresh connection per test and delete the rows one statement at a time:
+a run of the suite forked a PostgreSQL backend per test, twice over, and
+flushed the WAL twice. `Store.clear()` now counts first and deletes only if
+there is something to delete, and the suite holds one connection for the
+whole session. Measured on the same machine, with the same PostgreSQL:
+
+| | Before | After |
+| --- | --- | --- |
+| Suite time | 184 s | **119 s** |
+| Connections opened | 2.097 | **1.104** |
+| Transactions | 5.244 | **3.363** |
+
+### Migrations
+
+`web/src/lib/server/db/client.ts` applies the files in
+`web/src/lib/server/db/migrations/` in filename order and records the ones it
+applied in `schema_migrations`. To add a migration, drop a new file in that
+directory and name it `006_something.sql` — it runs on the next start.
+
+Each file runs inside its own transaction, together with the row that records
+it. PostgreSQL's DDL is transactional, so a migration that fails leaves nothing
+behind and is retried whole on the next start instead of being half-applied and
+marked as done.
+
+The files use `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`, so
+re-running one is harmless.
+
+> The runner used to only *record* the migrations and build the schema from an
+> inline copy of the same DDL in `client.ts`. The files were never executed,
+> which meant a migration added to the directory did nothing at all while still
+> being marked as applied. The inline copy is gone; the files are the schema.
+
+### The database in CI
+
+The three jobs that need a server (`run_web_tests`, `run_tests` and
+`gateway_smoke`) start the PostgreSQL that the GitHub runner image already
+ships — 18.6, the version this project targets — through
+`.github/actions/start-postgresql`. No container runtime is involved.
+
+Without that, `bun test` failed on the connection for every test that touches
+the database, `pytest` errored in every fixture, and `gateway_smoke` could not
+even start the gateway: it builds the save store while the app is configured,
+so it dies in `configure_app()` before it binds a port.
+
+The Python suite points at its own database (`RTE_TEST_DB`) and the save
+store's tests at another (`RTE_PG_TEST_URL`), so a run never wipes the tables
+the other is using. Both databases are created by the suite itself.
+
+## PostgreSQL dies on this machine
+
+**The cluster crashes every ten to twenty minutes.** A new backend fails to
+map the shared memory segment:
+
+```
+could not reserve shared memory region (addr=...) for child ...: error code 487
+```
+
+and takes the whole cluster down with it. This is PostgreSQL bug #18954 on
+Windows: the *Bottom-up ASLR* mitigation, which Windows enforces on the
+PostgreSQL binaries, breaks the mapping. It is not the project, and not the
+configuration — it happens on a fresh cluster with any settings.
+
+**The real fix needs administrator rights** (it writes to `HKLM`):
+
+```powershell
+Set-ProcessMitigation -Name postgres.exe -Disable BottomUp
+Set-ProcessMitigation -Name pg_ctl.exe   -Disable BottomUp
+```
+
+Excluding the PostgreSQL directory from the antivirus's real-time scanning
+helps too, and is worth doing either way.
+
+Until that is applied, `watchdog_postgres.bat` keeps the cluster alive: it
+watches for the crash and restarts it, which takes a few seconds and is
+invisible from the game. It is a workaround for the machine, not for the
+project.
+
+### Keeping the other two alive
+
+`watchdog_stack.bat` does the same for the gateway and the front door: it
+probes both every ten seconds and restarts whichever stops answering, after
+three failures in a row so a single dropped request does not start a restart
+loop. A restart is survivable for both — the gateway's sessions live in
+PostgreSQL and the front door's are signed cookies — so the player logs back
+in and carries on.
+
+```powershell
+.\watchdog_stack.bat
+```
+
+The launcher and the watchdog are separate tools on purpose: `start_all.bat`
+brings the stack up, the watchdog keeps it up. Run both, in their own windows.
+
+
 
 ## Two services, and which one is public
 
@@ -244,6 +418,11 @@ cookie. The gateway trusts that header **only** because nothing else can reach
 it: expose Flask on `0.0.0.0` and anyone can claim another player's empire with
 a hand-written header. Same assumption as the admin gate.
 
+Because `--host` can break that in one flag, the gateway says so at startup when
+it is bound to anything other than loopback. It does not refuse to start -- an
+operator who meant to put it on the network may know something the warning does
+not -- but it does not start quietly either.
+
 Run both while developing:
 
 ```powershell
@@ -258,7 +437,7 @@ cd web; bun run --bun build; bun .\build
 
 ```powershell
 cd web
-bun test          # 73 tests
+bun test          # 146 tests
 bun run check     # svelte-check
 bun run --bun build
 bun run scripts/manage-user.ts list-admins
@@ -269,3 +448,33 @@ bun run scripts/manage-user.ts list-admins
 Name them `*_test.py` to match the existing suite, or `test_*.py` (both are
 configured). `test/` already contains a `RaiseTheEmpires.ini`, so tests run
 without touching a real install.
+
+## The log, and what belongs in it
+
+`log.txt` is the gateway's own log, and it is the file to read when something
+went wrong. Two rules keep it readable.
+
+**The test suite writes to `log-test.txt`, not to `log.txt`.** Both runtimes
+share one logging setup, and the suite deliberately makes handlers raise to
+prove the gateway survives them. Before the split, those failures landed in
+the server's log: of the 1,481 traceback lines `log.txt` carried, every one
+of them pointed at a test file, and the server looked broken when it was the
+suite doing its job. `RTE_LOG_FILE` chooses the file; the root `conftest.py`
+sets it before the gateway is imported.
+
+**A warning means something is wrong.** The gateway logs a lot of traffic the
+client generates and the server handles: a purchase the player cannot afford,
+a campaign this server does not know, an item code the catalogue does not
+carry, a battle reference that has already moved on. All of those are answered
+gracefully and logged at INFO, because at WARNING they drowned out the things
+that needed attention. The ones left at WARNING and ERROR are the ones where
+the server could not carry on:
+
+| Level | What it means now |
+| --- | --- |
+| `ERROR` | The gateway could not answer, or the client and the server disagree about the state (`Battle named fleet ..., which is not registered`) |
+| `WARNING` | Something was refused that a person may want to know about (a gift that could not be delivered, a save that kept colliding) |
+| `INFO` | Ordinary traffic, including everything the client asks for and the server declines |
+
+The level of a log line is a decision about how often it fires. A line that
+fires on every load is not a warning, however true it is.

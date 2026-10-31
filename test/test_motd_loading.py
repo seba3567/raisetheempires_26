@@ -50,7 +50,7 @@ class TestMotdCatalogue:
 
     def test_every_listed_art_is_one_we_ship(self, bare):
         """A name with no file behind it is a blank backdrop on every load."""
-        folder = Path(save_engine.my_games_path()) / "templates" / "img" / "motds"
+        folder = Path(save_engine.my_games_path()) / "web" / "static" / "img" / "motds"
         on_disk = {p.name for p in folder.glob("*.png")}
 
         missing = [name for name in bare.get("/motd.json").get_json()["motds"]

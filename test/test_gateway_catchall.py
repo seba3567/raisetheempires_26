@@ -169,6 +169,72 @@ class TestBatchShapeIsPreserved:
         assert response.status_code == 200
 
 
+class TestTheAnswersStayInTheirOwnSlots:
+    """The client matches responses to requests by index.
+
+    The batch used to be guarded as a whole, so the first call that raised
+    abandoned every call after it. The answers that were left were padded at
+    the *end*, which shifted every later answer one slot to the left -- and a
+    client reading by index took the next call's payload as its own answer.
+
+    The old test for this asserted only that the dummy results were there,
+    which is also true when the calls never ran at all. These assert that each
+    answer is the answer to that call.
+    """
+
+    def test_a_failing_call_does_not_shift_the_answers_after_it(self, client, monkeypatch):
+        marker = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+
+        def first(*args, **kwargs):
+            return {**marker, "data": ["first"]}
+
+        def second(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        def third(*args, **kwargs):
+            return {**marker, "data": ["third"]}
+
+        monkeypatch.setitem(empires_server.AMF_HANDLERS, "FirstService.one", first)
+        monkeypatch.setitem(empires_server.AMF_HANDLERS, "SecondService.two", second)
+        monkeypatch.setitem(empires_server.AMF_HANDLERS, "ThirdService.three", third)
+
+        response = post_batch(client, [
+            ("FirstService.one", []),
+            ("SecondService.two", []),
+            ("ThirdService.three", []),
+        ])
+
+        data = decoded_body(response)["data"]
+        assert len(data) == 3
+        assert data[0]["data"] == ["first"]
+        # The call that raised gets the empty result, in its own slot.
+        assert data[1]["data"] == []
+        assert data[2]["data"] == ["third"]
+
+    def test_a_call_after_the_failure_still_runs(self, client, monkeypatch):
+        """The call after the failure must be executed, not just answered."""
+        marker = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+        ran = []
+
+        def second(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        def third(*args, **kwargs):
+            ran.append(True)
+            return {**marker, "data": ["third"]}
+
+        monkeypatch.setitem(empires_server.AMF_HANDLERS, "SecondService.two", second)
+        monkeypatch.setitem(empires_server.AMF_HANDLERS, "ThirdService.three", third)
+
+        response = post_batch(client, [
+            ("SecondService.two", []),
+            ("ThirdService.three", []),
+        ])
+
+        assert ran, "the call after the failure never ran"
+        assert decoded_body(response)["data"][1]["data"] == ["third"]
+
+
 class TestTheSpecificHandlersStillWin:
     """The catch-all is a backstop, not a replacement.
 

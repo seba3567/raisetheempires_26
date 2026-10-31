@@ -9,10 +9,26 @@
 
 import type { SavedSession } from '../sessions.ts';
 import { config } from './config.ts';
+import { PLAYER_ROLE_HEADER, PLAYER_ZID_HEADER } from './proxy.ts';
 
-export async function fetchSessions(): Promise<SavedSession[] | null> {
+/**
+ * Every save on the server, as the admin session list shows it.
+ *
+ * Admin-only at two independent layers: the gateway checks the path against
+ * the contracted list of admin tools and refuses anybody who is not an admin
+ * (see `admin_gate.py`), and the page that reads this is gated again in its
+ * own load. The fetch here goes straight to the gateway, bypassing the proxy's
+ * gate, so it has to present the admin's identity itself: the gateway cannot
+ * ask who is signed in, it can only see what the caller claims.
+ */
+export async function fetchSessions(playerZid?: string, playerRole?: string): Promise<SavedSession[] | null> {
+	const headers = new Headers();
+	if (playerZid) headers.set(PLAYER_ZID_HEADER, playerZid);
+	if (playerRole) headers.set(PLAYER_ROLE_HEADER, playerRole);
+
 	try {
 		const response = await fetch(new URL('/list_session', config.gateway.origin), {
+			headers,
 			signal: AbortSignal.timeout(10_000),
 			// Live list: a cached copy would show a world that no longer exists.
 			cache: 'no-store'
@@ -39,16 +55,18 @@ export async function fetchSessions(): Promise<SavedSession[] | null> {
 export async function deleteSession(
 	request: Request,
 	storeId: string,
-	playerZid?: string
+	playerZid?: string,
+	playerRole?: string
 ): Promise<{ ok: boolean; message?: string }> {
-	const headers: Record<string, string> = {
+	const headers = new Headers({
 		// A form-encoded DELETE, because the body is what carries the id and
 		// the gateway reads it from there.
-		'Content-Type': 'application/x-www-form-urlencoded'
-	};
-	if (playerZid) headers['x-player-zid'] = playerZid;
+		'content-type': 'application/x-www-form-urlencoded'
+	});
+	if (playerZid) headers.set(PLAYER_ZID_HEADER, playerZid);
+	if (playerRole) headers.set(PLAYER_ROLE_HEADER, playerRole);
 	const cookie = request.headers.get('cookie');
-	if (cookie) headers['cookie'] = cookie;
+	if (cookie) headers.set('cookie', cookie);
 
 	try {
 		const response = await fetch(new URL('/save', config.gateway.origin), {

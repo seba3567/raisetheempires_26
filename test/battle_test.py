@@ -342,6 +342,21 @@ def test_assign_consumable_response_shrapnel_unit_dead(monkeypatch):
                                    True,  setup_session_funcs= [lambda s: s.setdefault('battle', default=([300, 300], [120, 30, 150], [], battle_engine.BattleContext()))])
 
 
+def test_assign_consumable_response_shrapnel_target_already_dead(monkeypatch):
+    """A barrage aimed at a unit that is already dead must not void the cast.
+
+    The collateral damage looks its epicenter up in the list of living units.
+    A dead target is not in that list, and the lookup raised ValueError -- which
+    the gateway swallowed into an empty answer, so the player lost the
+    consumable and the damage with it. The living units must be untouched.
+    """
+    run_assign_consumable_response(monkeypatch,
+                                   {'id': 1, 'ch': 3207, 'level': 0, 'name': 'fleet15_2341959767162880',
+                                    'fleet': None,
+                                    'map': 'C037', 'code': 'N80'}, None, [300, 300], None, [120, 0, 150], [],
+                                   True,  setup_session_funcs= [lambda s: s.setdefault('battle', default=([300, 300], [120, 0, 150], [], battle_engine.BattleContext()))])
+
+
 def run_assign_consumable_response(monkeypatch, params, expected_player_unit_id, expected_friendly_strengths, expected_enemy_unit_id,
                           expected_baddie_strengths, expected_active_consumables, expected_player_turn, setup_session_funcs=[]):
     friendly_strengths = None

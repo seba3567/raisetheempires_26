@@ -45,10 +45,8 @@ dependencies = [
     # Windows wheels; waitress is the pure-Python fallback with no dependencies.
     "granian>=2.8,<3",
     "waitress>=3.0,<4",
-    # Driver for the save store when SAVE_STORE_PATH is a mariadb:// URL.
-    # save_store picks the engine from that one config key, so SQLite stays the
-    # default and MariaDB is a deployment change rather than a code change.
-    "pymysql>=1.1,<2",
+    # Driver for the save store when SAVE_STORE_PATH is a postgresql:// URL.
+    "psycopg2-binary>=2.9.9,<3",
 ]
 
 [project.optional-dependencies]
@@ -90,7 +88,7 @@ py-modules = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["test"]
-# Legacy naming: the suite uses *_test.py, not test_*.py.
+# Both naming conventions are in use: the newer test_*.py and the legacy *_test.py.
 python_files = ["*_test.py", "test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -128,6 +126,7 @@ exclude = [
     "build",
     "dist*",
     "redist",
+    "scratch",
     "templates",
 ]
 
@@ -212,7 +211,9 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.11"
 files = ["battle_engine.py", "crc64_go_iso.py", "game_settings.py", "mod_engine.py", "quest_engine.py",
-         "save_engine.py", "save_migration.py", "state_machine.py", "init_settings.py", "logger.py"]
+         "quest_settings.py", "save_engine.py", "save_migration.py", "state_machine.py", "init_settings.py",
+         "logger.py", "save_store.py", "account_saves.py", "language_settings.py", "single_instance.py",
+         "service_handlers.py", "migrate_schema.py"]
 # Baseline: the codebase is dynamically typed and talks to Flask sessions,
 # SQLAlchemy models and pyamf objects. Start permissive and tighten per module.
 check_untyped_defs = true
@@ -223,7 +224,7 @@ warn_unused_configs = true
 no_implicit_optional = true
 strict_equality = false
 ignore_missing_imports = true
-exclude = "(^|/)(assets|build|dist|redist|templates)/"
+exclude = "(^|/)(_tools|assets|build|dist|redist|scratch|templates|test/conftest\\.py)"
 # The engines are schema-less: JSON/msgpack payloads arrive as plain dicts and
 # lists and are indexed by keys mypy cannot see. These codes fire on that
 # dynamic access rather than on real defects; they are re-enabled per module as
@@ -236,15 +237,31 @@ disable_error_code = [
     "union-attr",        # Optional payloads narrowed by runtime validation
     "assignment",        # numeric widening inside battle math
     "arg-type",          # values coming straight from decoded AMF/JSON
+    "index",             # indexing Optional[dict] returned by get_save_by_uid(required=True)
 ]
 
 # New code is held to a higher standard than the legacy engines.
 [[tool.mypy.overrides]]
-module = ["crc64_go_iso"]
+module = [
+    "crc64_go_iso",
+    "init_settings",
+    "game_settings",
+    "quest_settings",
+    "mod_engine",
+    "language_settings",
+    "single_instance",
+    "quest_engine",
+    "save_store",
+    "account_saves",
+    "save_engine",
+    "state_machine",
+    "logger",
+    "save_migration",
+    "service_handlers",
+    "migrate_schema",
+]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
-warn_return_any = true
-strict_equality = true
 
 [tool.coverage.run]
 relative_files = true

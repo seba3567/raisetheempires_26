@@ -58,7 +58,7 @@ class TestAvatarCatalogue:
         A name in the catalogue with no file behind it is a broken <img> in the
         picker, and the gateway would happily store it.
         """
-        folder = Path(save_engine.my_games_path()) / "templates" / "img" / "avatars"
+        folder = Path(save_engine.my_games_path()) / "web" / "static" / "img" / "avatars"
         on_disk = {p.name for p in folder.glob("*.png")}
 
         missing = [name for name in bare.get("/avatar.json").get_json()["avatars"]

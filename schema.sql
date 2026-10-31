@@ -1,7 +1,6 @@
 -- Save storage.
 --
--- MariaDB only. There was a SQLite schema here too until the move; the file
--- kept the plain name so the path in save_store.py did not have to move.
+-- PostgreSQL 18 schema for Raise The Empires.
 --
 -- What this replaces
 -- ------------------
@@ -33,47 +32,46 @@
 -- size of the empire rather than the size of the empire times ten. Backups are
 -- append-only and never touched by a normal request.
 --
--- The payloads are opaque blobs on purpose. Nothing here tries to model the
+-- The payloads are opaque blobs (BYTEA). Nothing here tries to model the
 -- empire's shape -- world objects, fleets and quests are the game's own data,
 -- and a schema that has to be migrated every time the 2012 game settings change
 -- would be a worse problem than the one it solves. What the store guarantees is
 -- atomicity, versioning and history, which is what it can actually own.
 
 CREATE TABLE IF NOT EXISTS saves (
-    id          INT AUTO_INCREMENT PRIMARY KEY,
+    id          SERIAL PRIMARY KEY,
     -- 'acct<zid>' for an account, the cookie sid otherwise. Never the raw zid,
     -- so nothing here can be used to claim another player's save.
-    store_id    VARCHAR(255) NOT NULL,
+    store_id    VARCHAR(255) NOT NULL UNIQUE,
     -- Bumped on every successful write. The compare-and-swap target.
     revision    INT NOT NULL DEFAULT 1,
     -- The game's player id, copied from the payload. Nullable: it is read out of
     -- the payload, and a row with no empire in it yet has none.
     uid         BIGINT NULL,
     -- The empire. msgpack, via the session interface's serializer.
-    data        LONGBLOB NOT NULL,
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT saves_store_id_unique UNIQUE (store_id),
-    CONSTRAINT saves_revision_positive CHECK (revision >= 1),
-    INDEX idx_saves_store_id (store_id),
-    INDEX idx_saves_uid (uid)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    data        BYTEA NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT saves_revision_positive CHECK (revision >= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saves_store_id ON saves (store_id);
+CREATE INDEX IF NOT EXISTS idx_saves_uid ON saves (uid);
 
 -- A snapshot of what a save looked like before a given revision was replaced.
 -- `revision` here is the revision the snapshot IS, not the one it displaced, so
 -- "restore revision 7" is unambiguous.
 CREATE TABLE IF NOT EXISTS save_backups (
-    id          INT AUTO_INCREMENT PRIMARY KEY,
-    save_id     INT NOT NULL,
+    id          SERIAL PRIMARY KEY,
+    save_id     INT NOT NULL REFERENCES saves (id) ON DELETE CASCADE,
     revision    INT NOT NULL,
     -- Why the snapshot exists: 'before Level 50', 'manual edit', whatever
     -- create_backup was called with. NULL for a snapshot taken because the row
     -- was about to be overwritten with no note attached.
     reason      VARCHAR(255),
-    data        LONGBLOB NOT NULL,
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT save_backups_save_fk FOREIGN KEY (save_id)
-        REFERENCES saves (id) ON DELETE CASCADE,
-    -- The one query that matters: "the newest N snapshots for this save".
-    INDEX idx_save_backups_save_revision (save_id, revision)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    data        BYTEA NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- The one query that matters: "the newest N snapshots for this save".
+CREATE INDEX IF NOT EXISTS idx_save_backups_save_revision ON save_backups (save_id, revision);

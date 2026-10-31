@@ -22,7 +22,7 @@ and only writes if the row is still at it. The loser of a race gets
 **History is a different table.** ``save_backups`` is append-only, so the row a
 request touches is the size of the empire and not ten times it.
 
-The payloads stay opaque blobs. The empire is the 2012 game's own data and a
+The payloads stay opaque blobs (BYTEA). The empire is the 2012 game's own data and a
 schema over it would need migrating every time the game settings change. What
 this store can own -- atomicity, versioning, history -- is what it owns.
 
@@ -38,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Literal, Self
 
 SCHEMA_PATH = str(Path(__file__).resolve().parent / "schema.sql")
 
@@ -46,124 +47,77 @@ SCHEMA_PATH = str(Path(__file__).resolve().parent / "schema.sql")
 DEFAULT_KEEP = 10
 
 
-class _DictCursor:
-    """Adapter giving pymysql cursors the ``row["name"]`` shape the queries use.
-
-    pymysql returns tuples by default and every query in Store indexes by column
-    name, so this wraps ``fetchall``/``fetchone`` to hand back dicts.
-
-    Kept rather than switching every query to index 0, because ``SELECT *``
-    column order is not something the callers should have to know.
-    """
-
-    def __init__(self, cursor):
-        self._cursor = cursor
-
-    def __getattr__(self, name):
-        return getattr(self._cursor, name)
-
-    def _as_dict(self, row):
-        if row is None:
-            return None
-        return dict(zip([column[0] for column in self._cursor.description], row))
-
-    def fetchone(self):
-        return self._as_dict(self._cursor.fetchone())
-
-    def fetchall(self):
-        return [self._as_dict(row) for row in self._cursor.fetchall()]
-
-    def __iter__(self):
-        row = self.fetchone()
-        while row is not None:
-            yield row
-            row = self.fetchone()
-
-
 def strip_sql_comments(script: str) -> str:
-    """Drop ``--`` comment lines before the schema is split on ``;``.
-
-    The schema is the only SQL file in the project and it is heavily commented,
-    which is worth keeping. But a semicolon inside a comment -- "until the move;
-    the file kept the plain name" -- splits a statement in half and the server
-    rejects the fragment, which points at the schema rather than at the comment.
-    Removing the comments first makes the split safe and the error messages
-    honest.
-    """
+    """Drop ``--`` comment lines before the schema is split on ``;``."""
     return "\n".join(line for line in script.splitlines()
                      if not line.lstrip().startswith("--"))
 
 
-def connect(url: str):
-    """Open a connection to the MariaDB named by ``url``.
+def connect(url: str) -> PostgresConnection:
+    """Open a connection to the PostgreSQL 18 database named by ``url``.
 
-    The URL is ``mariadb://user:password@host:port/database``, which is the
-    same shape as ``SQLALCHEMY_DATABASE_URI`` so there is one format to learn.
-    Passing a bare filename used to mean SQLite and no longer does.
+    The client encoding is set to UTF-8 rather than left to be negotiated.
+    PostgreSQL reports errors in the server's locale and sends them in the
+    connection's encoding, and psycopg2 picks that encoding from the *client's*
+    locale -- which on Windows is cp1252. A server that speaks Spanish then
+    answers with one stray byte where an accent should be, and psycopg2
+    raises UnicodeDecodeError instead of saying what went wrong. That turned
+    "the database does not exist" into an unreadable error about encoding.
     """
     from urllib.parse import unquote, urlparse
 
-    import pymysql
+    import psycopg2
 
     parsed = urlparse(url)
-    return MariaConnection(pymysql.connect(
+    db_name = (parsed.path or "").strip("/") or None
+    conn = psycopg2.connect(
         host=parsed.hostname or "127.0.0.1",
-        port=parsed.port or 3306,
-        user=unquote(parsed.username or "root"),
+        port=parsed.port or 5432,
+        user=unquote(parsed.username or "postgres"),
         password=unquote(parsed.password or ""),
-        database=(parsed.path or "").strip("/") or None,
-        charset="utf8mb4",
-        # autocommit on, so the transactions in Store are explicit.
-        autocommit=True,
-    ))
+        database=db_name,
+        client_encoding="UTF8",
+    )
+    conn.autocommit = True
+    return PostgresConnection(conn)
 
 
-class MariaConnection:
-    """A pymysql connection shaped the way :class:`Store` expects.
+class PostgresConnection:
+    """A psycopg2 connection shaped the way :class:`Store` expects."""
 
-    pymysql executes on a cursor and returns tuples, where every query here
-    does ``connection.execute(...).fetchone()`` and indexes by column name.
-    Rather than rewrite the queries, this forwards ``execute`` to the cursor and
-    hands back dict rows.
-    """
-
-    def __init__(self, connection):
+    def __init__(self, connection: Any) -> None:
         self._connection = connection
-        self.cursor = _DictCursor(connection.cursor())
 
-    def execute(self, sql: str, params=()):
-        # Returns the cursor, not the rowcount: every read does
-        # connection.execute(...).fetchone(), and an int would fail with
-        # "'int' object has no attribute 'fetchone'".
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> Any:
+        from psycopg2.extras import RealDictCursor
+        cursor = self._connection.cursor(cursor_factory=RealDictCursor)
         if params:
-            self.cursor.execute(sql, params)
+            cursor.execute(sql, params)
         else:
-            self.cursor.execute(sql)
-        return self.cursor
+            cursor.execute(sql)
+        return cursor
 
-    def cursor_for(self):
-        """A fresh cursor, for the rare caller that needs a second one."""
-        return _DictCursor(self._connection.cursor())
+    def cursor_for(self) -> Any:
+        from psycopg2.extras import RealDictCursor
+        return self._connection.cursor(cursor_factory=RealDictCursor)
 
-    def close(self):
+    def close(self) -> None:
         self._connection.close()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        # Autocommit is on, so there is nothing to commit; the context manager
-        # exists so `with store._connect() as connection` reads the same as it
-        # did under sqlite3.
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> Literal[False]:
+        self.close()
         return False
 
-    def commit(self):
+    def commit(self) -> None:
         self._connection.commit()
 
-    def rollback(self):
+    def rollback(self) -> None:
         self._connection.rollback()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._connection, name)
 
 
@@ -179,36 +133,23 @@ class UnknownSave(Exception):
     """No row for that store id."""
 
 
-# MariaDB errno for the errors that mean "somebody else was in here at the same
-# time, run it again" rather than "this statement is wrong":
-#   1020 Record has changed since last read in table X; try restarting transaction
-#   1205 Lock wait timeout exceeded
-#   1213 Deadlock found when trying to get lock; try restarting transaction
-#
-# 1020 earns its place here for a reason worth writing down. It is not even a lock
-# failure: under REPEATABLE READ, writing a snapshot of the row that is being
-# replaced aborts if anyone touched the history table in between. It arrived
-# while serving /questSettings.xml -- a static file -- because flask-session
-# flushes the session at the end of every request, so one unrepeatable write
-# turned an asset download into a 500, and the game silently lost its quest
-# catalogue. The error was a long way from anything that looked like quests.
-TRANSIENT_STORE_ERRNOS = frozenset({1020, 1205, 1213})
+# PostgreSQL error codes for transient lock collisions and serialization errors:
+#   40P01 Deadlock detected
+#   40001 Serialization failure
+#   55P03 Lock not available
+PG_TRANSIENT_CODES = frozenset({"40P01", "40001", "55P03"})
 
 
 def is_transient_store_error(error: BaseException) -> bool:
-    """True for a collision worth retrying, false for anything else.
-
-    None of these is a lost write: the transaction was rolled back, nothing was
-    half-applied, and the statement was not wrong. Running it again is the
-    correct response, and almost always works, because whatever collided has
-    moved on.
-
-    Everything else must *not* be retried. A duplicate key, a missing column or a
-    bad parameter will fail identically every time, and retrying those just turns
-    a clear error into a slow one.
-    """
-    code = error.args[0] if error.args else None
-    return isinstance(code, int) and code in TRANSIENT_STORE_ERRNOS
+    """True for a collision worth retrying, false for anything else."""
+    pgcode = getattr(error, "pgcode", None)
+    if pgcode and str(pgcode) in PG_TRANSIENT_CODES:
+        return True
+    code = getattr(error, "code", None) or (error.args[0] if error.args else None)
+    if code and str(code) in PG_TRANSIENT_CODES:
+        return True
+    name = type(error).__name__
+    return name in ("DeadlockDetected", "SerializationFailure", "LockNotAvailable")
 
 
 class TransientStoreError(Exception):
@@ -240,7 +181,7 @@ class BackupRow:
     created_at: str
 
 
-def account_store_id(zid) -> str:
+def account_store_id(zid: int | str) -> str:
     """The store id for an account.
 
     Mirrors ``account_saves.account_store_id`` -- same shape, so a row written
@@ -250,7 +191,7 @@ def account_store_id(zid) -> str:
     return "acct" + str(zid)
 
 
-def save_uid(data) -> int | None:
+def save_uid(data: Any) -> int | None:
     """The player id inside a save, or None.
 
     Read defensively all the way down: this runs against every row on every
@@ -273,21 +214,8 @@ def save_uid(data) -> int | None:
     return uid if isinstance(uid, int) and not isinstance(uid, bool) else None
 
 
-def save_invaders(data) -> dict:
-    """The invasion map of a save, or an empty one.
-
-    ``user_object.pvp.invaders`` is written by ``init_user`` on first boot, so a
-    save that has it is normal and a save that does not is either an older
-    build, a restored backup or a half-finished paste. Every caller of this is a
-    sweep over *other players* -- the neighbour list, the invasion cleanup --
-    and they index the chain directly, which is what put 121 ``KeyError: 'pvp'``
-    in the log and, worse, made one player's corrupt row take down the sign-up
-    of whoever was creating their empire.
-
-    An empty dict is the right answer for a save with nothing pending, and it is
-    also the safe one: callers that only read counters see zeros, and callers
-    that delete a key can check membership first.
-    """
+def save_invaders(data: Any) -> dict[str, Any]:
+    """The invasion map of a save, or an empty one."""
     if not isinstance(data, dict):
         return {}
     user_object = data.get("user_object")
@@ -301,7 +229,7 @@ def save_invaders(data) -> dict:
 
 
 class Store:
-    """MariaDB-backed save storage.
+    """PostgreSQL 18-backed save storage.
 
     Not a Flask extension and does not import one: the point is that the rules
     about atomicity and history are testable without a request context.
@@ -311,11 +239,10 @@ class Store:
     a store holding arbitrary data. The gateway passes the session interface's
     serializer instead, because that one carries the hooks the game needs --
     ``enc_hook`` for the tagged BattleContext, and the decode walk that turns it
-    back into a struct. A plain encoder round-trips it as an ordinary dict,
-    which is why this is a parameter and not a hardcoded call.
+    back into a struct.
     """
 
-    def __init__(self, path: str, keep: int = DEFAULT_KEEP, codec=None):
+    def __init__(self, path: str, keep: int = DEFAULT_KEEP, codec: Any = None) -> None:
         self.path = path
         self.keep = keep
         self.codec = codec or PlainMsgpack()
@@ -323,64 +250,42 @@ class Store:
 
     # -------------------------------------------------------------- plumbing --
 
-    def _connect(self):
+    def _connect(self) -> PostgresConnection:
         return connect(self.path)
 
     def drop_database(self) -> bool:
-        """Drop the whole database this store points at.
-
-        The counterpart to ``_ensure_schema``, and it exists for the throwaway
-        databases the test suite makes: one per test, named with a uuid so runs
-        cannot see each other. Without this they are simply never removed, and a
-        few hundred runs later the server is carrying a database per assertion
-        that ever ran -- which is exactly what happened.
-
-        It goes through the server rather than ``_connect`` because a connection
-        cannot drop the database it is itself using, for the same reason the
-        CREATE cannot run from inside it.
-        """
+        """Drop the whole database this store points at."""
         from urllib.parse import urlparse, urlunparse
 
         database = urlparse(self.path).path.strip("/")
         if not database:
             return False
 
-        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="")))
+        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="/postgres")))
         try:
-            bootstrap.execute(f"DROP DATABASE IF EXISTS `{database}`")
+            bootstrap.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
             return True
         finally:
             bootstrap.close()
 
     def _ensure_schema(self) -> None:
-        """Create the database if it is missing, then apply the schema.
-
-        Two connections, on purpose. ``_connect`` asks for the database by name
-        and a database that does not exist yet cannot be connected to, so the
-        CREATE runs against the server and only then is the real one opened.
-
-        Statements are split on ``;`` and run one at a time: a statement that
-        fails must not take the whole boot with it, and a skipped index on a
-        column a migration has not added yet should say so rather than be fatal.
-        """
+        """Create the database if it is missing, then apply the schema."""
         from urllib.parse import urlparse, urlunparse
-
-        script = Path(SCHEMA_PATH).read_text(encoding="utf-8").lstrip("\ufeff")
 
         database = urlparse(self.path).path.strip("/")
         if not database:
             raise ValueError(
-                f"{self.path!r} has no database name; SAVE_STORE_PATH must be a "
-                "mariadb://user:password@host:port/database URL")
+                f"{self.path!r} has no database name; SAVE_STORE_PATH must be a database URL")
 
-        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="")))
+        bootstrap = connect(urlunparse(urlparse(self.path)._replace(path="/postgres")))
         try:
-            bootstrap.execute(
-                f"CREATE DATABASE IF NOT EXISTS `{database}` "
-                "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+            cur = bootstrap.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
+            if not cur.fetchone():
+                bootstrap.execute(f'CREATE DATABASE "{database}"')
         finally:
             bootstrap.close()
 
+        script = Path(SCHEMA_PATH).read_text(encoding="utf-8").lstrip("\ufeff")
         connection = self._connect()
         try:
             for statement in strip_sql_comments(script).split(";"):
@@ -391,41 +296,24 @@ class Store:
 
     @staticmethod
     def _now() -> str:
-        """A timestamp both engines accept for a DATETIME column.
-
-        Not ISO-8601: MariaDB rejects "2026-10-18T00:49:51+00:00" with error
-        1292, and sqlite3 stores whatever it is given without complaint, so the
-        portable spelling is the plain SQL form. Computed rather than left to
-        the column default because sqlite3's updated_at default does not fire
-        on UPDATE the way MariaDB's would.
-        """
+        """A timestamp formatted for PostgreSQL TIMESTAMP columns."""
         return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
     # --------------------------------------------------------------- queries --
 
     @staticmethod
-    def _exec(connection, sql: str, params=()):
-        """Run a parameterised statement.
-
-        No placeholder translation: MariaDB wants ``%s`` and that is what the
-        queries are written with. They used to be written with sqlite3's ``?``
-        and rewritten here, which meant a query sent anywhere else stored the
-        literal ``?`` instead of the value -- silently, without an error.
-        """
+    def _exec(connection: Any, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> Any:
+        """Run a parameterised statement."""
         return connection.execute(sql, params) if params else connection.execute(sql)
 
     # ------------------------------------------------------------------ read --
 
     def load(self, store_id: str) -> SaveRow | None:
-        """The live save for a store id, or None.
-
-        None means "this player has not started", not "something went wrong" --
-        the two are told apart by a raise, not by an empty dict.
-        """
+        """The live save for a store id, or None."""
         connection = self._connect()
         try:
             row = self._exec(
-                    connection,
+                connection,
                 "SELECT store_id, revision, data FROM saves WHERE store_id = %s",
                 (store_id,),
             ).fetchone()
@@ -438,18 +326,7 @@ class Store:
                        data=self._decode(row["data"]))
 
     def load_all(self) -> list[SaveRow]:
-        """Every save, in one query.
-
-        This exists because the sweep that reads every player's save -- the
-        neighbour list on every sign-up, the invasion cleanup on every
-        occupation -- used to select the whole table and then call ``load()``
-        once per row. That is N connections and N round trips to fetch data the
-        first query had already delivered, so the cost grew twice as fast as the
-        player count.
-
-        Rows that do not decode are skipped rather than raising: one
-        half-written paste must cost that row, not the whole list.
-        """
+        """Every save, in one query."""
         connection = self._connect()
         try:
             rows = self._exec(
@@ -475,26 +352,14 @@ class Store:
         connection = self._connect()
         try:
             row = self._exec(
-                    connection, 
+                connection,
                 "SELECT 1 FROM saves WHERE store_id = %s", (store_id,)).fetchone()
         finally:
             connection.close()
         return row is not None
 
-    def load_by_uid(self, uid) -> SaveRow | None:
-        """The save for a player the game addresses by uid, or None.
-
-        The game does not address players by store key. An invasion, a pillage
-        and the neighbour list all say "this other player" and mean
-        ``user_object.userInfo.player.uid``. Doing that by scanning meant
-        deserialising *every* empire in the database to compare one number --
-        which is what get_saves() plus a list comprehension did on every
-        invasion, and is why this is an indexed column instead.
-
-        No match is a normal answer, not an error: a row written before the
-        column existed has no uid, and an empire that has never booted has no
-        player either.
-        """
+    def load_by_uid(self, uid: int | str) -> SaveRow | None:
+        """The save for a player the game addresses by uid, or None."""
         connection = self._connect()
         try:
             row = self._exec(
@@ -509,12 +374,8 @@ class Store:
         return SaveRow(store_id=row["store_id"], revision=row["revision"],
                        data=self._decode(row["data"]))
 
-    def rows_without_uid(self) -> list:
-        """(store_id, decoded payload) for every row the column is missing.
-
-        The backfill walks these; reading the payloads here rather than in the
-        migration keeps the message-decoding rules in one place.
-        """
+    def rows_without_uid(self) -> list[tuple[str, Any]]:
+        """(store_id, decoded payload) for every row the column is missing."""
         connection = self._connect()
         try:
             rows = self._exec(
@@ -524,7 +385,7 @@ class Store:
             connection.close()
         return [(row["store_id"], self._decode(row["data"])) for row in rows]
 
-    def set_uid(self, store_id: str, uid) -> bool:
+    def set_uid(self, store_id: str, uid: int | str) -> bool:
         """Fill the uid on a row that predates the column."""
         connection = self._connect()
         try:
@@ -539,8 +400,6 @@ class Store:
     def count(self) -> int:
         connection = self._connect()
         try:
-            # By name, not position: sqlite3's Row supports both, MariaDB's dict
-            # rows only the name.
             return self._exec(
                 connection,
                 "SELECT COUNT(*) AS total FROM saves").fetchone()["total"]
@@ -553,34 +412,23 @@ class Store:
               expected_revision: int | None = None) -> int:
         """Write a save, snapshotting what was there. Returns the new revision.
 
-        ``expected_revision`` is the guard. Pass what :meth:`load` returned and a
-        concurrent writer turns into :class:`WriteConflict` instead of a lost
-        turn. Leave it None only where overwriting is genuinely the intent, such
-        as an admin paste from the editor.
-
-        The snapshot and the new row are written in one transaction: a crash
-        between them would either lose the history or lose the save.
+        Uses PostgreSQL row-level locking (FOR UPDATE) to serialize writes on the same store_id
+        and prevent race conditions.
         """
         blob = self._encode(data)
         now = self._now()
-        # Read out of the payload rather than passed in, so a caller cannot
-        # index one save under another's uid -- and cannot forget to.
         uid = save_uid(data)
 
         connection = self._connect()
         try:
-            # "BEGIN IMMEDIATE" is sqlite3's way of taking the write lock up
-            # front; MariaDB spells it START TRANSACTION, which is immediate by
-            # default. Either way the point is that the snapshot and the new
-            # row land together.
-            connection.execute("START TRANSACTION")
+            connection.execute("BEGIN")
             existing = self._exec(
                 connection,
-                "SELECT id, revision, data FROM saves WHERE store_id = %s",
+                "SELECT id, revision, data FROM saves WHERE store_id = %s FOR UPDATE",
                 (store_id,)).fetchone()
 
             if existing is None:
-                if expected_revision is not None:
+                if expected_revision is not None and expected_revision != 0:
                     raise WriteConflict(
                         f"{store_id}: expected revision {expected_revision} "
                         "but there is no row")
@@ -593,31 +441,8 @@ class Store:
                 return 1
 
             current = existing["revision"]
-            # Keep what is being replaced, not what is replacing it. It comes
-            # from the same read as the revision, so there is one query instead
-            # of two.
-            previous = existing["data"]
+            previous = bytes(existing["data"]) if existing["data"] is not None else b""
 
-            # Nothing to write: the row already holds exactly this payload.
-            #
-            # This is not a rare corner. flask-session persists the session at
-            # the end of *every* request, and the game client fetches ten
-            # assets to start -- so a page load used to write the save ten
-            # times, each write bumping the revision and snapshotting an
-            # identical copy of the empire. The history the editor offers to
-            # restore from was ten identical copies of the same 37 KB, and the
-            # real history -- the level 50 the player wants back -- was trimmed
-            # away to make room for it.
-            #
-            # It was worse than noise: every one of those writes moved the
-            # revision, so the requests that ran at the same time -- the asset
-            # downloads, mostly -- collided on the optimistic lock and the
-            # loser was dropped with a "the row moved underneath" in the log.
-            # The write that lost was not always the useless one.
-            #
-            # Comparing the payload with the stored one is enough to know
-            # there is nothing to write, so nothing is written: no revision
-            # bump, no snapshot, and no chance to collide with anybody.
             if previous == blob:
                 connection.execute("COMMIT")
                 return current
@@ -628,13 +453,13 @@ class Store:
                     f"{current}; someone else wrote in between")
 
             self._exec(
-                    connection, 
+                connection,
                 "INSERT INTO save_backups (save_id, revision, reason, data, "
                 "created_at) VALUES (%s, %s, %s, %s, %s)",
                 (existing["id"], current, reason, previous, now))
 
             self._exec(
-                    connection,
+                connection,
                 "UPDATE saves SET revision = %s, data = %s, uid = %s, updated_at = %s "
                 "WHERE id = %s AND revision = %s",
                 (current + 1, blob, uid, now, existing["id"], current))
@@ -643,35 +468,17 @@ class Store:
             connection.execute("COMMIT")
             return current + 1
         except Exception:
-            # One transaction for the snapshot and the new row: a crash between
-            # them would either lose the history or lose the save. ROLLBACK here
-            # is what makes a WriteConflict leave no orphan snapshot behind.
             connection.execute("ROLLBACK")
             raise
         finally:
             connection.close()
 
-    def _trim(self, connection, save_id: int) -> None:
-        """Drop the oldest snapshots past the limit.
-
-        The obvious one-statement form -- ``DELETE ... WHERE id NOT IN (SELECT ...
-        LIMIT ?)`` -- is rejected by MariaDB with error 1235, which does not
-        support LIMIT inside an IN subquery, and SQLite's multi-table DELETE
-        syntax has no MariaDB equivalent either. So the ids to remove are read
-        first and deleted by id.
-
-        That is safe rather than racy because it happens inside the same
-        transaction as the write that triggered it, on the same connection: the
-        rows cannot move under it between the two statements.
-        """
+    def _trim(self, connection: Any, save_id: int) -> None:
+        """Drop the oldest snapshots past the limit."""
         rows = self._exec(
             connection,
             "SELECT id FROM save_backups WHERE save_id = %s ORDER BY revision DESC",
             (save_id,)).fetchall()
-        # Everything past the newest `keep`. No LIMIT/OFFSET at all: MariaDB
-        # rejects a placeholder in OFFSET (error 1064), and sqlite3 rejects the
-        # "unlimited" value that MariaDB would accept. There are at most a
-        # handful more rows than the limit, so fetching them is nothing.
         stale = [row["id"] for row in rows[self.keep:]]
 
         if stale:
@@ -685,20 +492,16 @@ class Store:
         """Insert a save that is not expected to exist. Fails if it does."""
         if self.exists(store_id):
             raise WriteConflict(f"{store_id} already exists")
-        return self.store(store_id, data, reason)
+        return self.store(store_id, data, reason, expected_revision=0)
 
     # --------------------------------------------------------------- history --
 
     def history(self, store_id: str, limit: int = 50) -> list[BackupRow]:
-        """Snapshots for a save, newest first, without their payloads.
-
-        The payload is deliberately not selected. Listing ten 40 KB blobs to show
-        a menu is how the old editor page paid 18 ms for a level number.
-        """
+        """Snapshots for a save, newest first, without their payloads."""
         connection = self._connect()
         try:
             rows = self._exec(
-                    connection, 
+                connection,
                 "SELECT b.save_id, b.revision, b.reason, LENGTH(b.data) AS size, "
                 "       b.created_at "
                 "  FROM save_backups b JOIN saves s ON s.id = b.save_id "
@@ -715,7 +518,7 @@ class Store:
         connection = self._connect()
         try:
             row = self._exec(
-                    connection, 
+                connection,
                 "SELECT b.data FROM save_backups b JOIN saves s ON s.id = b.save_id "
                 " WHERE s.store_id = %s AND b.revision = %s",
                 (store_id, revision)).fetchone()
@@ -725,12 +528,7 @@ class Store:
 
     def restore(self, store_id: str, revision: int, reason: str | None = None,
                 expected_revision: int | None = None) -> int:
-        """Bring a snapshot back as the live save.
-
-        The snapshot is not consumed: restoring writes the *current* state into
-        history first, so going back one step and forward again is possible.
-        That is what makes this safe to point a button at.
-        """
+        """Bring a snapshot back as the live save."""
         payload = self.read_backup(store_id, revision)
         if payload is None:
             raise UnknownSave(f"{store_id} has no snapshot at revision {revision}")
@@ -742,11 +540,43 @@ class Store:
         connection = self._connect()
         try:
             cursor = self._exec(
-                    connection, 
+                connection,
                 "DELETE FROM saves WHERE store_id = %s", (store_id,))
         finally:
             connection.close()
         return cursor.rowcount > 0
+
+    def clear(self, connection: PostgresConnection | None = None) -> int:
+        """Delete every save and every snapshot. Returns how many there were.
+
+        The store owns its tables, so it is the thing that knows how to empty
+        them.
+
+        It counts before it deletes, because deleting is a write transaction
+        with a WAL flush behind it and counting is a read. The test suite
+        empties the store between every test, and most tests never touch it,
+        so the common answer is "there was nothing there" -- and then nothing
+        is written at all.
+
+        An open `connection` can be handed in so that a caller emptying the
+        store repeatedly does not open a connection per call. It is not closed
+        here: it belongs to whoever passed it.
+        """
+        own = connection is None
+        if own:
+            connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "SELECT (SELECT count(*) FROM saves) + (SELECT count(*) FROM save_backups) AS pending"
+            )
+            row = cursor.fetchone()
+            pending = int(row["pending"]) if row else 0
+            if pending:
+                connection.execute("TRUNCATE TABLE save_backups, saves CASCADE")
+            return pending
+        finally:
+            if own:
+                connection.close()
 
     # ------------------------------------------------------------- internals --
 
@@ -754,12 +584,7 @@ class Store:
         return self.codec.encode(data)
 
     def _decode(self, blob: bytes) -> dict | None:
-        """A payload back into a dict, or None when the bytes are unreadable.
-
-        A row that will not decode is a row some other code wrote badly; it must
-        not take the request down, and it must not come back as an empty dict
-        that looks like a new player.
-        """
+        """A payload back into a dict, or None when the bytes are unreadable."""
         try:
             return self.codec.decode(bytes(blob))
         except Exception as error:
@@ -768,12 +593,7 @@ class Store:
 
 
 class PlainMsgpack:
-    """Default codec: msgspec, no game-specific hooks.
-
-    Enough for the store's own tests and for anything holding plain data. The
-    gateway replaces it because the empire carries a tagged struct that needs
-    ``enc_hook`` on the way out and a walk on the way back in.
-    """
+    """Default codec: msgspec, no game-specific hooks."""
 
     def encode(self, data: dict) -> bytes:
         import msgspec

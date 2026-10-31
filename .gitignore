@@ -4,6 +4,14 @@
 /*.spec
 *.rar
 /log.txt
+/log-test.txt
+# Los logs del watchdog del stack.
+/log-gateway.out.log
+/log-gateway.err.log
+/log-web.out.log
+/log-web.err.log
+# El log rotado. pesa 6 MB y no aporta nada al proyecto.
+/log.txt.*
 /server.out.log
 /server.err.log
 # Gateway logs from a run started with stdout redirected, plus the scratch
@@ -26,14 +34,22 @@
 /_gw.err.log
 /_gw[0-9].*.log
 /_mysqld.*.log
+/_tools/
 /_*.py
-# Copia de seguridad de las partidas basura que se borraron de MariaDB. Vive
+# Experimentos descartados y la cache de wheels de pip. Ni el uno ni el otro
+# son contenido del proyecto.
+/scratch/
+/_wheels/
+# Copias de respaldo de assets, guardadas por si un swf sale mal.
+/assets/*.bak
+/assets/*.bak[0-9]*
+# Copia de seguridad de las partidas basura que se borraron de la base. Vive
 # en la raiz para poder recuperarla, pero no es contenido del proyecto.
 /_junk_saves_backup.json
 /chromium
 /chromium-profile
 /cache
-# Saves live in MariaDB (SAVE_STORE_PATH). These only match a stray file from
+# Saves live in PostgreSQL (SAVE_STORE_PATH). These only match a stray file from
 # before the move, so that one can never be committed by accident.
 /save.db
 /instance

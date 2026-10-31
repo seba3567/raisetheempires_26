@@ -38,12 +38,14 @@ before exposing the port.
 from __future__ import annotations
 
 import logging
-import os
+from typing import Any
 
 from flask import Flask
 from flask.wrappers import Request
 from flask_session import Session
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
+
+import contract
 
 #: Where the three "the save was not written" messages go.
 #:
@@ -112,7 +114,7 @@ class AccountBoundSqlAlchemySessionInterface(SqlAlchemySessionInterface):
     account, one save" is true of the table and not merely of the code path.
     """
 
-    def open_session(self, app: Flask, request: Request):
+    def open_session(self, app: Flask, request: Request) -> Any:
         zid = self._supplied_zid()
         if zid is None:
             return super().open_session(app, request)
@@ -133,13 +135,13 @@ class AccountBoundSqlAlchemySessionInterface(SqlAlchemySessionInterface):
             return self.session_class(stored, sid=sid)
         return self.session_class(sid=sid, permanent=self.permanent)
 
-    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str):
+    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str) -> dict[str, Any] | None:
         """Take over the browser's anonymous save. Overridden where there is a store.
 
         The parent has no save store of its own -- it persists through the
         sessions table -- so there is nothing to move and nothing to say.
         """
-        return
+        return None
 
     def _get_store_id(self, sid: str) -> str:
         zid = self._supplied_zid()
@@ -196,8 +198,22 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
     #: Same deal: stripped before the payload is stored.
     REASON_KEY = "__backup_reason"
 
+    #: Snapshot of the initial state loaded at request start, used for 3-way merge
+    #: if a concurrent write conflict occurs during session finalization.
+    SNAPSHOT_KEY = "__save_snapshot"
+
+    def open_session(self, app: Flask, request: Request) -> Any:
+        sess = super().open_session(app, request)
+        if sess and hasattr(sess, "__setitem__"):
+            try:
+                import copy
+                sess[self.SNAPSHOT_KEY] = copy.deepcopy(dict(sess))
+            except Exception:
+                sess[self.SNAPSHOT_KEY] = None
+        return sess
+
     @property
-    def save_store(self):
+    def save_store(self) -> Any:
         from save_store import Store
 
         store = getattr(self, "_save_store", None)
@@ -214,12 +230,10 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
 
     @staticmethod
     def _save_store_path(app: Flask) -> str:
-        """The MariaDB URL the saves live in.
+        """The PostgreSQL URL the saves live in.
 
-        Read from ``SAVE_STORE_PATH`` so the deployment, not the code, decides
-        which server. There is no SQLite fallback any more: a bare filename
-        used to mean SQLite and now raises in Store, loudly, rather than
-        quietly creating a second database somewhere on disk.
+        Read from ``RTE_DB_URL`` so the deployment, not the code, decides
+        which server. The old name, ``SAVE_STORE_PATH``, still works.
         """
         from flask import current_app
 
@@ -227,13 +241,9 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         configured = current.config.get("SAVE_STORE_PATH")
         if configured:
             return configured
-        # importlib.metadata would be overkill for a default; the same value the
-        # deployment sets, spelled out so a fresh checkout starts somewhere.
-        return os.environ.get(
-            "SAVE_STORE_PATH",
-            "mariadb://root:2001@127.0.0.1:3306/raisetheempires")
+        return contract.env_value(contract.ENV_DATABASE_URL) or contract.DATABASE_URL
 
-    def _retrieve_session_data(self, store_id: str):
+    def _retrieve_session_data(self, store_id: str) -> dict[str, Any] | None:
         row = self.save_store.load(store_id)
         if row is None or row.data is None:
             return None
@@ -241,7 +251,7 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         payload[self.REVISION_KEY] = row.revision
         return payload
 
-    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str):
+    def _adopt_anonymous_save(self, app: Flask, request: Request, account_key: str) -> dict[str, Any] | None:
         """Move a browser's anonymous empire onto the account, once.
 
         Only ever called for an account that has no save, so this can never
@@ -284,21 +294,10 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         # conflict with the write we just made.
         return self._retrieve_session_data(account_key)
 
-    def _store_with_retry(self, store_id, payload, reason, revision):
-        """Write the session, retrying once if MariaDB picks us as the victim.
+    def _store_with_retry(self, store_id: str, payload: dict[str, Any], reason: str | None, revision: int | None) -> int:
+        """Write the session, retrying once if PostgreSQL reports a lock collision."""
+        import time
 
-        A deadlock is not a lost write: MariaDB rolled the transaction back and
-        chose this one to abort precisely so the other could finish. Running it
-        again almost always succeeds, because whatever collided has moved on. One
-        retry is the standard remedy, and bounding it at one is the point -- an
-        unbounded retry against a hot row turns a transient collision into a hung
-        request.
-
-        Only the two lock errors are retried. A duplicate key or a missing column
-        will not improve by trying again, and a WriteConflict is a different
-        thing: the row legitimately moved, and the caller above deals with that
-        rather than retrying it.
-        """
         from save_store import TransientStoreError, is_transient_store_error
 
         for attempt in (1, 2):
@@ -308,22 +307,128 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             except Exception as error:
                 if not is_transient_store_error(error):
                     raise
-                # Wrapping rather than re-raising the driver's own error is what
-                # lets the caller above tell "this lock did not clear" apart from
-                # a genuine failure. Without it the retry budget is pointless:
-                # the second collision would escape as an OperationalError nobody
-                # upstream is catching.
                 if attempt == 2:
                     raise TransientStoreError(
                         f"{store_id}: lock collision survived one retry") from error
-                logger.warning("Session save hit a lock collision, retrying once: %s", error)
+                # The retry is the recovery. A collision that survives it
+                # raises, and that is logged as the error it is.
+                logger.info("Session save hit a lock collision, retrying once: %s", error)
+                time.sleep(0.05 * attempt)
         raise AssertionError("unreachable")
 
-    def _upsert_session(self, session_lifetime, session, store_id) -> None:
+    @classmethod
+    def _merge_3way(cls, base: Any, ours: Any, theirs: Any) -> Any:
+        """3-way merge of two concurrent mutations `ours` and `theirs` against `base`."""
+        if ours == base:
+            return theirs
+        if theirs == base:
+            return ours
+        if ours == theirs:
+            return ours
+
+        if isinstance(ours, dict) and isinstance(theirs, dict):
+            base_dict = base if isinstance(base, dict) else {}
+            all_keys = set(base_dict.keys()) | set(ours.keys()) | set(theirs.keys())
+            merged: dict[str, Any] = {}
+            for k in all_keys:
+                in_base = k in base_dict
+                in_ours = k in ours
+                in_theirs = k in theirs
+
+                if in_ours and not in_theirs and not in_base:
+                    merged[k] = ours[k]
+                elif in_theirs and not in_ours and not in_base:
+                    merged[k] = theirs[k]
+                elif not in_ours and in_base and (not in_theirs or theirs[k] == base_dict[k]):
+                    # Deleted in ours and untouched in theirs
+                    continue
+                elif not in_theirs and in_base and (not in_ours or ours[k] == base_dict[k]):
+                    # Deleted in theirs and untouched in ours
+                    continue
+                elif in_ours and in_theirs:
+                    v_ours = ours[k]
+                    v_theirs = theirs[k]
+                    v_base = base_dict.get(k)
+
+                    if k == "objects" and isinstance(v_ours, list) and isinstance(v_theirs, list):
+                        merged[k] = cls._merge_world_objects(v_base, v_ours, v_theirs)
+                    elif (isinstance(v_ours, (int, float)) and not isinstance(v_ours, bool) and
+                          isinstance(v_theirs, (int, float)) and not isinstance(v_theirs, bool) and
+                          in_base and isinstance(v_base, (int, float)) and not isinstance(v_base, bool)):
+                        if k == "globalObjectId":
+                            merged[k] = max(v_ours, v_theirs)
+                        else:
+                            # Delta merge for numeric counters (coins, cash, xp, energy, etc.)
+                            d_ours = v_ours - v_base
+                            d_theirs = v_theirs - v_base
+                            merged[k] = type(v_base)(v_base + d_ours + d_theirs)
+                    elif isinstance(v_ours, dict) and isinstance(v_theirs, dict):
+                        merged[k] = cls._merge_3way(v_base, v_ours, v_theirs)
+                    else:
+                        if in_base and v_ours == v_base:
+                            merged[k] = v_theirs
+                        else:
+                            merged[k] = v_ours
+                elif in_ours:
+                    merged[k] = ours[k]
+                elif in_theirs:
+                    merged[k] = theirs[k]
+            return merged
+
+        # Fallback for non-dicts: prefer ours
+        return ours
+
+    @classmethod
+    def _merge_world_objects(cls, base_list: Any, ours_list: list[Any], theirs_list: list[Any]) -> list[Any]:
+        """Merge list of world objects by their object 'id'."""
+        base_map = {obj.get("id"): obj for obj in (base_list or []) if isinstance(obj, dict) and "id" in obj}
+        ours_map = {obj.get("id"): obj for obj in ours_list if isinstance(obj, dict) and "id" in obj}
+        theirs_map = {obj.get("id"): obj for obj in theirs_list if isinstance(obj, dict) and "id" in obj}
+
+        seen_ids = set()
+        merged_ids = []
+        for obj in theirs_list:
+            if isinstance(obj, dict) and "id" in obj:
+                oid = obj["id"]
+                if oid not in seen_ids:
+                    seen_ids.add(oid)
+                    merged_ids.append(oid)
+        for obj in ours_list:
+            if isinstance(obj, dict) and "id" in obj:
+                oid = obj["id"]
+                if oid not in seen_ids:
+                    seen_ids.add(oid)
+                    merged_ids.append(oid)
+
+        result = []
+        for oid in merged_ids:
+            in_base = oid in base_map
+            in_ours = oid in ours_map
+            in_theirs = oid in theirs_map
+
+            if in_ours and in_theirs:
+                result.append(cls._merge_3way(base_map.get(oid), ours_map[oid], theirs_map[oid]))
+            elif in_ours:
+                result.append(ours_map[oid])
+            elif in_theirs:
+                if in_base and theirs_map[oid] == base_map[oid]:
+                    continue
+                result.append(theirs_map[oid])
+
+        extra_theirs = [x for x in theirs_list if not (isinstance(x, dict) and "id" in x)]
+        extra_ours = [x for x in ours_list if not (isinstance(x, dict) and "id" in x)]
+        result.extend(extra_theirs)
+        for x in extra_ours:
+            if x not in result:
+                result.append(x)
+
+        return result
+
+    def _upsert_session(self, session_lifetime: Any, session: Any, store_id: str) -> None:
 
         from save_store import TransientStoreError, WriteConflict
 
-        private = (self.REVISION_KEY, self.REASON_KEY)
+        private = (self.REVISION_KEY, self.REASON_KEY, self.SNAPSHOT_KEY)
         payload = {key: value for key, value in session.items()
                    if key not in private}
         revision = session.get(self.REVISION_KEY)
@@ -340,46 +445,53 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
             self.save_store.delete(store_id)
             return
 
-        try:
-            written = self._store_with_retry(store_id, payload, reason, revision)
-        except WriteConflict as conflict:
-            # This runs during response finalisation: the response the player is
-            # getting has already been built. Raising here turned a perfectly
-            # good turn into a 500, and the front end then failed to parse "It
-            # went wrong" as JSON -- a far worse symptom than a dropped
-            # background flush.
-            #
-            # The row belongs to whoever wrote last, and the response in hand was
-            # computed from the session in hand, so this write is redundant
-            # rather than lost. Say so, and let the response through.
-            logger.error("Session save skipped, the row moved underneath: %s", conflict)
-            session.modified = False
-            return
-        except TransientStoreError as error:
-            # Same reasoning as above: the response is already built and the
-            # player cannot read anything we could put in an error body. A
-            # collision that survived its retry is worth shouting about in the
-            # log, and not worth a 500.
-            logger.error("Session save dropped after a retry: %s", error)
-            session.modified = False
-            return
-        except Exception as error:
-            # The general rule, because enumerating driver errnos never finishes.
-            #
-            # This runs during response finalisation. Whatever went wrong here,
-            # the bytes the player gets are already built, and an exception turns
-            # them into a 500 -- including for requests that had nothing to do
-            # with saving anything. flask-session flushes at the end of *every*
-            # request, so one unrepeatable write turned the download of
-            # /questSettings.xml into a 500, the game silently lost its quest
-            # catalogue, and the quest manager then dereferenced null on the next
-            # transaction. An asset fetch failing as a side effect of a background
-            # write is the part that hid it for so long.
-            #
-            # Log loudly, let the response out. The next request tries again.
-            logger.error("Session save failed during response finalisation: %r", error)
-            session.modified = False
-            return
+        written = None
+        max_conflict_retries = 3
+        current_payload = payload
+        current_revision = revision
+
+        for conflict_attempt in range(max_conflict_retries):
+            try:
+                written = self._store_with_retry(store_id, current_payload, reason, current_revision)
+                break
+            except WriteConflict as conflict:
+                if conflict_attempt == max_conflict_retries - 1:
+                    logger.error(
+                        "Session save skipped, the row moved underneath (exhausted %d retries): %s",
+                        max_conflict_retries, conflict
+                    )
+                    session.modified = False
+                    return
+                logger.warning(
+                    "Session save hit WriteConflict (attempt %d/%d): %s; merging changes",
+                    conflict_attempt + 1, max_conflict_retries, conflict
+                )
+                try:
+                    latest_row = self.save_store.load(store_id)
+                    if latest_row is None or latest_row.data is None:
+                        current_revision = None
+                        continue
+                    base = session.get(self.SNAPSHOT_KEY)
+                    current_payload = self._merge_3way(base, current_payload, latest_row.data)
+                    current_revision = latest_row.revision
+                    session[self.SNAPSHOT_KEY] = latest_row.data
+                except Exception as merge_err:
+                    logger.error("Failed to merge concurrent session updates: %s", merge_err)
+                    session.modified = False
+                    return
+            except TransientStoreError as error:
+                # Same reasoning as above: the response is already built and the
+                # player cannot read anything we could put in an error body. A
+                # collision that survived its retry is worth shouting about in the
+                # log, and not worth a 500.
+                logger.error("Session save dropped after a retry: %s", error)
+                session.modified = False
+                return
+            except Exception as error:
+                # The general rule, because enumerating driver errnos never finishes.
+                logger.error("Session save failed during response finalisation: %r", error)
+                session.modified = False
+                return
 
         # Keep the session's idea of the revision current.
         #
@@ -390,9 +502,35 @@ class SaveStoreSessionInterface(AccountBoundSqlAlchemySessionInterface):
         # request then arrived with a revision that was already stale, and
         # conflicted with itself.
         session[self.REVISION_KEY] = written
+        base_snapshot = session.get(self.SNAPSHOT_KEY)
         # The reason has been spent on the write that just happened; carrying it
         # over would label the next snapshot with it too.
         session.pop(self.REASON_KEY, None)
+        session.pop(self.SNAPSHOT_KEY, None)
+
+        if is_account_store_id(store_id) and self._progress_changed(base_snapshot, current_payload):
+            from save_engine import sync_account_progress
+            sync_account_progress(current_payload)
+
+    @staticmethod
+    def _progress_changed(base: Any, current: dict[str, Any]) -> bool:
+        from save_engine import get_dict
+
+        cur_info = get_dict(current, "user_object", "userInfo")
+        cur_p = cur_info.get("player")
+        if not isinstance(cur_p, dict):
+            return False
+        if not isinstance(base, dict):
+            return True
+        base_info = get_dict(base, "user_object", "userInfo")
+        base_p = base_info.get("player")
+        if not isinstance(base_p, dict):
+            return True
+        return (
+            cur_p.get("level") != base_p.get("level")
+            or cur_p.get("xp") != base_p.get("xp")
+            or cur_info.get("worldName") != base_info.get("worldName")
+        )
 
     def _delete_session(self, session_id: str, app: Flask | None = None) -> None:
         self.save_store.delete(session_id)

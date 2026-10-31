@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, test } from 'bun:test';
 
-import { accessDenied, adminDecision, adminOnlyPaths } from '#lib/access';
+import { accessDenied, adminDecision, adminOnlyPaths, safeDecodePath } from '#lib/access';
 import { createUser, isAdmin } from '#lib/server/models/accounts';
 import { createSessionValue, readSession } from '#lib/server/session';
 import { resetDb } from './helpers.ts';
@@ -21,6 +21,54 @@ beforeEach(async () => {
 });
 
 describe('accessDenied classification', () => {
+	/**
+	 * An encoded path used to walk straight past the gate.
+	 *
+	 * `event.url.pathname` is the raw path, still encoded, while Werkzeug --
+	 * which routes the request on the other side -- decodes it before matching
+	 * a rule. So `/gazillionaire` was refused and `/%67azillionaire` was not,
+	 * and that one reached the route that adds ten thousand coins to the
+	 * caller's empire. `/list%5Fsession` handed over every player's session
+	 * id, and `/editor%2Fsave` replaced a save outright.
+	 */
+	test('an encoded path cannot walk past the gate', () => {
+		for (const path of [
+			'/%67azillionaire',
+			'/g%61zillionaire',
+			'/list%5Fsession',
+			'/%73ave',
+			'/editor%2Fsave',
+			'/editor%2Frestore',
+			'/d%65progress',
+			'/wipe%5Fsession',
+			'/%61dmin/editor',
+			'/api%2Fgift%2Fsend',
+			'/patch%2Fplayer%2Fname%2Fstring%2Fbob',
+		]) {
+			expect(`${path}: ${accessDenied(path)}`).toBe(`${path}: true`);
+		}
+	});
+
+	test('a doubly encoded path cannot walk past the gate either', () => {
+		// %252F is %25 encoded twice: one pass is not enough to see the slash.
+		expect(accessDenied('/editor%252Fsave')).toBe(true);
+		expect(accessDenied('/%2567azillionaire')).toBe(true);
+	});
+
+	test('a path that will not decode is refused', () => {
+		// The gate cannot classify what it cannot read, and the safe reading
+		// of "cannot tell" is "no".
+		expect(accessDenied('/%')).toBe(true);
+		expect(accessDenied('/%zz')).toBe(true);
+		expect(safeDecodePath('/%')).toBeNull();
+	});
+
+	test('an ordinary path is still left open', () => {
+		for (const path of ['/juego', '/assets/img/logo.png', '/flashservices/gateway.php']) {
+			expect(`${path}: ${accessDenied(path)}`).toBe(`${path}: false`);
+		}
+	});
+
 	test('gates every route that mutates game state', () => {
 		for (const path of [
 			'/save-editor',
@@ -51,6 +99,10 @@ describe('accessDenied classification', () => {
 			'/admin/sessions',
 			'/patch/player/name/string/bob',
 			'/seed/w/3/z/2',
+			'/save',
+			'/api/pvp/reward',
+			'/api/gift/claim',
+			'/api/gift/send',
 		]) {
 			expect(`${path}: ${accessDenied(path)}`).toBe(`${path}: true`);
 		}

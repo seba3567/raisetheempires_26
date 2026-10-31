@@ -41,10 +41,10 @@ describe('buildFlashVars', () => {
 
 	test('keeps the flags the client expects', () => {
 		const parsed = parse(buildFlashVars('http://localhost:8080'));
-		expect(parsed['is_staging']).toBe('true');
-		expect(parsed['debugMode']).toBe('true');
-		expect(parsed['generateSchema']).toBe('1');
-		expect(parsed['stats']).toBe('1');
+		expect(parsed['is_staging']).toBe('false');
+		expect(parsed['debugMode']).toBe('false');
+		expect(parsed['generateSchema']).toBe('0');
+		expect(parsed['stats']).toBe('0');
 	});
 
 	test('serverTime is a recent unix timestamp in seconds', () => {

@@ -38,6 +38,8 @@ tested without trusting a precomputed table. See ``test/test_crc64.py``.
 
 from __future__ import annotations
 
+import contract
+
 __all__ = [
     "CRC64_GO_ISO_CHECK",
     "build_table",
@@ -57,7 +59,11 @@ _MASK64 = 0xFFFFFFFFFFFFFFFF
 CRC64_GO_ISO_CHECK = 0xB90956C775A41001
 
 #: ``zid`` divides the checksum down to keep the number manageable.
-_ZID_DIVISOR = 2048
+#:
+#: The divisor is a contract with the web front door: both sides derive the
+#: player's id this way, so a change on one side has to change on the other.
+#: It lives in ``contract/runtime.json`` for that reason.
+_ZID_DIVISOR = contract.ZID_DIVISOR
 
 
 def build_table(polynomial: int = _POLYNOMIAL_REFLECTED) -> tuple[int, ...]:

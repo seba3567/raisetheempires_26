@@ -15,21 +15,118 @@ jobs:
   run_web_tests:
     name: Test and Check SvelteKit Frontend
     runs-on: ubuntu-latest
+    env:
+      # The suite builds its own database from this URL, so it only has to
+      # point at a reachable server. Without one, every test that touches the
+      # database fails on the connection.
+      RTE_TEST_DB_URL: postgres://postgres:postgres@127.0.0.1:5432/rte_web_test
     steps:
     - uses: actions/checkout@v5
     - name: Set up Bun
       uses: oven-sh/setup-bun@v2
       with:
         bun-version: latest
+    - name: Start PostgreSQL
+      uses: ./.github/actions/start-postgresql
     - name: Install web dependencies
       working-directory: web
       run: bun install --frozen-lockfile
     - name: Check types with svelte-check
       working-directory: web
       run: bun run check
+    - name: Build the front door
+      # A build break used to pass this job: it checked the types and ran the
+      # tests, but never produced the bundle. A missing module or a bad adapter
+      # option only shows up when the thing is built.
+      working-directory: web
+      run: bun run --bun build
     - name: Run unit & integration tests
       working-directory: web
       run: bun test
+
+  web_smoke:
+    # The job that builds the front door and talks to it.
+    #
+    # Every other job drives the two runtimes in process, which means the
+    # wiring between them was never exercised: the port the server binds, the
+    # origin compiled into the build and the `Host` header the proxy sends
+    # upstream are three separate things that have to agree, and nothing
+    # checked that they did.
+    #
+    # They disagreed once. The front door bound port 3000 while the build baked
+    # http://localhost:8080, the Bun adapter rewrote every request onto that
+    # baked origin, and SvelteKit refused every form POST as a cross-site
+    # submission: the login answered 403 while every page loaded normally. The
+    # unit tests could not see it, because they never load the configuration
+    # and never start the server.
+    name: Build the front door and talk to it
+    runs-on: ubuntu-latest
+    env:
+      # The server builds its own database from this URL.
+      RTE_DB_URL: postgres://postgres:postgres@127.0.0.1:5432/raisetheempires
+      RTE_DB_NAME: raisetheempires
+      SESSION_SECRET: ci-secret-not-for-production
+      PORT: 8080
+      HOST: 127.0.0.1
+      PUBLIC_ORIGIN: http://localhost:8080
+      GATEWAY_ORIGIN: http://127.0.0.1:5005
+    steps:
+    - uses: actions/checkout@v5
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    - name: Start PostgreSQL
+      uses: ./.github/actions/start-postgresql
+    - name: Install web dependencies
+      working-directory: web
+      run: bun install --frozen-lockfile
+    - name: Build the front door
+      working-directory: web
+      run: bun run --bun build
+    - name: Start the front door
+      working-directory: web
+      run: |
+        bun ./build > web.log 2>&1 &
+        echo "WEB_PID=$!" >> $GITHUB_ENV
+    - name: Wait for it to answer
+      run: |
+        for attempt in $(seq 1 60); do
+          if curl -fsS -o /dev/null http://127.0.0.1:8080/; then
+            echo "the front door answered after ${attempt}s"
+            exit 0
+          fi
+          if ! kill -0 "$WEB_PID" 2>/dev/null; then
+            echo "::error::the front door exited during startup"
+            cat web/web.log
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "::error::the front door never answered"
+        cat web/web.log
+        exit 1
+    - name: The front door does not refuse its own login
+      run: |
+        # A form POST whose Origin is not the one compiled into the build is
+        # refused with 403 "Cross-site POST form submissions are forbidden".
+        # The status here has to be anything but 403: the credentials are
+        # wrong on purpose, so the honest answer is 401.
+        status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/entrar \
+          -H 'Origin: http://localhost:8080' \
+          -H 'Content-Type: application/x-www-form-urlencoded' \
+          --data 'username=nobody&password=nobody')
+        echo "POST /entrar -> $status"
+        if [ "$status" = "403" ]; then
+          echo "::error::the front door refuses its own login: the origin it was built with and the origin it serves disagree"
+          exit 1
+        fi
+    - name: Front door log
+      if: always()
+      run: cat web/web.log
+    - name: Stop the front door
+      if: always()
+      run: kill "$WEB_PID" 2>/dev/null || true
 
   run_tests:
     runs-on: ubuntu-latest
@@ -37,6 +134,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+    env:
+      # The gateway suite points at its own database, and the save store's
+      # tests at another, so a run never wipes the tables the other is using.
+      RTE_TEST_DB: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rte_gateway_test
+      RTE_PG_TEST_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rte_savestore_test
     steps:
     - uses: actions/checkout@v5
     - name: Set up Python ${{ matrix.python-version }}
@@ -45,6 +147,9 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: pip
         cache-dependency-path: pyproject.toml
+
+    - name: Start PostgreSQL
+      uses: ./.github/actions/start-postgresql
 
     - name: Install dependencies
       run: |
@@ -112,6 +217,16 @@ jobs:
     # when someone remembers to boot the server by hand.
     name: Boot the gateway and talk to it
     runs-on: ubuntu-latest
+    env:
+      # The gateway keeps its saves in PostgreSQL and builds the store while
+      # the app is configured, so it cannot start without a server: with an
+      # unreachable one it dies in configure_app() with an OperationalError
+      # before it ever binds a port.
+      # The canonical name, the same one the web front door reads. The gateway
+      # used to call this SAVE_STORE_PATH and the front door RTE_DB_URL, and
+      # a deployment that set one of each pair pointed the two halves at
+      # different databases.
+      RTE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/raisetheempires
     steps:
     - uses: actions/checkout@v5
 
@@ -121,6 +236,9 @@ jobs:
         python-version: "3.13"
         cache: pip
         cache-dependency-path: pyproject.toml
+
+    - name: Start PostgreSQL
+      uses: ./.github/actions/start-postgresql
 
     - name: Install dependencies
       run: |

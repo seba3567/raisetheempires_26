@@ -5,21 +5,27 @@
  *   bun run scripts/manage-user.ts list-admins
  *   bun run scripts/manage-user.ts promote <username>
  *   bun run scripts/manage-user.ts demote  <username>
+ *   bun run scripts/manage-user.ts delete   <username>
  *
  * The password is read from the environment so it never lands in a shell
  * history entry, a log line, or this file.
+ *
+ * This ran against the old synchronous database API and had been broken ever
+ * since the queries became promises: `db().query is not a function`, and
+ * `findByUsername()` returned a promise, so "does this user exist" was always
+ * false and the script reported that every username was already taken. Since
+ * this is the documented way to create the first admin, the server had no
+ * working way in at all.
  */
 import { config } from '#lib/server/config';
-import { db } from '#lib/server/db/client';
+import { all, one, run } from '#lib/server/db/client';
 import {
-	createUser,
-	findByUsername,
-	isAdmin,
-	setRole,
-	UsernameTaken
+  createUser,
+  findByUsername,
+  isAdmin,
+  setRole,
+  UsernameTaken
 } from '#lib/server/models/accounts';
-
-db();
 
 const [command, argument] = process.argv.slice(2);
 
@@ -41,13 +47,13 @@ async function createAdmin(): Promise<void> {
     process.exit(2);
   }
 
-  const existing = findByUsername(username);
+  const existing = await findByUsername(username);
   if (existing) {
     // Never print a role a stranger could not already infer, and never touch a
     // password from here: that is a deliberate decision, not a CLI flag.
     console.log(`User "${username}" already exists (role: ${existing.role}).`);
     if (existing.role !== "admin") {
-      setRole(existing.id, "admin");
+      await setRole(existing.id, "admin");
       console.log(`Promoted "${username}" to admin.`);
     }
     return;
@@ -65,12 +71,10 @@ async function createAdmin(): Promise<void> {
   }
 }
 
-function listAdmins(): void {
-  const rows = db()
-    .query<{ id: number; username: string; zid: number; created_at: string }, []>(
-      "SELECT id, username, zid, created_at FROM users WHERE role = 'admin' ORDER BY id",
-    )
-    .all();
+async function listAdmins(): Promise<void> {
+  const rows = await all<{ id: number; username: string; zid: number; created_at: string }>(
+    "SELECT id, username, zid, created_at FROM users WHERE role = 'admin' ORDER BY id",
+  );
 
   if (rows.length === 0) {
     console.log("No admins yet. Run: bun run scripts/manage-user.ts create-admin");
@@ -81,38 +85,36 @@ function listAdmins(): void {
   }
 }
 
-function changeRole(role: "admin" | "player"): void {
+async function changeRole(role: "admin" | "player"): Promise<void> {
   if (!argument) {
     console.error(`Usage: bun run scripts/manage-user.ts promote|demote <username>`);
     process.exit(2);
   }
-  const target = findByUsername(argument);
+  const target = await findByUsername(argument);
   if (!target) {
     console.error(`No such user: ${argument}`);
     process.exit(1);
   }
-  if (isAdmin(target) === (role === "admin")) {
+  if ((await isAdmin(target)) === (role === "admin")) {
     console.log(`"${target.username}" is already a ${role}.`);
     return;
   }
-  setRole(target.id, role);
+  await setRole(target.id, role);
   console.log(`"${target.username}" is now a ${role}.`);
 }
 
-function deleteUser(): void {
+async function deleteUser(): Promise<void> {
   if (!argument) {
     console.error("Usage: bun run scripts/manage-user.ts delete <username>");
     process.exit(2);
   }
-  const target = findByUsername(argument);
+  const target = await findByUsername(argument);
   if (!target) {
     console.log(`No such user: ${argument}`);
     return;
   }
-  if (isAdmin(target)) {
-    const admins = db()
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")
-      .get();
+  if (await isAdmin(target)) {
+    const admins = await one<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'");
     if ((admins?.n ?? 0) <= 1) {
       console.error('Refusing to delete the last admin. Demote or create another first.');
       process.exit(1);
@@ -120,7 +122,7 @@ function deleteUser(): void {
   }
 
   // friends, progress and activity all cascade from users.
-  db().run("DELETE FROM users WHERE id = ?", target.id);
+  await run("DELETE FROM users WHERE id = ?", target.id);
   console.log(`Deleted "${target.username}" (id ${target.id}).`);
 }
 
@@ -129,16 +131,16 @@ switch (command) {
     await createAdmin();
     break;
   case "list-admins":
-    listAdmins();
+    await listAdmins();
     break;
   case "promote":
-    changeRole("admin");
+    await changeRole("admin");
     break;
   case "demote":
-    changeRole("player");
+    await changeRole("player");
     break;
   case "delete":
-    deleteUser();
+    await deleteUser();
     break;
   default:
     console.error(
@@ -147,4 +149,4 @@ switch (command) {
     process.exit(2);
 }
 
-console.log(`(database: ${config.database.file})`);
+console.log(`(database: ${config.database.name})`);

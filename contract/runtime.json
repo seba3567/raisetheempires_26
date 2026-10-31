@@ -1,0 +1,134 @@
+{
+	"_readme": [
+		"The facts the two runtimes of this project have to agree on.",
+		"",
+		"The Python gateway (repo root) and the SvelteKit front door (web/) are",
+		"separate programs in two languages, and they meet over HTTP, over a",
+		"PostgreSQL database, and over the identity of the player. Every value",
+		"that crosses one of those seams used to be written down twice, once per",
+		"language, with nothing checking that the two copies still matched.",
+		"",
+		"That is not a style problem. When the front door bound port 3000 while",
+		"the origin compiled into the build said 8080, every page loaded and",
+		"every form was refused with 403 'Cross-site POST form submissions are",
+		"forbidden' -- the login included -- and nothing in either language said",
+		"the two disagreed.",
+		"",
+		"This file is the single place those values are written down. The Python",
+		"side reads it through contract.py; the web side reads it through",
+		"web/src/lib/server/config.ts. Both test suites read it and assert that",
+		"what each runtime resolved matches what is written here, so a value",
+		"that drifts fails the build instead of the game.",
+		"",
+		"Environment variables still win over everything in this file: this is",
+		"where the defaults live, not where a deployment is configured."
+	],
+
+	"database": {
+		"_readme": "The one PostgreSQL server for the whole project: the gateway's saves and the front door's accounts share it.",
+		"host": "127.0.0.1",
+		"port": 5432,
+		"user": "postgres",
+		"password": "42kSM0ud2nRLlTZv6YVsXgPcbxwAx9Qe!7a",
+		"name": "raisetheempires"
+	},
+
+	"gateway": {
+		"_readme": "The AMF0 gateway. Loopback only: the front door is its only door.",
+		"host": "127.0.0.1",
+		"port": 5005
+	},
+
+	"public": {
+		"_readme": "The front door. The port has to be the port of PUBLIC_ORIGIN, or every form POST is refused as cross-site.",
+		"host": "0.0.0.0",
+		"port": 8080
+	},
+
+	"headers": {
+		"_readme": [
+			"How the front door hands the signed-in account's identity to the gateway.",
+			"",
+			"Both are set by the front door and never forwarded from the client:",
+			"the proxy copies whatever the browser sent, so a player must not be",
+			"able to claim an identity by sending the header itself.",
+			"",
+			"The role is the front door's to declare. It owns the accounts and the",
+			"roles; the gateway owns the saves. Asking the gateway to look the role",
+			"up in the accounts table would make it depend on another runtime's",
+			"schema, which is how the two halves drifted apart in the first place.",
+			"The gateway trusts the header for the same reason it trusts the id: it",
+			"listens on loopback and the front door is its only door."
+		],
+		"playerZid": "x-player-zid",
+		"playerRole": "x-player-role"
+	},
+
+	"adminPaths": {
+		"_readme": [
+			"The gateway routes that change game state or expose another player's data.",
+			"",
+			"These used to be gated by a list of paths in the web front door, and",
+			"by nothing at all in the gateway: bind the gateway to 0.0.0.0 and",
+			"/list_session handed over every player's session id, DELETE /save",
+			"deleted any empire, and /patch/... granted any resource. The front",
+			"door's gate was the only lock, and it lives in another runtime.",
+			"",
+			"The gateway now checks this list itself, so the lock is on the data",
+			"as well as on the door. The front door reads the same list and adds",
+			"its own routes to it.",
+			"",
+			"A path in `exact` is admin-only on its own; a prefix in `prefixes`",
+			"is admin-only together with whatever follows it."
+		],
+		"exact": [
+			"/save",
+			"/save-editor",
+			"/gazillionaire",
+			"/deprogress",
+			"/list_session",
+			"/language_editor",
+			"/wipe_session",
+			"/editor/save",
+			"/editor/restore"
+		],
+		"prefixes": [
+			"/patch/",
+			"/unlock_quest/",
+			"/complete_quest/",
+			"/remove_quest/",
+			"/seed/"
+		]
+	},
+
+	"env": {
+		"_readme": [
+			"The environment variables the two runtimes read, by their canonical name.",
+			"",
+			"The same deployment configures both halves, so a fact that crosses the",
+			"seam has to have ONE name. It used to have two: the gateway called the",
+			"database `SAVE_STORE_PATH` and the front door called it `RTE_DB_URL`, and",
+			"the front door called the origin `PUBLIC_ORIGIN` and the gateway called it",
+			"`WEB_ORIGIN`. An operator who set one of each pair left the two halves",
+			"pointing at different places: the gateway wrote saves to a database the",
+			"front door never read.",
+			"",
+			"The old names still work -- they are listed as aliases -- but they are",
+			"not written down any more, and they lose to the canonical name when both",
+			"are set."
+		],
+		"databaseUrl": "RTE_DB_URL",
+		"publicOrigin": "PUBLIC_ORIGIN",
+		"gatewayOrigin": "GATEWAY_ORIGIN",
+		"aliases": {
+			"RTE_DB_URL": ["SAVE_STORE_PATH"],
+			"PUBLIC_ORIGIN": ["WEB_ORIGIN"]
+		}
+	},
+
+	"zid": {
+		"_readme": "The player's stable id. CRC-64/GO-ISO divided down so the result is an exact integer for the Flash client, which has no integer type.",
+		"divisor": 2048,
+		"maxSafe": 9007199254740991
+	}
+}

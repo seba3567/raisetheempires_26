@@ -16,8 +16,14 @@
 import { SQL } from 'bun';
 import { afterAll } from 'bun:test';
 
+import { contract } from '#lib/server/contract';
+
 process.env.RTE_DB_URL =
-	process.env.RTE_TEST_DB_URL ?? 'mysql://root:2001@127.0.0.1:3306/rte_web_test';
+	process.env.RTE_TEST_DB_URL ??
+	// Built from the contract, so the credentials live in one place: a changed
+	// contract password used to leave the suite connecting with the old one,
+	// which fails as an auth error that reads like "Postgres is down".
+	`postgres://${contract.database.user}:${contract.database.password}@${contract.database.host}:${contract.database.port}/rte_web_test`;
 process.env.RTE_DB_NAME = new URL(process.env.RTE_DB_URL).pathname.replace(/^\//, '');
 
 process.env.SESSION_SECRET = 'test-secret-not-for-production';
@@ -25,7 +31,15 @@ process.env.GATEWAY_ORIGIN = 'http://127.0.0.1:5005';
 
 async function dropTestDatabase(): Promise<void> {
 	try {
-		const server = new SQL(process.env.RTE_DB_URL!.replace(/\/([^/?]+)(\?|$)/, '/$2'));
+		const url = process.env.RTE_DB_URL!;
+		if (url.startsWith('postgres')) {
+			const withoutDb = url.replace(/\/([^/?]+)(\?|$)/, '/postgres$2');
+			const server = new SQL(withoutDb);
+			await server.unsafe(`DROP DATABASE IF EXISTS "${process.env.RTE_DB_NAME}" WITH (FORCE)`);
+			server.close();
+			return;
+		}
+		const server = new SQL(url.replace(/\/([^/?]+)(\?|$)/, '/$2'));
 		await server.unsafe(`DROP DATABASE IF EXISTS \`${process.env.RTE_DB_NAME}\``);
 		server.close();
 	} catch {

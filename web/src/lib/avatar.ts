@@ -15,6 +15,6 @@
 export const DEFAULT_AVATAR = 'blank.png';
 
 /** Public URL for one avatar file. */
-export function avatarUrl(file: string): string {
-	return `/img/avatars/${encodeURIComponent(file)}`;
+export function avatarUrl(file?: string | null): string {
+	return `/img/avatars/${encodeURIComponent(file || DEFAULT_AVATAR)}`;
 }

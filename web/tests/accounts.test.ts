@@ -11,12 +11,17 @@ import {
   findByZid,
   friendshipStatus,
   getProgress,
+  getRecentBattles,
   isAdmin,
   listFriends,
+  listPendingIncoming,
+  listPendingOutgoing,
   normalizeUsername,
   recentActivity,
   recordActivity,
+  recordBattleActivity,
   removeFriend,
+  searchUsers,
   setRole,
   suggestFriends,
   updateProgress,
@@ -24,7 +29,7 @@ import {
   verifyPassword,
   type Role,
 } from '#lib/server/models/accounts';
-import { zidForUser } from '#lib/ids';
+import { zidForUser } from '#lib/server/ids';
 import { resetDb } from "./helpers.ts";
 
 // The returned promise is the whole point: resetDb is async, and a hook that
@@ -260,5 +265,60 @@ describe("activity", () => {
     await recordActivity(null, "login.failed", "ghost");
     // Anonymous rows must not leak into any player's feed.
     expect(await recentActivity(12345)).toHaveLength(0);
+  });
+
+  test("pending incoming and outgoing requests can be listed", async () => {
+    const ana = await createUser("ana", "hunter2hunter2");
+    const beto = await createUser("beto", "hunter2hunter2");
+
+    await addFriend(ana.id, beto.id); // ana requests beto
+
+    const betoIncoming = await listPendingIncoming(beto.id);
+    expect(betoIncoming).toHaveLength(1);
+    expect(betoIncoming[0]?.username).toBe("ana");
+
+    const anaOutgoing = await listPendingOutgoing(ana.id);
+    expect(anaOutgoing).toHaveLength(1);
+    expect(anaOutgoing[0]?.username).toBe("beto");
+
+    const anaIncoming = await listPendingIncoming(ana.id);
+    expect(anaIncoming).toHaveLength(0);
+  });
+
+  test("searchUsers finds users by key matching query", async () => {
+    const ana = await createUser("ana_commander", "hunter2hunter2");
+    const beto = await createUser("beto_general", "hunter2hunter2");
+    await createUser("carlos", "hunter2hunter2");
+
+    const results = await searchUsers("commander", beto.id);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.username).toBe("ana_commander");
+
+    // Empty query returns empty array
+    expect(await searchUsers("", beto.id)).toHaveLength(0);
+  });
+
+  test("recordBattleActivity and getRecentBattles track PvP duel history", async () => {
+    const ana = await createUser("ana", "hunter2hunter2");
+
+    await recordBattleActivity(ana.id, "beto", true, {
+      xpGained: 250,
+      coinsGained: 4500,
+      summary: "Victoria épica"
+    });
+
+    await recordBattleActivity(ana.id, "carlos", false, {
+      xpGained: 50,
+      coinsGained: 200,
+      summary: "Derrota táctica"
+    });
+
+    const battles = await getRecentBattles(ana.id);
+    expect(battles).toHaveLength(2);
+    expect(battles[0]?.opponent).toBe("carlos");
+    expect(battles[0]?.won).toBe(false);
+    expect(battles[1]?.opponent).toBe("beto");
+    expect(battles[1]?.won).toBe(true);
+    expect(battles[1]?.coinsGained).toBe(4500);
   });
 });

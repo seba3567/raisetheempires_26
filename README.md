@@ -1,4 +1,4 @@
-![Empires & Allies](templates/img/logo.png "Empires & Allies logo")
+![Empires & Allies](web/static/logo.png "Empires & Allies logo")
 
 > Empires and Allies(Facebook) officially closed June 17th, 2013
 
@@ -46,6 +46,35 @@ not `sn_app_url`. Ruffle's `NetConnection.connect()` only accepts `http://` and
 `/nodebug.html` is the equivalent page for real Flash — see
 [FLASH.md](FLASH.md).
 
+## How the two halves fit together
+
+There are two programs here, in two languages: the AMF0 gateway in Python (this
+directory) and the front door in `web/`. They meet over HTTP, over one
+PostgreSQL database and over the identity of the player.
+
+Everything that crosses one of those seams is written down **once**, in
+[`contract/runtime.json`](contract/runtime.json): the database, the gateway's
+address, the public port and origin, the headers that carry the signed-in
+account, the gateway routes that are admin tools, the parameters of the
+player's id, and **the canonical name of every environment variable**. Python
+reads it through `contract.py`, TypeScript through
+`web/src/lib/server/contract.ts`, and both test suites check that what each
+runtime resolved is what the file says.
+
+That is not a preference for tidiness. The front door once bound port 3000
+while the origin compiled into its build said 8080, so every page loaded and
+every form — the login included — was refused with 403 *"Cross-site POST form
+submissions are forbidden"*. A fact with two owners is a fact that will
+disagree; the port and the origin now have one, and so do the environment
+variables: `RTE_DB_URL` and `PUBLIC_ORIGIN` are read by both halves, with the
+old names still working as aliases.
+
+Environment variables still override the file: it holds the defaults, not a
+deployment's configuration.
+
+`DEVELOPMENT.md` has how to run it; `web/README.md` has the front door's half
+in detail.
+
 Ruffle is **vendored into `web/static/ruffle/` and pinned by content hash**, not
 loaded from a CDN. Please keep it that way: this game is archived, so an
 unpinned CDN tag — or a CDN that quietly re-bundles — could break it with no way
@@ -64,7 +93,7 @@ procedure and the hashes.
 
 :iphone: [Empires & Allies Android(Termux) ~ GNU/Linux ~ macOS](https://github.com/Questandachievement7Developer/RaiseTheEmpiresPort_Native#readme)
 
-:minidisc: [Empires & Allies Servers Support](SERVERS.md)
+:minidisc: [Running a server](DEVELOPMENT.md)
 
 :classical_building: [Emipres & Allies Revision History](https://github.com/AcidCaos/empires-revision-history#readme)
 

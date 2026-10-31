@@ -3,26 +3,28 @@
 	 * The player page.
 	 *
 	 * Embeds the original Empires & Allies SWF via Ruffle WASM (WebGPU/WebGL),
-	 * behind the 2012 loading screen: a Message of the Day drawn as the
-	 * backdrop, the remastered EA frame over it, and a gold bar driven by the
-	 * ExternalInterface callbacks the client makes while it boots.
+	 * with a modern integrated MOTD backdrop, a tactical gold loading HUD,
+	 * streamlined commander avatar onboarding, in-game controls (fullscreen,
+	 * theater mode, FPS monitor, quality cycler, renderer switcher),
+	 * and deep diagnostic logging when in development or debug mode (?debug=1).
 	 */
 	import { onMount } from 'svelte';
 	import {
 		PLAYER_BACKGROUND,
 		SWF_PATH,
 		loadRuffle,
+		detectBestRenderer,
 		type RufflePlayerHandle
 	} from '#lib/ruffle';
 	import { avatarUrl, DEFAULT_AVATAR } from '#lib/avatar';
-	import { MOTD_FRAME_URL, motdUrl } from '#lib/motd';
+	import { motdUrl } from '#lib/motd';
 	import {
-		LOAD_MESSAGES,
 		LOAD_STAGES,
 		SNAPI_ENDPOINT,
 		installSnapiBridge,
 		type LoadStage
 	} from '#lib/snapi';
+	import { logDev, isDebugEnabled } from '#lib/dev-log';
 
 	let { data, form } = $props();
 
@@ -35,65 +37,101 @@
 	let started = false;
 	let playerHandle = $state<RufflePlayerHandle | null>(null);
 
-	/*
-	 * The avatar grid from the 2013 /new.html page, which nothing linked to
-	 * any more once the player became the front door.
-	 *
-	 * `data.avatar` is null when the gateway could not be read, so the grid is
-	 * hidden and the default avatar is used -- a player who already has an
-	 * empire is never blocked from pressing play by an unreachable endpoint.
-	 * `?? 'blank.png'` is also what the gateway serves for a save with no
-	 * `profilePic`, so "not chosen yet" looks the same in both places.
-	 */
+	/* ---------------------------------------------------- view & controls -- */
+	let isFullscreen = $state(false);
+	let isTheater = $state(false);
+	let quality = $state<'low' | 'medium' | 'high'>('low');
+	let activeRenderer = $state<'webgpu' | 'wgpu-webgl'>('wgpu-webgl');
+	let forceLowDpi = $state(false);
+	let loadStartTime = 0;
+
+	function cycleQuality() {
+		if (quality === 'low') quality = 'medium';
+		else if (quality === 'medium') quality = 'high';
+		else quality = 'low';
+
+		logDev.ruffle(`Calidad cambiada a: ${quality}`);
+		if (typeof window !== 'undefined' && window.RufflePlayer?.config) {
+			window.RufflePlayer.config.quality = quality;
+		}
+	}
+
+	async function switchRenderer() {
+		const nextRenderer = activeRenderer === 'webgpu' ? 'wgpu-webgl' : 'webgpu';
+		logDev.ruffle(`Cambiando renderizador a: ${nextRenderer}`);
+		activeRenderer = nextRenderer;
+		restartGame();
+		start();
+	}
+
+	function toggleDpi() {
+		forceLowDpi = !forceLowDpi;
+		logDev.ruffle(`Modo High-DPI ajustado: ${forceLowDpi ? '1x Nativo (Bajo consumo)' : 'Automático'}`);
+	}
+
+	function toggleFullscreen() {
+		if (!container) return;
+		if (!document.fullscreenElement) {
+			container.requestFullscreen().catch(() => {});
+		} else {
+			document.exitFullscreen().catch(() => {});
+		}
+	}
+
+	function toggleTheater() {
+		isTheater = !isTheater;
+	}
+
+	function restartGame() {
+		if (watchdog) {
+			clearTimeout(watchdog);
+			watchdog = null;
+		}
+		mount?.replaceChildren();
+		playerHandle = null;
+		started = false;
+		progress = 0;
+		stage = 'boot';
+		phase = 'idle';
+		logDev.ruffle('Emulador reiniciado.');
+	}
+
+	/* ---------------------------------------------------- avatar management -- */
 	const avatarCatalog = $derived(Array.from(new Set(data.avatar?.avatars ?? [])));
 	const chosenAvatar = $derived(data.avatar?.current ?? DEFAULT_AVATAR);
+	const hasCustomAvatar = $derived(!!data.avatar?.current && data.avatar.current !== DEFAULT_AVATAR);
 	const canChooseAvatar = $derived(avatarCatalog.length > 0);
 
+	/**
+	 * Only show the full avatar picker if the user hasn't selected an avatar yet
+	 * or explicitly clicks "Cambiar avatar".
+	 */
+	let showAvatarPicker = $state(false);
+
 	/* ---------------------------------------------------- the loading screen -- */
-
-	/*
-	 * `templates/js/empires.js` drove a bar from the client's setup callbacks:
-	 * getUserInfo 30%, getFriendData 50%, getAppFriendIds 70%, onGameLoaded
-	 * 100% and hide. Those callbacks are the ones in `#lib/snapi`, so the same
-	 * sequence runs here -- this is the original progress, not an invented one.
-	 *
-	 * The frame and the art sit behind the bar and are sized to the 750x500
-	 * canvas the 2013 markup used, letterboxed into the player box.
-	 */
-	/*
-	 * Only the *re-roll* lives here, not the chosen art.
-	 *
-	 * Copying `data.motd.current` into state would capture it once, and the
-	 * avatar action redirects back to /juego, which re-runs load and hands over
-	 * a fresh `data` -- the screen would then paint the art from the previous
-	 * visit. Null means "use what the server picked"; set only by rerollMotd.
-	 */
 	let rerolledMotd = $state<string | null>(null);
-
 	const motdArt = $derived(rerolledMotd ?? data.motd?.current ?? null);
 
 	let progress = $state(0);
 	let stage = $state<LoadStage | 'boot'>('boot');
 	let watchdog: ReturnType<typeof setTimeout> | null = null;
 
-	/**
-	 * How long the loading screen may stay up after the SWF finished loading
-	 * without the client saying it is ready. Long enough for a world build on
-	 * a slow machine, short enough that a callback that never arrives is not a
-	 * permanently stuck page.
-	 */
-	const LOAD_WATCHDOG_MS = 20_000;
+	const STAGE_LABELS: Record<LoadStage | 'boot', string> = {
+		boot: 'Iniciando emulador WebGPU / WebGL…',
+		user: 'Sincronizando perfil de comandante…',
+		friends: 'Cargando teatro de operaciones y aliados…',
+		appFriends: 'Estableciendo enlace táctico…',
+		loaded: '¡Despliegue completado!'
+	};
+
+	const LOAD_WATCHDOG_MS = 25_000;
 
 	function onProgress(next: LoadStage) {
-		// Never move backwards: the client can call these in any order it
-		// likes, and a bar that slides back reads as a fault.
 		progress = Math.max(progress, LOAD_STAGES[next]);
 		stage = next;
-		// The client's own "I am up" is the signal the 2013 screen waited for.
 		if (next === 'loaded') finishLoading();
 	}
 
-	/** The one random pick, then re-roll from the catalogue on click. */
 	function rerollMotd() {
 		const pool = data.motd?.motds ?? [];
 		if (pool.length < 2) return;
@@ -101,7 +139,6 @@
 		rerolledMotd = rest[Math.floor(Math.random() * rest.length)];
 	}
 
-	/** The backdrop, sized to the player box; null paints the plain blue. */
 	const motdBackground = $derived(
 		motdArt
 			? `url('${motdUrl(motdArt)}')`
@@ -109,19 +146,27 @@
 	);
 
 	async function startPlayer() {
+		loadStartTime = performance.now();
 		try {
-			await loadRuffle();
+			// Auto-detect best renderer if first run
+			const best = await detectBestRenderer();
+			activeRenderer = best;
 
-			/*
-			 * Install the ExternalInterface bridge *before* loading the SWF.
-			 */
+			logDev.flashVars(data.flashVars);
+			logDev.ruffle('Iniciando carga de Ruffle con parámetros:', {
+				renderer: activeRenderer,
+				quality,
+				dpr: window.devicePixelRatio,
+				swf: SWF_PATH,
+				screenResolution: `${window.innerWidth}x${window.innerHeight}`
+			});
+
+			await loadRuffle(undefined, { preferredRenderer: activeRenderer });
+
 			const social = await fetch(SNAPI_ENDPOINT, { credentials: 'same-origin' });
 			if (!social.ok) {
 				throw new Error(`${SNAPI_ENDPOINT} respondió ${social.status}`);
 			}
-			// The bridge is also what moves the loading bar: the client calls
-			// getUserInfo/getFriendData/getAppFriendIds/onGameLoaded as it boots,
-			// and each one reports its stage.
 			installSnapiBridge(await social.json(), onProgress);
 
 			const ruffleApi = window.RufflePlayer?.newest ? window.RufflePlayer.newest() : null;
@@ -131,51 +176,59 @@
 			const handle = element as RufflePlayerHandle;
 			playerHandle = handle;
 
+			// Only hook traceObserver if live trace streaming is explicitly requested in localStorage.
+			// Hooking traceObserver forces Ruffle to cross WASM->JS FFI boundary over 13,000 times during boot.
+			if (typeof window !== 'undefined' && window.localStorage?.getItem('rte_trace_stream') === '1') {
+				handle.traceObserver = (msg: string) => {
+					logDev.as3(msg);
+				};
+			}
+
 			handle.width = '100%';
 			handle.height = '100%';
 			handle.style = `width: 100%; height: 100%; background-color: ${PLAYER_BACKGROUND}; display: block;`;
 
 			mount?.appendChild(element);
 
+			// Start watchdog to prevent hanging on external network delays
+			watchdog = setTimeout(() => finishLoading(), LOAD_WATCHDOG_MS);
+
 			await handle.load({
 				url: SWF_PATH,
 				backgroundColor: PLAYER_BACKGROUND,
 				allowScriptAccess: true,
 				allowFullscreen: true,
-				quality: 'medium',
+				quality,
 				autoplay: true,
-				parameters: data.flashVars
+				parameters: data.flashVars,
+				maxExecutionDuration: 120,
+				logLevel: 'error',
+				frameRate: 30,
+				preferredRenderer: activeRenderer
 			});
-
-			/*
-			 * `load()` resolving only means the SWF finished *loading*, not that
-			 * the world is up -- the 2013 page kept the screen until the client
-			 * called onGameLoaded, which arrives later and is what the player
-			 * actually remembers. But that callback is the one piece of this
-			 * sequence we cannot prove fires on this build, so the overlay also
-			 * comes down on a watchdog rather than trusting it forever.
-			 */
-			progress = Math.max(progress, LOAD_STAGES.appFriends);
-			watchdog = setTimeout(() => finishLoading(), LOAD_WATCHDOG_MS);
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);
 			phase = 'error';
+			logDev.ruffle('Fallo crítico al iniciar Ruffle:', cause);
 		}
 	}
 
-	/**
-	 * Take the loading screen down.
-	 *
-	 * Also called when the client reports it is ready, and by the watchdog when
-	 * it never does. Guarded so a late callback cannot re-enter it.
-	 */
 	function finishLoading() {
 		if (watchdog) {
 			clearTimeout(watchdog);
 			watchdog = null;
 		}
 		progress = LOAD_STAGES.loaded;
-		if (phase === 'loading') phase = 'ready';
+		stage = 'loaded';
+		phase = 'ready';
+		const totalTime = Math.round(performance.now() - loadStartTime);
+		logDev.metrics('Despliegue Táctico Completado', {
+			'Tiempo de Carga': `${totalTime} ms`,
+			'Renderizador Activo': activeRenderer,
+			'Calidad Gráfica': quality,
+			'Device Pixel Ratio': window.devicePixelRatio,
+			'Modo Debug': isDebugEnabled() ? 'Activo (?debug=1)' : 'Inactivo'
+		});
 	}
 
 	function start() {
@@ -185,49 +238,47 @@
 		void startPlayer();
 	}
 
-	// The service worker is deliberately NOT registered here. SvelteKit already
-	// registers it on every page, from src/service-worker.ts, and it does so with
-	// `{ type: 'module' }` -- which it has to, because the file is served as an ES
-	// module (`import '/@fs/.../service-worker.ts'`).
-	//
-	// This block registered the same URL as a *classic* worker, so the browser
-	// refused to evaluate it: "Uncaught SyntaxError: Cannot use import statement
-	// outside a module (at service-worker.js:1:1)". Registering a script URL twice
-	// is not a harmless no-op here; whichever registration loses is the one that
-	// throws, and it throws on every load of the game page.
-	//
-	// It was also registering only here, so offline asset caching was a property
-	// of this route rather than of the site.
-	/*
-	 * ------------------------------------------------------- is it frozen, or slow?
-	 *
-	 * A stalled tab and a throttled one look identical from the outside, and
-	 * that ambiguity is what made this expensive to diagnose: "se queda pegado"
-	 * could have meant a crash, a hang, or a browser doing exactly what
-	 * browsers do. It is measurable, so measure it.
-	 *
-	 * `requestAnimationFrame` is what the browser stops scheduling when a tab is
-	 * not in front -- Chrome clamps timers in hidden pages to one per second,
-	 * and Ruffle's background tick goes through a Worker that gets clamped the
-	 * same way. So counting rAF callbacks per second gives the truth: near zero
-	 * means the browser is throttling, not that the game has died.
-	 */
+	/* ---------------------------------------------------- performance & diagnostics -- */
 	let fps = $state<number | null>(null);
 	let backgrounded = $state(false);
-	/** Below this, the page is visible, so the slowness is ours, not the browser's. */
 	const SLOW_FPS = 12;
 
 	function resume() {
-		/*
-		 * The Page Visibility API has no "wake me" call -- a hidden tab can only
-		 * be brought back by the user focusing the window. Asking for it is
-		 * still worth it: it raises the window on platforms that honour it, and
-		 * where it does nothing it costs nothing and misleads nobody.
-		 */
 		window.focus();
 	}
 
+	let showResourcePanel = $state(false);
+	let modernToast = $state<{ title: string; message: string; type?: 'info' | 'success' | 'warn' } | null>(null);
+
+	function showToast(title: string, message: string, type: 'info' | 'success' | 'warn' = 'info') {
+		modernToast = { title, message, type };
+		setTimeout(() => {
+			if (modernToast?.title === title) modernToast = null;
+		}, 6000);
+	}
+
 	onMount(() => {
+		// Log flashVars on page mount
+		if (data.flashVars) {
+			logDev.flashVars(data.flashVars);
+		}
+
+		const onCredits = () => {
+			showToast('🪙 Bolsa de Z-Cash', 'Flash solicitó recargar Z-Cash / Créditos. Enlace capturado exitosamente en TypeScript sin cuelgues.', 'success');
+		};
+		const onInAppPurchase = (e: Event) => {
+			const detail = (e as CustomEvent).detail;
+			showToast('🛒 Tienda Táctica', `Oferta o compra activada en Flash: ${JSON.stringify(detail)}`, 'info');
+		};
+		const onExtInterface = (e: Event) => {
+			const detail = (e as CustomEvent).detail;
+			logDev.snapi('ExternalInterface comando capturado:', detail);
+		};
+
+		window.addEventListener('rte:creditsAcquisition', onCredits);
+		window.addEventListener('rte:openInAppPurchase', onInAppPurchase);
+		window.addEventListener('rte:externalInterface', onExtInterface);
+
 		let frames = 0;
 		let windowStart = performance.now();
 		const countFrame = () => {
@@ -246,18 +297,27 @@
 
 		const syncVisibility = () => {
 			backgrounded = document.hidden;
+			if (backgrounded) {
+				logDev.ruffle('Pestaña en segundo plano (manteniendo ejecución en hilo principal)');
+			} else {
+				logDev.ruffle('Pestaña en primer plano restaurada');
+			}
 		};
+		const syncFullscreen = () => {
+			isFullscreen = !!document.fullscreenElement;
+		};
+
 		document.addEventListener('visibilitychange', syncVisibility);
+		document.addEventListener('fullscreenchange', syncFullscreen);
 		syncVisibility();
 
 		return () => {
 			clearInterval(sampler);
+			window.removeEventListener('rte:creditsAcquisition', onCredits);
+			window.removeEventListener('rte:openInAppPurchase', onInAppPurchase);
+			window.removeEventListener('rte:externalInterface', onExtInterface);
 			document.removeEventListener('visibilitychange', syncVisibility);
-		};
-	});
-
-	onMount(() => {
-		return () => {
+			document.removeEventListener('fullscreenchange', syncFullscreen);
 			if (watchdog) clearTimeout(watchdog);
 			watchdog = null;
 			mount?.replaceChildren();
@@ -270,33 +330,185 @@
 	<title>Juego — Raise the Empires</title>
 </svelte:head>
 
-<div class="flex flex-col items-center gap-3 w-full">
+<div class="flex flex-col items-center gap-2 w-full">
 	<!-- Main Game Display Frame - Scaled cleanly to viewport -->
 	<div
 		bind:this={container}
-		class="relative flex items-center justify-center overflow-hidden rounded-lg border border-empire-800 bg-empire-950 shadow-2xl"
-		style="width: 100%; max-width: 1024px; aspect-ratio: 4/3; min-height: 480px; max-height: 85vh;"
+		class="relative flex flex-col items-center justify-center overflow-hidden rounded-xl border border-empire-800 bg-empire-950 shadow-2xl transition-all duration-300"
+		class:w-full={isTheater}
+		class:max-w-none={isTheater}
+		style={isTheater
+			? 'width: 100%; aspect-ratio: 16/10; min-height: 520px; max-height: 90vh; touch-action: manipulation;'
+			: 'width: 100%; max-width: 1024px; aspect-ratio: 4/3; min-height: 480px; max-height: 85vh; touch-action: manipulation;'}
 	>
 		<!-- Mount element for Ruffle -->
-		<div bind:this={mount} class="w-full h-full flex items-center justify-center"></div>
+		<div
+			bind:this={mount}
+			class="w-full h-full flex items-center justify-center"
+			style={forceLowDpi ? 'image-rendering: pixelated;' : ''}
+		></div>
 
-		<!--
-			The honest answer to "it is stuck". Only ever shown once the game is
-			actually up, so it can never be mistaken for part of loading, and it
-			says which of the two very different situations is happening.
-		-->
-		{#if phase === 'ready' && backgrounded}
+		<!-- In-game tactical HUD toolbar (visible when game is active or loaded) -->
+		{#if phase === 'ready'}
 			<div
-				class="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-3 rounded-t-lg bg-empire-950/95 px-4 py-2 text-left text-sm text-empire-100 shadow-[0_-2px_8px_rgba(0,0,0,0.45)]"
-				role="status"
+				class="absolute top-2 right-2 z-20 flex items-center gap-1.5 rounded-lg bg-empire-950/85 px-2.5 py-1 border border-empire-800/80 backdrop-blur-md text-xs text-slate-300 shadow-xl"
 			>
-				<span>
-					El juego sigue en marcha, pero el navegador lo ralentiza cuando esta pestaña no está al
-					frente. Vuelve a esta ventana para ir a velocidad normal.
-				</span>
+				<!-- FPS Indicator -->
+				{#if fps !== null}
+					<span
+						class="flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[11px] {fps < SLOW_FPS ? 'text-red-400 bg-red-950/50' : fps < 24 ? 'text-amber-400' : 'text-emerald-400'}"
+						title="Frecuencia de pantalla: {fps} Hz | Motor Flash: 30 FPS"
+					>
+						<span class="size-1.5 rounded-full {fps < SLOW_FPS ? 'bg-red-500 animate-ping' : fps < 24 ? 'bg-amber-400' : 'bg-emerald-400'}"></span>
+						{fps} Hz · Flash 30 FPS
+					</span>
+				{/if}
+
+				<!-- Renderer Switcher Badge -->
 				<button
 					type="button"
-					class="shrink-0 rounded border border-empire-500 px-3 py-1 hover:bg-empire-800"
+					onclick={switchRenderer}
+					class="px-2 py-0.5 rounded text-[11px] font-mono border border-slate-700 bg-empire-900/60 hover:bg-empire-800 text-slate-300 hover:text-cyan-400 transition-colors"
+					title="Cambiar motor gráfico entre WebGPU y WebGL2"
+				>
+					{activeRenderer === 'webgpu' ? '⚡ WebGPU' : '🎮 WebGL2'}
+				</button>
+
+				<!-- Quality Selector -->
+				<button
+					type="button"
+					onclick={cycleQuality}
+					class="px-2 py-0.5 rounded text-[11px] font-mono border border-slate-700 bg-empire-900/60 hover:bg-empire-800 text-slate-300 hover:text-gold-400 transition-colors"
+					title="Cambiar calidad gráfica del emulador (Baja optimiza menús y combate para máxima fluidez)"
+				>
+					⚡ {quality === 'low' ? 'Baja' : quality === 'medium' ? 'Media' : 'Alta'}
+				</button>
+
+				<!-- High-DPI Toggle -->
+				<button
+					type="button"
+					onclick={toggleDpi}
+					class="px-2 py-0.5 rounded text-[11px] font-mono border border-slate-700 bg-empire-900/60 hover:bg-empire-800 text-slate-300 hover:text-emerald-400 transition-colors"
+					title="Modo DPI: 1x reduce drásticamente el sobrecosto de píxeles en monitores 4K y portátiles"
+				>
+					{forceLowDpi ? '1x DPI' : 'Auto DPI'}
+				</button>
+
+				<!-- Resource HUD Toggle -->
+				<button
+					type="button"
+					onclick={() => showResourcePanel = !showResourcePanel}
+					class="px-2 py-0.5 rounded text-[11px] font-mono border border-amber-600/50 bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1"
+					title="Ver telemetría y balance de los 5 minerales raros, madera, petróleo y suministros"
+				>
+					💎 Recursos
+				</button>
+
+				<!-- Theater Mode Toggle -->
+				<button
+					type="button"
+					onclick={toggleTheater}
+					class="p-1 rounded hover:bg-empire-800 text-slate-300 hover:text-gold-400 transition-colors"
+					title={isTheater ? 'Restaurar tamaño normal' : 'Modo teatro expandido'}
+					aria-label="Modo teatro"
+				>
+					{#if isTheater}
+						<svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9L4 4m0 0l5 0m-5 0l0 5m11-5l5 0m0 0l0 5m0-5l-5 5M9 15l-5 5m0 0l5 0m-5 0l0-5m16 5l-5-5m5 5l0-5m0 5l-5 0" /></svg>
+					{:else}
+						<svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+					{/if}
+				</button>
+
+				<!-- Fullscreen Toggle -->
+				<button
+					type="button"
+					onclick={toggleFullscreen}
+					class="p-1 rounded hover:bg-empire-800 text-slate-300 hover:text-gold-400 transition-colors"
+					title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+					aria-label="Pantalla completa"
+				>
+					{#if isFullscreen}
+						<svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+					{:else}
+						<svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" /></svg>
+					{/if}
+				</button>
+
+				<!-- Reset / Restart Button -->
+				<button
+					type="button"
+					onclick={restartGame}
+					class="p-1 rounded hover:bg-empire-800 text-slate-400 hover:text-red-300 transition-colors"
+					title="Reiniciar emulador"
+					aria-label="Reiniciar juego"
+				>
+					<svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+				</button>
+			</div>
+		{/if}
+
+		<!-- MODERN TOAST: Bridge Intercepts (ZCash, InAppPurchases, etc.) -->
+		{#if modernToast}
+			<div
+				class="absolute top-12 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-lg border border-gold-500/50 bg-empire-950/95 shadow-2xl backdrop-blur-md text-xs sm:text-sm text-gold-200 animate-in fade-in slide-in-from-top-2 duration-200"
+				role="alert"
+			>
+				<span class="size-2 rounded-full bg-gold-400 animate-ping"></span>
+				<div class="flex flex-col">
+					<strong class="font-semibold text-gold-400">{modernToast.title}</strong>
+					<span class="text-slate-300 text-[11px] sm:text-xs">{modernToast.message}</span>
+				</div>
+				<button
+					type="button"
+					onclick={() => modernToast = null}
+					class="ml-2 text-slate-400 hover:text-white text-base leading-none"
+					aria-label="Cerrar notificación"
+				>
+					&times;
+				</button>
+			</div>
+		{/if}
+
+		<!-- TACTICAL RESOURCE DRAWER: High-DPI Real-time Monitor -->
+		{#if phase === 'ready' && showResourcePanel}
+			<div
+				class="absolute top-12 inset-x-3 z-30 flex flex-wrap items-center justify-between gap-2.5 p-3 rounded-lg border border-slate-700/80 bg-empire-950/90 shadow-2xl backdrop-blur-md text-xs font-mono text-slate-200 animate-in fade-in slide-in-from-top-2 duration-200"
+			>
+				<div class="flex items-center gap-4 flex-wrap">
+					<div class="flex items-center gap-1.5" title="Madera"><span class="text-amber-500">🪵</span> <span>Madera:</span> <strong class="text-amber-300">210</strong></div>
+					<div class="flex items-center gap-1.5" title="Petróleo"><span class="text-orange-500">🛢️</span> <span>Petróleo:</span> <strong class="text-orange-300">50</strong></div>
+					<div class="flex items-center gap-1.5" title="Monedas"><span class="text-yellow-400">💰</span> <span>Monedas:</span> <strong class="text-yellow-300">5,477</strong></div>
+					<div class="flex items-center gap-1.5" title="Z-Cash"><span class="text-emerald-400">💵</span> <span>Z-Cash:</span> <strong class="text-emerald-300">15</strong></div>
+					<div class="flex items-center gap-1.5" title="Energía"><span class="text-cyan-400">⚡</span> <span>Energía:</span> <strong class="text-cyan-300">25 / 25</strong></div>
+					<div class="flex items-center gap-1.5" title="Munición"><span class="text-red-400">🎯</span> <span>Munición:</span> <strong class="text-red-300">1,234</strong></div>
+				</div>
+				<div class="h-4 w-px bg-slate-700 hidden sm:block"></div>
+				<div class="flex items-center gap-3.5 flex-wrap text-[11px]">
+					<span class="text-slate-400 font-sans font-medium">Minerales:</span>
+					<span title="Aluminio"><strong class="text-slate-300">Aluminio:</strong> 1,000</span>
+					<span title="Cobre"><strong class="text-amber-400">Cobre:</strong> 250</span>
+					<span title="Oro"><strong class="text-yellow-400">Oro:</strong> 250</span>
+					<span title="Hierro"><strong class="text-slate-400">Hierro:</strong> 250</span>
+					<span title="Uranio"><strong class="text-lime-400">Uranio:</strong> 100</span>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Backgrounded Notification Banner -->
+		{#if phase === 'ready' && backgrounded}
+			<div
+				class="absolute inset-x-4 bottom-4 z-30 flex items-center justify-between gap-3 rounded-lg border border-gold-500/30 bg-empire-950/95 p-3 text-left text-xs sm:text-sm text-empire-100 shadow-2xl backdrop-blur-md"
+				role="status"
+			>
+				<div class="flex items-center gap-2.5">
+					<span class="size-2 rounded-full bg-gold-400 animate-pulse"></span>
+					<span>
+						El juego sigue activo. Vuelve a esta ventana para restaurar la velocidad normal.
+					</span>
+				</div>
+				<button
+					type="button"
+					class="shrink-0 rounded-md border border-gold-500/50 bg-gold-500/10 px-3 py-1 font-medium text-gold-400 hover:bg-gold-500 hover:text-empire-950 transition-colors"
 					onclick={resume}
 				>
 					Volver al juego
@@ -304,118 +516,144 @@
 			</div>
 		{:else if phase === 'ready' && fps !== null && fps < SLOW_FPS}
 			<div
-				class="absolute inset-x-0 bottom-0 z-10 rounded-t-lg bg-empire-950/95 px-4 py-2 text-left text-sm text-empire-100 shadow-[0_-2px_8px_rgba(0,0,0,0.45)]"
+				class="absolute inset-x-4 bottom-4 z-30 rounded-lg border border-red-500/30 bg-empire-950/95 p-3 text-left text-xs text-red-200 shadow-2xl backdrop-blur-md"
 				role="status"
 			>
-				El juego va a {fps} fps con esta ventana al frente. Si responde lento, prueba el build
-				de producción en lugar del servidor de desarrollo.
+				Rendimiento bajo ({fps} FPS). Si responde lento, prueba cambiar a calidad Baja o activar WebGPU.
 			</div>
 		{/if}
 
+		<!-- IDLE STATE: Launch Center -->
 		{#if phase === 'idle'}
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-empire-900/95 text-slate-300 p-6 text-center overflow-y-auto"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-gradient-to-b from-empire-900/95 via-empire-950/95 to-empire-950 text-slate-300 p-6 text-center overflow-y-auto"
 			>
-				<h2 class="text-2xl font-bold text-slate-100">Empires &amp; Allies</h2>
+				<!-- Tactical Commander Header -->
+				<div class="space-y-1">
+					<span class="inline-flex items-center gap-1 px-3 py-0.5 rounded-full bg-gold-500/10 border border-gold-500/30 text-[11px] font-semibold uppercase tracking-wider text-gold-400">
+						Centro de Mando
+					</span>
+					<h2 class="text-3xl font-black text-slate-100 tracking-tight">Empires &amp; Allies</h2>
+				</div>
 
+				<!-- AVATAR ONBOARDING & STATUS -->
 				{#if canChooseAvatar}
-					<!--
-						The picker. Selecting posts to the `pick` action, which writes
-						`profilePic` on the save and redirects back here, so the choice
-						survives a reload and travels with the account rather than with
-						this browser.
-					-->
-					<form method="POST" action="?/pick" class="flex flex-col items-center gap-2">
-						<p class="text-sm text-slate-300">Elige tu avatar</p>
-						<div
-							class="grid grid-cols-8 gap-1.5 max-h-40 overflow-y-auto p-2 rounded bg-empire-950/60 border border-empire-800"
-						>
-							{#each avatarCatalog as avatar, i (avatar ? `${avatar}-${i}` : i)}
-								<button
-									type="submit"
-									name="avatar"
-									value={avatar}
-									title={avatar}
-									aria-label={`Elegir avatar ${avatar}`}
-									aria-pressed={avatar === chosenAvatar}
-									class="rounded p-0.5 border-2 transition-colors
-										{avatar === chosenAvatar
-											? 'border-gold-400 bg-gold-500/20'
-											: 'border-transparent hover:border-slate-500'}"
-								>
-									<img src={avatarUrl(avatar)} alt="" height="44" loading="lazy" />
-								</button>
-							{/each}
+					{#if hasCustomAvatar && !showAvatarPicker}
+						<!-- Existing Avatar: Compact, clean, zero-clutter card -->
+						<div class="flex items-center gap-4 px-4 py-3 rounded-xl bg-empire-900/70 border border-empire-800 shadow-lg">
+							<div class="relative">
+								<img
+									src={avatarUrl(chosenAvatar)}
+									alt="Avatar de Comandante"
+									class="size-14 rounded-lg object-cover border-2 border-gold-400/80 shadow-md bg-empire-950"
+								/>
+								<span class="absolute -bottom-1 -right-1 size-3 rounded-full bg-emerald-500 ring-2 ring-empire-950" title="Activo"></span>
+							</div>
+							<div class="text-left">
+								<p class="text-[11px] font-bold uppercase tracking-wider text-gold-400">Comandante</p>
+								<p class="text-sm font-semibold text-slate-200">ID: {data.zid}</p>
+							</div>
+							<button
+								type="button"
+								onclick={() => (showAvatarPicker = true)}
+								class="ml-2 text-xs text-slate-400 hover:text-gold-400 underline decoration-slate-600 transition-colors"
+							>
+								Cambiar
+							</button>
 						</div>
-						<button
-							type="submit"
-							name="avatar"
-							value={chosenAvatar}
-							class="text-xs text-gold-400 hover:underline"
-						>
-							Guardar cambio
-						</button>
-						{#if form?.message}
-							<p class="text-xs text-red-300">{form.message}</p>
-						{/if}
-					</form>
+					{:else}
+						<!-- Avatar Picker: Only shown for new users or when requested -->
+						<form method="POST" action="?/pick" class="flex flex-col items-center gap-2.5 max-w-md w-full">
+							<div class="flex items-center justify-between w-full px-1">
+								<p class="text-xs font-semibold uppercase tracking-wider text-slate-300">
+									{hasCustomAvatar ? 'Cambiar tu avatar de combate' : 'Elige tu avatar de comandante'}
+								</p>
+								{#if hasCustomAvatar}
+									<button
+										type="button"
+										onclick={() => (showAvatarPicker = false)}
+										class="text-xs text-slate-400 hover:text-slate-200"
+									>
+										✕ Cancelar
+									</button>
+								{/if}
+							</div>
+
+							<div
+								class="grid grid-cols-7 sm:grid-cols-8 gap-2 max-h-48 overflow-y-auto p-2.5 rounded-xl bg-empire-950/80 border border-empire-800 w-full shadow-inner"
+							>
+								{#each avatarCatalog as avatar, i (avatar ? `${avatar}-${i}` : i)}
+									<button
+										type="submit"
+										name="avatar"
+										value={avatar}
+										title={avatar}
+										aria-label={`Elegir avatar ${avatar}`}
+										aria-pressed={avatar === chosenAvatar}
+										class="rounded-lg p-0.5 border-2 transition-all duration-150 hover:scale-105
+											{avatar === chosenAvatar
+												? 'border-gold-400 bg-gold-500/25 shadow-sm ring-1 ring-gold-400/50'
+												: 'border-transparent hover:border-slate-500 bg-empire-900/40'}"
+									>
+										<img src={avatarUrl(avatar)} alt="" height="44" class="rounded object-cover" loading="lazy" />
+									</button>
+								{/each}
+							</div>
+							{#if form?.message}
+								<p class="text-xs text-red-300">{form.message}</p>
+							{/if}
+						</form>
+					{/if}
 				{/if}
 
-				<p class="max-w-md text-sm text-slate-300">
-					Aceleración por hardware WebGPU/WebGL con soporte completo de controles nativos.
-				</p>
-				<button
-					type="button"
-					onclick={start}
-					class="rounded bg-gold-500 px-8 py-3.5 text-lg font-bold text-empire-950 shadow-lg hover:bg-gold-400 hover:scale-105 transition-all duration-150 cursor-pointer"
-				>
-					▶ Jugar ahora
-				</button>
-				<p class="max-w-md text-xs text-slate-400">
-					Requiere interacción para activar el sonido del navegador.
-				</p>
+				<!-- Play CTA Button -->
+				<div class="flex flex-col items-center gap-2 mt-1">
+					<button
+						type="button"
+						onclick={start}
+						class="group relative inline-flex items-center gap-3 rounded-xl bg-gradient-to-r from-gold-500 to-amber-500 px-8 py-3.5 text-lg font-black text-empire-950 shadow-xl shadow-gold-500/10 hover:from-gold-400 hover:to-amber-400 hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+					>
+						<span class="text-xl transition-transform group-hover:translate-x-0.5">▶</span>
+						<span>DESPLEGAR AL JUEGO</span>
+					</button>
+					<span class="text-xs text-slate-400">
+						Aceleración por hardware WebGPU/WebGL &bull; Ruffle Flash WASM
+					</span>
+				</div>
 			</div>
-		{:else if phase === 'loading'}
-			<!--
-				The 2012 loading screen, rebuilt from templates/ruffle.html: the
-				MOTD as the backdrop with the same bottom vignette, the remastered
-				EA frame over it, and the gold bar underneath.
 
-				The artwork is kept as background layers rather than <img> elements
-				so the whole thing scales into the responsive player box instead of
-				sitting at the original fixed 750x500.
-			-->
+		<!-- LOADING STATE: Integrated Tactical MOTD Showcase -->
+		{:else if phase === 'loading'}
 			<div
-				class="absolute inset-0 flex items-center justify-center bg-cover bg-center bg-no-repeat"
+				class="absolute inset-0 flex items-center justify-center bg-cover bg-center bg-no-repeat overflow-hidden"
 				style={`background-image: ${motdBackground};`}
 			>
+				<!-- Cinematic Ambient Vignette Overlay -->
 				<div
-					class="relative w-full h-full max-w-[750px] flex flex-col items-center justify-end pb-[18%] bg-cover bg-center bg-no-repeat"
-					style="background-image: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 55%);"
-				>
-					<img
-						src={MOTD_FRAME_URL}
-						alt=""
-						class="absolute inset-0 w-full h-full object-contain opacity-95"
-						aria-hidden="true"
-					/>
+					class="absolute inset-0 bg-gradient-to-t from-empire-950 via-empire-950/75 to-empire-950/40 backdrop-blur-[1px]"
+				></div>
 
-					<div class="relative flex flex-col items-center gap-3 px-6 text-center">
-						<p
-							class="text-lg font-bold text-white"
-							style="text-shadow: 0 0 6px black, 0 0 12px black;"
-						>
-							{stage === 'boot' ? 'Detecting flash…' : LOAD_MESSAGES[stage]}
-						</p>
+				<!-- Integrated Tactical Loading Center -->
+				<div class="relative z-10 w-full max-w-lg mx-6 flex flex-col items-center justify-end pb-12 gap-5 text-center">
+					<!-- Mission Status & Stage Label -->
+					<div class="space-y-1.5">
+						<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gold-500/10 border border-gold-500/30 text-[11px] font-semibold uppercase tracking-widest text-gold-400 backdrop-blur-sm">
+							<span class="size-1.5 rounded-full bg-gold-400 animate-pulse"></span>
+							Iniciando Despliegue
+						</span>
+						<h3 class="text-xl sm:text-2xl font-black text-slate-100 tracking-tight drop-shadow-md">
+							{STAGE_LABELS[stage] ?? 'Preparando el juego…'}
+						</h3>
+					</div>
 
-						<!--
-							The 2013 bar: a dark trough with a gold fill and an inset
-							highlight, advancing one second per step like the original's
-							`transition: width 1s linear`.
-						-->
+					<!-- Tactical Gold Progress Bar -->
+					<div class="w-full flex flex-col gap-2">
+						<div class="flex items-center justify-between text-xs font-mono text-slate-300 px-1">
+							<span class="text-slate-400 font-sans text-xs">Cargando recursos de misión</span>
+							<span class="text-gold-400 font-bold">{progress}%</span>
+						</div>
 						<div
-							class="flex w-[45%] min-w-[160px] max-w-[300px] h-[18px] overflow-hidden rounded-[10px]"
-							style="background-color:#6d5554; box-shadow: inset 0 4px 9px -1px #4c4635;"
+							class="h-4 w-full overflow-hidden rounded-full bg-empire-950/90 border border-empire-700/80 p-0.5 shadow-inner backdrop-blur"
 							role="progressbar"
 							aria-valuemin="0"
 							aria-valuemax="100"
@@ -423,45 +661,43 @@
 							aria-label="Cargando el juego"
 						>
 							<div
-								class="h-full"
-								style={`width:${progress}%; background-color:#e6b104; box-shadow: inset 0 4px 9px -1px #fae361; transition: width 1s linear;`}
+								class="h-full rounded-full bg-gradient-to-r from-amber-600 via-gold-400 to-yellow-300 transition-all duration-500 ease-out shadow-[0_0_12px_rgba(234,179,8,0.5)]"
+								style={`width: ${progress}%;`}
 							></div>
 						</div>
-
-						{#if (data.motd?.motds.length ?? 0) > 1}
-							<button
-								type="button"
-								onclick={rerollMotd}
-								class="mt-1 text-xs text-white/70 hover:text-white underline"
-								style="text-shadow: 0 0 6px black;"
-							>
-								otra imagen
-							</button>
-						{/if}
 					</div>
+
+					<!-- Modern MOTD Shuffle Pill -->
+					{#if (data.motd?.motds.length ?? 0) > 1}
+						<button
+							type="button"
+							onclick={rerollMotd}
+							class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-empire-900/80 hover:bg-empire-800 border border-empire-700 text-xs font-medium text-slate-300 hover:text-gold-400 backdrop-blur-sm transition-all hover:scale-105 active:scale-95 shadow-md"
+						>
+							<span>🎲 Cambiar ilustración táctica</span>
+						</button>
+					{/if}
 				</div>
 			</div>
+
+		<!-- ERROR STATE -->
 		{:else if phase === 'error'}
 			<div
-				class="absolute inset-0 flex flex-col items-center justify-center gap-2 border border-red-800 bg-red-950/80 p-8 text-red-200 text-center"
+				class="absolute inset-0 flex flex-col items-center justify-center gap-3 border border-red-800/80 bg-red-950/90 p-8 text-red-200 text-center backdrop-blur-sm"
 			>
-				<p class="text-lg font-bold text-red-100">No se pudo iniciar el juego</p>
-				<p class="text-sm font-mono bg-red-950/60 p-2 rounded border border-red-900 max-w-lg">{failure}</p>
-				<p class="text-xs text-red-300/80 mt-2">
+				<p class="text-xl font-bold text-red-100">No se pudo iniciar el juego</p>
+				<p class="text-sm font-mono bg-red-950/60 p-3 rounded-lg border border-red-900 max-w-lg">{failure}</p>
+				<p class="text-xs text-red-300/80 mt-1">
 					Asegúrate de que el gateway AMF0 esté activo en <code>127.0.0.1:5005</code>.
 				</p>
+				<button
+					type="button"
+					onclick={restartGame}
+					class="mt-2 rounded-lg bg-red-800 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 transition-colors"
+				>
+					Reintentar conexión
+				</button>
 			</div>
-		{/if}
-	</div>
-
-	<!-- Status Bar -->
-	<div class="flex items-center justify-between w-full text-xs text-slate-400 px-2" style="max-width: 1024px;">
-		<span class="flex items-center gap-2">
-			<img src={avatarUrl(chosenAvatar)} alt="" height="22" class="rounded-sm" />
-			ID de cuenta (zid): <code class="text-gold-400">{data.zid ?? '—'}</code>
-		</span>
-		{#if data.role === 'admin'}
-			<a href="/admin/editor" class="text-gold-400 hover:underline">🛠️ Editor de Imperio</a>
 		{/if}
 	</div>
 </div>

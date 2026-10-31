@@ -7,7 +7,7 @@
  * its own load, because this fetch goes straight to the gateway.
  */
 
-import { PLAYER_ZID_HEADER } from './proxy.ts';
+import { PLAYER_ROLE_HEADER, PLAYER_ZID_HEADER } from './proxy.ts';
 import { config } from './config.ts';
 
 export interface EditorState {
@@ -86,13 +86,15 @@ export interface BackupEntry {
 
 export async function fetchEditorState(
 	request: Request,
-	playerZid: string
+	playerZid: string,
+	playerRole?: string
 ): Promise<EditorState | null> {
 	// The account id travels with every gateway read. Without it the gateway
 	// files the request under the browser's session cookie, which is a
 	// different row from the account's -- the editor then reports "no save in
 	// this browser" for an empire that very much exists.
 	const headers = new Headers({ [PLAYER_ZID_HEADER]: playerZid });
+	if (playerRole) headers.set(PLAYER_ROLE_HEADER, playerRole);
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 
@@ -120,10 +122,12 @@ export async function sendPatch(
 	request: Request,
 	path: string,
 	value: number,
-	playerZid?: string
+	playerZid?: string,
+	playerRole?: string
 ): Promise<number> {
 	const headers = new Headers();
-	if (playerZid) headers.set('x-player-zid', playerZid);
+	if (playerZid) headers.set(PLAYER_ZID_HEADER, playerZid);
+	if (playerRole) headers.set(PLAYER_ROLE_HEADER, playerRole);
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 
@@ -146,10 +150,12 @@ export async function sendPatch(
 export async function restoreBackup(
 	request: Request,
 	revision: number,
-	playerZid?: string
+	playerZid?: string,
+	playerRole?: string
 ): Promise<{ ok: boolean; message?: string; label?: string }> {
 	const headers = new Headers();
-	if (playerZid) headers.set('x-player-zid', playerZid);
+	if (playerZid) headers.set(PLAYER_ZID_HEADER, playerZid);
+	if (playerRole) headers.set(PLAYER_ROLE_HEADER, playerRole);
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 

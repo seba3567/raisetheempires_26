@@ -24,9 +24,9 @@ import pytest
 from save_store import Store
 
 # Each test gets its own database on the shared server, so runs cannot see each
-# other's snapshots. There is no SQLite any more -- Store takes a mariadb:// URL.
-SERVER = os.environ.get("RTE_TEST_MARIADB",
-                        "mariadb://root:2001@127.0.0.1:3306/rte_trim_test")
+# other's snapshots. Store takes a postgresql:// URL.
+SERVER = os.environ.get("RTE_TEST_DB",
+                        "postgresql+psycopg2://postgres:42kSM0ud2nRLlTZv6YVsXgPcbxwAx9Qe!7a@127.0.0.1:5432/rte_trim_test")
 
 
 def a_store(name: str, **kwargs) -> Store:

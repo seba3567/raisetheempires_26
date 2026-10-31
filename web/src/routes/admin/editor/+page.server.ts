@@ -2,6 +2,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 
 import { RESOURCES } from '#lib/resources';
 import { fetchEditorState, restoreBackup, sendPatch } from '#lib/server/editor';
+import { PLAYER_ROLE_HEADER, PLAYER_ZID_HEADER } from '#lib/server/proxy';
 import { config } from '#lib/server/config';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -46,7 +47,10 @@ function requireAdmin(locals: App.Locals): void {
 /** The gateway's own session cookie is what selects the save to write to. */
 function upstreamHeaders(request: Request, locals: App.Locals): Headers {
 	const headers = new Headers();
-	if (locals.user) headers.set('x-player-zid', locals.user.zid);
+	if (locals.user) {
+		headers.set(PLAYER_ZID_HEADER, locals.user.zid);
+		headers.set(PLAYER_ROLE_HEADER, locals.user.role);
+	}
 	const cookie = request.headers.get('cookie');
 	if (cookie) headers.set('cookie', cookie);
 	return headers;
@@ -55,7 +59,7 @@ function upstreamHeaders(request: Request, locals: App.Locals): Headers {
 export const load: PageServerLoad = async ({ locals, request }) => {
 	requireAdmin(locals);
 
-	const state = await fetchEditorState(request, locals.user!.zid);
+	const state = await fetchEditorState(request, locals.user!.zid, locals.user!.role);
 
 	return {
 		state,
@@ -80,7 +84,7 @@ export const actions: Actions = {
 			return fail(400, { message: 'El valor tiene que ser un número entero' });
 		}
 
-		const status = await sendPatch(request, path, value, locals.user?.zid);
+		const status = await sendPatch(request, path, value, locals.user?.zid, locals.user?.role);
 		if (status >= 400) return fail(502, { message: `El gateway respondió ${status}` });
 
 		return redirect(303, '/admin/editor?ok=' + encodeURIComponent(field));
@@ -123,7 +127,7 @@ export const actions: Actions = {
 		}
 
 		for (const write of writes) {
-			const status = await sendPatch(request, write.path, write.value, locals.user?.zid);
+			const status = await sendPatch(request, write.path, write.value, locals.user?.zid, locals.user?.role);
 			if (status >= 400) {
 				return fail(502, {
 					message: `El gateway respondió ${status} al guardar "${write.field}"`
@@ -203,7 +207,7 @@ export const actions: Actions = {
 			return fail(400, { message: 'La revisión del respaldo no es válida' });
 		}
 
-		const result = await restoreBackup(request, revision, locals.user?.zid);
+		const result = await restoreBackup(request, revision, locals.user?.zid, locals.user?.role);
 		if (!result.ok) {
 			return fail(502, { message: result.message ?? 'No se pudo restaurar el respaldo' });
 		}

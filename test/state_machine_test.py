@@ -78,3 +78,12 @@ def test_click_next_state_finish_building():
                                      {'name': 'QRUX1', 'complete': False, 'expired': False, 'progress': [1, 0], 'completedTasks': 1}]
         session['user_object']["userInfo"]["player"]['lastEnergyCheck'] = 0
         assert session['user_object']["userInfo"]["player"] == {'xp': 1, 'energy': 25.0, 'cash': 0, 'socialXpGood': 0, 'socialXpBad': 0, 'level': 1, 'energyMax': 25, 'playerResourceType': 3, 'lastEnergyCheck': 0, 'inventory': {'items': {}}}
+
+
+def test_click_next_state_missing_object():
+    with app.test_request_context():
+        session['user_object'] = {"userInfo": {"world": {"objects": []}}}
+        meta = {}
+        # Should not raise KeyError when object id is not in world
+        state_machine.click_next_state(True, 99999, meta, "place", None)
+        assert meta == {}

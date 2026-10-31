@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import copy
 import json
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from flask import has_request_context, request, session
 
+import contract
 import mod_engine
 from crc64_go_iso import zid_from_sid
 from save_engine import my_games_path, validate_save
@@ -14,20 +18,23 @@ game_settings_path = str(Path(my_games_path()) / "gamesettings-converted.json")
 initial_island_path = str(Path(my_games_path()) / "allies" / "initial-island.json")
 
 # Header used by the SvelteKit front door to hand over the signed-in account's
-# identity. See get_zid().
-PLAYER_ZID_HEADER = "x-player-zid"
+# identity. See get_zid(). The name lives in contract/runtime.json because the
+# front door sets it and this side reads it: two spellings would mean the
+# account's id never arrives, and the game falls back to filing the player
+# under a hash of its own cookie.
+PLAYER_ZID_HEADER = contract.PLAYER_ZID_HEADER
 
 # ActionScript 3 has no integer type: every Number is a double, so the client
 # represents integers exactly only up to 2^53-1. That bound is why zid divides
 # the 64-bit checksum down by 2048 in the first place, so it is also the bound a
 # header-supplied zid has to respect.
-MAX_SAFE_ZID = 2**53 - 1
+MAX_SAFE_ZID = contract.MAX_SAFE_ZID
 
-def read_games_settings():
+def read_games_settings() -> dict[str, Any]:
     return json.loads(Path(game_settings_path).read_text(encoding="utf-8"))
 
 
-def read_initial_island():
+def read_initial_island() -> dict[str, Any]:
     return json.loads(Path(initial_island_path).read_text(encoding="utf-8"))
 
 
@@ -39,7 +46,7 @@ print("Initial island template", len(initial_island["objects"]), "objects loaded
       "roads loaded")
 # game_objects = [o for o in game_objects_2 if int(o["position"].split(",")[0]) > 62 and int(o["position"].split(",")[1]) > 58]
 
-def read_island_file(file_path):
+def read_island_file(file_path: str | Path) -> dict[str, Any]:
     return json.loads(Path(file_path).read_text(encoding="utf-8"))
 
 
@@ -67,58 +74,70 @@ for key in allies:
     print(" * ", key, ":", wName, " --> ", str(len(ally["objects"]) if ally["objects"] else 0), "objects, ", str(len(ally["roads"]) if ally["roads"] else 0), "roads")
 
 
-def lookup_item_by_name(item_name):
-    try:
-        [item] = [e for e in game_settings['settings']['items']['item'] if e['-name'] == item_name]
-        return item
-    except ValueError as e:
-        print("ERROR: Could not look up item by name", item_name)
-        raise e
+def lookup_item_by_name(item_name: str) -> dict[str, Any]:
+    """The catalogue entry with this name.
+
+    The catalogue is not a set. 36 item names are listed twice, and every one
+    of those pairs is a byte-for-byte copy of the same row -- so "exactly one
+    match" was never a property of the data, only an assumption. Unwrapping it
+    raised ``ValueError: too many values to unpack`` the first time the player
+    placed a ``BuildingPart124``, which ended the gateway batch and left the
+    client with an empty answer. The first match is the answer.
+    """
+    for item in game_settings['settings']['items']['item']:
+        if item.get('-name') == item_name:
+            return item
+    print("ERROR: Could not look up item by name", item_name)
+    raise ValueError(f"No item named {item_name!r} in the catalogue")
 
 
-def lookup_item_by_code(code):
-    try:
-        [item] = [e for e in game_settings['settings']['items']['item'] if e['-code'] == code]
-        return item
-    except ValueError as e:
-        print("ERROR: Could not look up item by code", code)
-        raise e
+def lookup_item_by_code(code: str) -> dict[str, Any]:
+    """The catalogue entry with this code.
+
+    34 codes are listed twice, each pair an identical copy of the same row,
+    for the same reason as :func:`lookup_item_by_name`.
+    """
+    for item in game_settings['settings']['items']['item']:
+        if item.get('-code') == code:
+            return item
+    print("ERROR: Could not look up item by code", code)
+    raise ValueError(f"No item with code {code!r} in the catalogue")
 
 
-def lookup_reference_item(cur_object):
+def lookup_reference_item(cur_object: dict[str, Any] | None) -> dict[str, Any] | None:
     return lookup_item_by_code(cur_object['referenceItem'].split(":")[0]) if cur_object and 'referenceItem' in cur_object and cur_object['referenceItem'] else None
 
 
-def lookup_items_with_workers_yield():
+def lookup_items_with_workers_yield() -> list[dict[str, Any]]:
     items = [e for e in game_settings['settings']['items']['item'] if 'yield' in e and '-workers' in e['yield']]
     return items
 
 
-def lookup_items_by_type(type):
+def lookup_items_by_type(type: str) -> list[dict[str, Any]]:
     items = [e for e in game_settings['settings']['items']['item'] if e['-type'] == type]
     return items
 
 
-def lookup_items_by_type_and_subtype(type, subtype):
+def lookup_items_by_type_and_subtype(type: str, subtype: str) -> list[dict[str, Any]]:
     items = [e for e in game_settings['settings']['items']['item'] if e['-type'] == type and e.get("-subtype") == subtype]
     return items
 
 
-def lookup_items_by_unit_class(unit_class):
+def lookup_items_by_unit_class(unit_class: str) -> list[dict[str, Any]]:
     items = [e for e in game_settings['settings']['items']['item'] if e.get('-unitClass') == unit_class]
     return items
 
 
-def lookup_yield():  #TODO buildstate
+def lookup_yield() -> int:  #TODO buildstate
     yields = {e['-name']: int(e['yield']['-workers']) for e in lookup_items_with_workers_yield()}
     return sum([yields[e['itemName']] for e in session['user_object']["userInfo"]["world"]["objects"] if e['itemName'] in yields])
 
 
-def lookup_visitor_reward(reward_name):
+def lookup_visitor_reward(reward_name: str) -> dict[str, Any]:
     [reward] = [reward for reward in game_settings['settings']['visitorRewards']["reward"] if reward["-name"] == reward_name]
     return reward
 
-def randomReward(item_name):
+def randomReward(item_name: str) -> tuple[str, int, str]:
     casino = game_settings["settings"]
     given_item = item_name
     item_list = []
@@ -129,8 +148,13 @@ def randomReward(item_name):
     for building in casino["casino"]["rewards"]:
         building_list.append(building["-item"])
 
-    reward_list = [e for e in casino["casino"]["rewards"] if e['-item'] == given_item]
-    reward_list = reward_list[0]["reward"]
+    rewards_for_item = [e for e in casino["casino"]["rewards"] if e['-item'] == given_item]
+    # The casino has four reward entries (QR01, QR02, ZR01, DB14). An item
+    # outside them used to raise IndexError on the empty list -- and with it
+    # the whole gateway batch. Such an item simply has no casino reward.
+    if not rewards_for_item:
+        return "", 0, ""
+    reward_list = rewards_for_item[0]["reward"]
 
     for item in range(len(reward_list)):
         if reward_list[item].get("-type") != "item" and reward_list[item].get("-item") is None:
@@ -157,7 +181,7 @@ def randomReward(item_name):
 #     return sum([yields[e['itemName']] for e in session['user_object']["userInfo"]["world"]["objects"] if
 #                 e['itemName'] in yields.keys()])
 
-def lookup_state_machine(state_machine_name, custom_values, custom_reference_values=None):
+def lookup_state_machine(state_machine_name: str, custom_values: list[dict[str, Any]], custom_reference_values: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     if custom_reference_values is None:
         custom_reference_values = []
     state_machine = copy.deepcopy(lookup_raw_state_machine(state_machine_name))
@@ -173,44 +197,81 @@ def lookup_state_machine(state_machine_name, custom_values, custom_reference_val
     return state_machine
 
 
-def lookup_raw_state_machine(state_machine_name):
-    try:
-        [state_machine] = [e for e in game_settings['settings']['stateMachines']['stateMachine'] if e['-name'] == state_machine_name]
-        return state_machine
-    except ValueError as e:
-        print("ERROR: Could not look up state machine by name", state_machine_name)
-        raise e
+def lookup_raw_state_machine(state_machine_name: str) -> dict[str, Any]:
+    """The state machine with this name.
 
-def lookup_crew_template(building_name):
+    ``WorldGamesStadiumStateMachine`` is listed twice, so the single-match
+    unwrapping raised for the one building that uses it.
+    """
+    for state_machine in game_settings['settings']['stateMachines']['stateMachine']:
+        if state_machine.get('-name') == state_machine_name:
+            return state_machine
+    print("ERROR: Could not look up state machine by name", state_machine_name)
+    raise ValueError(f"No state machine named {state_machine_name!r} in the catalogue")
+
+def lookup_crew_template(building_name: str) -> dict[str, Any]:
+    """The crew template of a decoration.
+
+    3938 of the 3990 catalogue items carry no '-crewTemplate' key at all --
+    only the 52 'CrewableDecoration*' items do. Reading it unconditionally
+    raised KeyError, and the caller staffs a decoration, so the request died
+    with it. An item with no template simply has no crew slots.
+    """
     item = lookup_item_by_name(building_name)
-    crew_template_name = item["-crewTemplate"]
-    return next(x for x in game_settings['settings']['crewTemplates']['crewTemplate'] if x['-crew'] == crew_template_name)
+    crew_template_name = item.get("-crewTemplate")
+    if not crew_template_name:
+        return {"-crew": "", "position": []}
+    template = next((x for x in game_settings['settings']['crewTemplates']['crewTemplate']
+                     if x['-crew'] == crew_template_name), None)
+    if template is None:
+        print("ERROR: Could not look up crew template", crew_template_name)
+        return {"-crew": crew_template_name, "position": []}
+    return template
 
-def repl_dict(d, replacements):
-    for k, v in d.items():
-        if isinstance(v, dict):
-            repl_dict(v, replacements)
-        elif isinstance(v, list):
-            for e in v:
-                repl_dict(e, replacements)
-        else:
-            if "$" in v:
-                # print('r1', v)
+def repl_dict(d: dict[str, Any] | list[Any], replacements: dict[str, str]) -> None:
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                repl_dict(v, replacements)
+            elif isinstance(v, list):
+                for e in v:
+                    repl_dict(e, replacements)
+            elif isinstance(v, str) and "$" in v:
+                new_v = v
                 for s, r in replacements.items():
-                    d[k] = d[k].replace(s, r)
-                # print('r2', d[k])
-                if ":" in v:
-                    d[k] = d[k].split(':', 1)[1 if "$" in d[k] else 0]
-                    # print('r3', d[k])
+                    new_v = new_v.replace(s, r)
+                if ":" in new_v:
+                    new_v = new_v.split(':', 1)[1 if "$" in new_v else 0]
+                d[k] = new_v
+    elif isinstance(d, list):
+        for e in d:
+            repl_dict(e, replacements)
 
 
-def lookup_wave(set_name, wave_index):
-    [wave_set] = [e for e in game_settings['settings']['survivalModeSets']['set'] if e.get('-name') == set_name]
-    [wave] = [e for e in wave_set["wave"] if e.get('-index') == str(wave_index)]
-    return wave
+def lookup_wave(set_name: str, wave_index: int | str) -> dict[str, Any]:
+    """The wave of a survival set.
+
+    ``set1`` and ``set2`` each appear twice: the two rows are *experiment
+    variants* of the same set (they differ in ``-variants`` and in the wave
+    roster), not copies. The first row is the variant this server plays.
+    """
+    wave_set = None
+    for candidate in game_settings['settings']['survivalModeSets']['set']:
+        if candidate.get('-name') == set_name:
+            wave_set = candidate
+            break
+    if wave_set is None:
+        print("ERROR: Could not look up survival set by name", set_name)
+        raise ValueError(f"No survival set named {set_name!r} in the catalogue")
+
+    for wave in wave_set["wave"]:
+        if wave.get('-index') == str(wave_index):
+            return wave
+    print("ERROR: Could not look up wave by index", wave_index, "in", set_name)
+    raise ValueError(f"No wave {wave_index!r} in survival set {set_name!r}")
 
 
-def replenish_energy():
+def replenish_energy() -> None:
     player = session['user_object']["userInfo"]["player"]
     # Energy is a count and it is stored as one. It had drifted to 27.0 in a
     # live save, which is what a resource that arrives through a float stops
@@ -229,7 +290,7 @@ def replenish_energy():
         print("Energy replenished:", energy_replenished)
 
 
-def unlock_expansion(index):
+def unlock_expansion(index: int) -> None:
     """Set one expansion bit in the player's expansion map.
 
     The map is a list of 32-bit words: ``index >> 5`` is the word and
@@ -249,11 +310,11 @@ def unlock_expansion(index):
     expansions[i] = expansions[i] | 1 << e
 
 
-def simple_list(raw_list):
+def simple_list(raw_list: Any) -> list[Any]:
     return (raw_list if isinstance(raw_list, list) else [raw_list]) if raw_list != '' else []
 
 
-def supplied_zid():
+def supplied_zid() -> int | None:
     """The account id the front door claimed for this request, or None.
 
     The header half of :func:`get_zid`, with no cookie fallback, because the two
@@ -276,7 +337,7 @@ def supplied_zid():
     return None
 
 
-def get_zid():
+def get_zid() -> int:
     """The id the rest of the game files a player under.
 
     Two sources, in order:
@@ -310,7 +371,7 @@ def get_zid():
     return zid_from_sid(session.sid)
 
 
-def get_sessions_friends(saves):
+def get_sessions_friends(saves: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if saves:
         response = [{
                 "zid":  save['user_object']["userInfo"]["player"]["uid"],
@@ -330,7 +391,7 @@ def get_sessions_friends(saves):
     return response
 
 
-def get_sessions_id(saves):
+def get_sessions_id(saves: list[dict[str, Any]]) -> list[int]:
     if saves:
         response = [save['user_object']["userInfo"]["player"]["uid"] for save in saves if validate_save(save) and save['user_object']["userInfo"]["player"]["level"] >= -6]
     else:

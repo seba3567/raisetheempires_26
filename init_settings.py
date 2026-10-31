@@ -1,19 +1,24 @@
 import argparse
 import sys
 
-debug = False
-host = '127.0.0.1'  # host to listen on 0.0.0.0 for all interfaces, 127.0.0.1 for only localhost
-http_host = '127.0.0.1'  # host to open on the webbrowser, can't be 0.0.0.0
-http_path = ''  # in order to open a specific page on startup
-port = 5005
-open_browser = True
-crash_log = True
-compression = True
-caching = True
-app_mode = True
+import contract
+
+debug: bool = False
+host: str = '127.0.0.1'  # host to listen on 0.0.0.0 for all interfaces, 127.0.0.1 for only localhost
+http_host: str = '127.0.0.1'  # host to open on the webbrowser, can't be 0.0.0.0
+http_path: str = ''  # in order to open a specific page on startup
+# The port the gateway listens on. It comes from the runtime contract, which is
+# where the front door reads it from too: the two halves have to agree about
+# where the gateway is, or the front door proxies into the void.
+port: int = contract.GATEWAY_PORT
+open_browser: bool = True
+crash_log: bool = True
+compression: bool = True
+caching: bool = True
+app_mode: bool = True
 
 
-def read_ops():
+def read_ops() -> None:
     global host, port, http_host, http_path, debug, open_browser, crash_log, compression, caching, app_mode
     parser = argparse.ArgumentParser(description="RaiseTheEmpires server options", add_help=False)
     parser.add_argument("--host", default=host, help="Host to listen on")

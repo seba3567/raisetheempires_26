@@ -98,6 +98,34 @@ def _run_werkzeug(app, host: str, port: int, debug: bool) -> bool:
     return True
 
 
+def _warn_if_exposed(host: str) -> None:
+    """Say it out loud when the gateway is reachable from outside this machine.
+
+    The front door in ``web/`` is meant to be the only public service. The
+    gateway trusts the ``x-player-zid`` header, and its admin routes only
+    check that the caller has a game session -- and both of those hold only
+    because nothing else can reach it. Binding it elsewhere breaks the two at
+    once, and nothing in the code notices.
+
+    This does not refuse to start: an operator who meant to put the gateway on
+    the network may know something this does not. It says so, loudly, once.
+    """
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return
+    print("!" * 72)
+    print(f"WARNING: the gateway is listening on {host}, so it is reachable from")
+    print("         outside this machine.")
+    print()
+    print("         web/ is meant to be the only public service. The gateway trusts")
+    print("         the x-player-zid header, and its admin routes only check for a")
+    print("         game session. Both of those hold only because nothing else can")
+    print("         reach it.")
+    print()
+    print("         Anything that can open a socket to this port can claim another")
+    print("         player's empire, or use the admin routes.")
+    print("!" * 72)
+
+
 def serve(app, host: str | None = None, port: int | None = None, debug: bool = False) -> None:
     """Serve ``app`` with the best available production server."""
     import init_settings as settings
@@ -105,6 +133,8 @@ def serve(app, host: str | None = None, port: int | None = None, debug: bool = F
     host = settings.host if host is None else host
     port = settings.port if port is None else port
     forced = (os.environ.get("RTE_SERVER") or "").strip().lower()
+
+    _warn_if_exposed(host)
 
     runners = {
         "granian": lambda: _run_granian(app, host, port),

@@ -20,6 +20,8 @@
  * resolves the name against the page's global scope.
  */
 
+import { logDev } from './dev-log';
+
 /** Where the payload comes from. Served by the gateway, proxied like the SWF. */
 export const SNAPI_ENDPOINT = '/snapi.json';
 
@@ -117,9 +119,17 @@ export function installSnapiBridge(payload: SnapiPayload, onProgress?: OnProgres
 
 	const scope = globalScope();
 
+	logDev.snapi('Bridge instalado con usuario táctico', {
+		zid: payload.user.zid,
+		name: payload.user.name,
+		friendsCount: payload.friends.length,
+		appFriendsCount: payload.appFriends.length
+	});
+
 	/** Report a stage, but never let the page's own error break the boot. */
 	const report = (stage: LoadStage) => {
 		try {
+			logDev.snapi(`Hito de carga alcanzado: ${stage} (${LOAD_STAGES[stage]}%)`);
 			onProgress?.(stage);
 		} catch (cause) {
 			console.debug('onProgress falló en', stage, cause);
@@ -128,14 +138,17 @@ export function installSnapiBridge(payload: SnapiPayload, onProgress?: OnProgres
 
 	// The three the client actually reads during setup.
 	scope['getUserInfo'] = () => {
+		logDev.snapi('Flash llamó a getUserInfo()', payload.user);
 		report('user');
 		return payload.user;
 	};
 	scope['getFriendData'] = () => {
+		logDev.snapi(`Flash llamó a getFriendData() -> ${payload.friends.length} amigos`);
 		report('friends');
 		return payload.friends;
 	};
 	scope['getAppFriendIds'] = () => {
+		logDev.snapi(`Flash llamó a getAppFriendIds() -> ${payload.appFriends.length} aliados tácticos`);
 		report('appFriends');
 		return payload.appFriends;
 	};
@@ -144,6 +157,7 @@ export function installSnapiBridge(payload: SnapiPayload, onProgress?: OnProgres
 	// fill the bar to 100% and take the loading overlay down; here the player
 	// page does the same when it sees the stage.
 	scope['onGameLoaded'] = () => {
+		logDev.snapi('Flash llamó a onGameLoaded() -> ¡Escenario listo!');
 		report('loaded');
 	};
 
@@ -163,4 +177,134 @@ export function installSnapiBridge(payload: SnapiPayload, onProgress?: OnProgres
 	scope['showBookmarkDialog'] = noop;
 	scope['showEmailPermission'] = noop;
 	scope['requestSend'] = noop;
+
+	// In-game transactions & Credits Acquisition (buying Z-Cash / Bundles)
+	scope['creditsAcquisition'] = (...args: unknown[]) => {
+		logDev.snapi('Flash llamó a creditsAcquisition()', args);
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('rte:creditsAcquisition', { detail: args }));
+		}
+		return true;
+	};
+
+	scope['openInAppPurchaseAPI'] = (item: unknown, callback?: (resp: unknown) => void) => {
+		logDev.snapi('Flash llamó a openInAppPurchaseAPI()', item);
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('rte:openInAppPurchase', { detail: item }));
+		}
+		if (typeof callback === 'function') {
+			try {
+				callback({ success: true, item });
+			} catch (e) {
+				console.debug(e);
+			}
+		}
+		return { success: true };
+	};
+
+	// Popup & Window control
+	scope['windowOpen'] = (url?: string, name?: string) => {
+		logDev.snapi('Flash llamó a windowOpen()', { url, name });
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('rte:windowOpen', { detail: { url, name } }));
+		}
+		return true;
+	};
+
+	scope['windowClose'] = () => {
+		logDev.snapi('Flash llamó a windowClose()');
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('rte:windowClose'));
+		}
+		return true;
+	};
+
+	// Ads & Watch-to-Earn
+	scope['getNetworkId'] = () => {
+		logDev.snapi('Flash llamó a getNetworkId() -> facebook');
+		return 'facebook';
+	};
+
+	scope['getHasActivities'] = () => {
+		logDev.snapi('Flash llamó a getHasActivities() -> false');
+		return false;
+	};
+
+	scope['startActivity'] = () => {
+		logDev.snapi('Flash llamó a startActivity()');
+		return false;
+	};
+
+	scope['PublishWithCallback'] = (data: unknown, callback?: (resp: unknown) => void) => {
+		logDev.snapi('Flash llamó a PublishWithCallback()', data);
+		if (typeof callback === 'function') {
+			try {
+				callback({ success: true });
+			} catch (e) {
+				console.debug(e);
+			}
+		}
+		return true;
+	};
+
+	scope['callExternalInterface'] = (cmd: string, ...args: unknown[]) => {
+		logDev.snapi(`Flash llamó a callExternalInterface(${cmd})`, args);
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('rte:externalInterface', { detail: { cmd, args } }));
+		}
+		return true;
+	};
+
+	// 2012 legacy statTracker bridge (called during SWF init stages)
+	scope['statTracker'] = {
+		logLoadApp: (...args: unknown[]) => {
+			logDev.snapi('Flash statTracker.logLoadApp', args);
+		},
+		logInitActions: (...args: unknown[]) => {
+			logDev.snapi('Flash statTracker.logInitActions', args);
+		},
+		logInteractive: (...args: unknown[]) => {
+			logDev.snapi('Flash statTracker.logInteractive', args);
+		},
+		logLoadComplete: (...args: unknown[]) => {
+			logDev.snapi('Flash statTracker.logLoadComplete', args);
+		},
+		logWorldObjectCount: (...args: unknown[]) => {
+			logDev.snapi('Flash statTracker.logWorldObjectCount', args);
+		}
+	};
+
+	// 2012 legacy ZYFrameManager bridge (tabs, app reload, navigation)
+	scope['ZYFrameManager'] = {
+		reloadApp: () => {
+			logDev.snapi('Flash ZYFrameManager.reloadApp');
+			if (typeof window !== 'undefined') window.location.reload();
+		},
+		navigateTo: (...args: unknown[]) => {
+			logDev.snapi('Flash ZYFrameManager.navigateTo', args);
+		},
+		openTab: (...args: unknown[]) => {
+			logDev.snapi('Flash ZYFrameManager.openTab', args);
+		},
+		switchToTab: (...args: unknown[]) => {
+			logDev.snapi('Flash ZYFrameManager.switchToTab', args);
+		},
+		showLanguageMenu: (...args: unknown[]) => {
+			logDev.snapi('Flash ZYFrameManager.showLanguageMenu', args);
+		}
+	};
+
+	// 2012 legacy Zynga Ads & Permissions
+	scope['zynga'] = {
+		ads: {
+			WatchToEarn: {
+				service: {
+					available: () => false,
+					initializeFlash: () => false
+				}
+			}
+		}
+	};
+	scope['hasPermission'] = () => true;
+	scope['showPermissions'] = noop;
 }

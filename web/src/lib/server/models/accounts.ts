@@ -6,14 +6,15 @@
  * derived from a session cookie, which is what the Python server still does and
  * why a cookie rotation there can split one player's save in two.
  *
- * Everything here is async. That is not a stylistic choice: MariaDB is reached
+ * Everything here is async. That is not a stylistic choice: PostgreSQL 18 is reached
  * over a socket through Bun's SQL client, and holding a synchronous handle open
  * across a round trip is not something to do. The helpers in db/client keep the
  * SQL and the ``?`` placeholders unchanged, so this file reads the way it did
  * when it was talking to SQLite.
  */
 import { all, now, one, run, transact } from "../db/client.ts";
-import { zidForUserAsNumber } from "../../ids.ts";
+import { config } from "../config.ts";
+import { zidForUserAsNumber } from "../ids.ts";
 
 export type Role = "player" | "admin";
 
@@ -54,8 +55,8 @@ type UserWithoutHash = Omit<User, "password_hash" | "zid">;
 /**
  * A user as the outside world sees it.
  *
- * `zid` is carried as a string even though the column is BIGINT. MariaDB's
- * client hands back a JS number for a BIGINT when it fits, and the value is
+ * `zid` is carried as a string even though the column is BIGINT. PostgreSQL
+ * hands back a JS number or bigint when it fits, and the value is
  * safe today, but routing every identity through one string representation
  * removes a whole class of precision bug from the JSON boundary.
  */
@@ -123,20 +124,19 @@ export async function createUser(
   const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
 
   return transact(async () => {
-    // The id has to exist before zid is derived from it, so insert then update.
     const id = await nextUserId();
+    const zid = zidForUserAsNumber(id);
     await run(
       `INSERT INTO users (id, zid, username, username_key, password_hash, role, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       id,
-      0,
+      zid,
       trimmed,
       usernameKey,
       passwordHash,
       role,
       now()
     );
-    await run("UPDATE users SET zid = ? WHERE id = ?", zidForUserAsNumber(id), id);
     await run(
       `INSERT INTO progress (user_id, level, xp, world_name, updated_at)
        VALUES (?, 1, 0, ?, ?)`,
@@ -198,7 +198,13 @@ export async function setRole(userId: number, role: Role): Promise<void> {
 }
 
 export async function getProgress(userId: number): Promise<Progress | null> {
-  return one<Progress>("SELECT * FROM progress WHERE user_id = ?", userId);
+  const row = await one<Progress>("SELECT * FROM progress WHERE user_id = ?", userId);
+  if (!row) return null;
+  return {
+    ...row,
+    level: Number(row.level),
+    xp: Number(row.xp),
+  };
 }
 
 export async function updateProgress(
@@ -206,18 +212,30 @@ export async function updateProgress(
   patch: { level?: number; xp?: number; world_name?: string }
 ): Promise<Progress> {
   const current = await getProgress(userId);
-  if (!current) throw new Error(`no progress row for user ${userId}`);
-
-  await run(
-    `UPDATE progress
-        SET level = ?, xp = ?, world_name = ?, updated_at = ?
-      WHERE user_id = ?`,
-    patch.level ?? current.level,
-    patch.xp ?? current.xp,
-    patch.world_name ?? current.world_name,
-    now(),
-    userId
-  );
+  if (!current) {
+    await run(
+      `INSERT INTO progress (user_id, level, xp, world_name, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE
+       SET level = EXCLUDED.level, xp = EXCLUDED.xp, world_name = EXCLUDED.world_name, updated_at = EXCLUDED.updated_at`,
+      userId,
+      patch.level ?? 1,
+      patch.xp ?? 0,
+      patch.world_name ?? 'Mi Imperio',
+      now()
+    );
+  } else {
+    await run(
+      `UPDATE progress
+          SET level = ?, xp = ?, world_name = ?, updated_at = ?
+        WHERE user_id = ?`,
+      patch.level ?? current.level,
+      patch.xp ?? current.xp,
+      patch.world_name ?? current.world_name,
+      now(),
+      userId
+    );
+  }
 
   const updated = await getProgress(userId);
   if (!updated) throw new Error(`progress update lost for user ${userId}`);
@@ -335,10 +353,16 @@ export async function addFriend(
     const status = isAcceptance ? "accepted" : "pending";
     const acceptedAt = isAcceptance ? stamp : null;
 
-    // MariaDB spells this ON DUPLICATE KEY UPDATE, keyed on any unique index;
-    // the composite primary key (user_id, friend_id) is the one it matches. The
-    // Postgres/SQLite form was "ON CONFLICT ... DO UPDATE SET ... excluded".
-    const upsert = `
+    const isPostgres = config.database.url.startsWith("postgres");
+    const upsert = isPostgres
+      ? `
+      INSERT INTO friendships (user_id, friend_id, status, requested_by, created_at, accepted_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (user_id, friend_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        requested_by = EXCLUDED.requested_by,
+        accepted_at = EXCLUDED.accepted_at`
+      : `
       INSERT INTO friendships (user_id, friend_id, status, requested_by, created_at, accepted_at)
       VALUES (?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE status = VALUES(status),
@@ -388,4 +412,239 @@ export async function suggestFriends(userId: number, limit = 10): Promise<Friend
     userId,
     limit
   );
+}
+
+export interface PendingRequestView {
+  userId: number;
+  username: string;
+  zid: number;
+  level: number | null;
+  world_name: string | null;
+  created_at: string;
+}
+
+/** Peticiones de amistad recibidas que están pendientes de respuesta. */
+export async function listPendingIncoming(userId: number): Promise<PendingRequestView[]> {
+  return all<PendingRequestView>(
+    `SELECT u.id AS "userId", u.username, u.zid, p.level, p.world_name, f.created_at
+       FROM friendships f
+       JOIN users u ON u.id = f.requested_by
+       LEFT JOIN progress p ON p.user_id = u.id
+      WHERE f.user_id = ? AND f.status = 'pending' AND f.requested_by <> ?
+      ORDER BY f.created_at DESC`,
+    userId,
+    userId
+  );
+}
+
+/** Peticiones de amistad enviadas por el usuario que esperan aceptación. */
+export async function listPendingOutgoing(userId: number): Promise<PendingRequestView[]> {
+  return all<PendingRequestView>(
+    `SELECT u.id AS "userId", u.username, u.zid, p.level, p.world_name, f.created_at
+       FROM friendships f
+       JOIN users u ON u.id = f.friend_id
+       LEFT JOIN progress p ON p.user_id = u.id
+      WHERE f.user_id = ? AND f.status = 'pending' AND f.requested_by = ?
+      ORDER BY f.created_at DESC`,
+    userId,
+    userId
+  );
+}
+
+/** Búsqueda de comandantes en vivo por nombre de usuario. */
+export async function searchUsers(
+  query: string,
+  excludeUserId: number,
+  limit = 10
+): Promise<FriendView[]> {
+  const cleaned = query.trim().toLowerCase();
+  if (!cleaned) return [];
+  return all<FriendView>(
+    `SELECT u.username, u.zid, COALESCE(f.status, 'none') AS status, p.level, p.world_name, u.last_seen_at
+       FROM users u
+       LEFT JOIN progress p ON p.user_id = u.id
+       LEFT JOIN friendships f ON f.user_id = ? AND f.friend_id = u.id
+      WHERE u.id <> ? AND u.username_key LIKE ?
+      ORDER BY p.level DESC, u.username
+      LIMIT ?`,
+    excludeUserId,
+    excludeUserId,
+    `%${cleaned}%`,
+    limit
+  );
+}
+
+export interface BattleHistoryItem {
+  id: number;
+  kind: string;
+  opponent: string;
+  role: 'attack' | 'defense';
+  won: boolean;
+  xpGained: number;
+  coinsGained: number;
+  date: string;
+  summary: string;
+}
+
+/** Registro de resultado de combate PvP entre comandantes. */
+export async function recordBattleActivity(
+  userId: number,
+  opponentUsername: string,
+  won: boolean,
+  details: {
+    role?: 'attack' | 'defense';
+    xpGained?: number;
+    coinsGained?: number;
+    summary?: string;
+    playerCasualties?: number;
+    opponentCasualties?: number;
+  } = {}
+): Promise<void> {
+  const role = details.role ?? 'attack';
+  const kind =
+    role === 'defense'
+      ? won
+        ? 'pvp.defense_victory'
+        : 'pvp.defense_defeat'
+      : won
+        ? 'pvp.victory'
+        : 'pvp.defeat';
+
+  await recordActivity(
+    userId,
+    kind,
+    JSON.stringify({ opponent: opponentUsername, won, role, ...details })
+  );
+}
+
+/** Historial de batallas y enfrentamientos PvP recientes. */
+export async function getRecentBattles(userId: number, limit = 10): Promise<BattleHistoryItem[]> {
+  const rows = await all<{ id: number; kind: string; detail: string | null; created_at: string }>(
+    `SELECT id, kind, detail, created_at FROM activity
+      WHERE user_id = ? AND kind IN ('pvp.victory', 'pvp.defeat', 'pvp.defense_victory', 'pvp.defense_defeat')
+      ORDER BY id DESC LIMIT ?`,
+    userId,
+    limit
+  );
+
+  return rows.map((r) => {
+    let opponent = 'Comandante Rival';
+    let won = r.kind === 'pvp.victory' || r.kind === 'pvp.defense_victory';
+    let role: 'attack' | 'defense' = r.kind.startsWith('pvp.defense_') ? 'defense' : 'attack';
+    let xpGained = 0;
+    let coinsGained = 0;
+    let summary = '';
+    try {
+      if (r.detail) {
+        const parsed = JSON.parse(r.detail);
+        opponent = parsed.opponent ?? opponent;
+        won = parsed.won ?? won;
+        role = parsed.role ?? role;
+        xpGained = parsed.xpGained ?? 0;
+        coinsGained = parsed.coinsGained ?? 0;
+        summary = parsed.summary ?? '';
+      }
+    } catch {
+      opponent = r.detail ?? 'Comandante Rival';
+    }
+    return {
+      id: r.id,
+      kind: r.kind,
+      opponent,
+      role,
+      won,
+      xpGained,
+      coinsGained,
+      date: r.created_at,
+      summary
+    };
+  });
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  id: number;
+  zid: string;
+  username: string;
+  level: number;
+  xp: number;
+  worldName: string;
+}
+
+export interface PvPLeaderboardEntry {
+  rank: number;
+  id: number;
+  zid: string;
+  username: string;
+  level: number;
+  wins: number;
+  losses: number;
+  pvpScore: number;
+}
+
+export async function getLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
+  const rows = await all<{
+    id: number;
+    zid: string;
+    username: string;
+    level: number;
+    xp: number;
+    world_name: string;
+  }>(
+    `SELECT u.id, u.zid, u.username, COALESCE(p.level, 1) as level, COALESCE(p.xp, 0) as xp, COALESCE(p.world_name, u.username) as world_name
+       FROM users u
+       LEFT JOIN progress p ON p.user_id = u.id
+      ORDER BY xp DESC, level DESC
+      LIMIT ?`,
+    limit
+  );
+
+  return rows.map((r, i) => ({
+    rank: i + 1,
+    id: r.id,
+    zid: String(r.zid),
+    username: r.username,
+    level: Number(r.level),
+    xp: Number(r.xp),
+    worldName: r.world_name
+  }));
+}
+
+export async function getPvPLeaderboard(limit = 20): Promise<PvPLeaderboardEntry[]> {
+  const rows = await all<{
+    id: number;
+    zid: string;
+    username: string;
+    level: number;
+    wins: string | number;
+    losses: string | number;
+  }>(
+    `SELECT u.id, u.zid, u.username, COALESCE(p.level, 1) as level,
+            COUNT(a.id) FILTER (WHERE a.kind IN ('pvp.victory', 'pvp.defense_victory')) as wins,
+            COUNT(a.id) FILTER (WHERE a.kind IN ('pvp.defeat', 'pvp.defense_defeat')) as losses
+       FROM users u
+       LEFT JOIN progress p ON p.user_id = u.id
+       LEFT JOIN activity a ON a.user_id = u.id
+      GROUP BY u.id, u.zid, u.username, p.level
+      ORDER BY wins DESC, p.level DESC
+      LIMIT ?`,
+    limit
+  );
+
+  return rows.map((r, i) => {
+    const wins = Number(r.wins);
+    const losses = Number(r.losses);
+    const level = Number(r.level);
+    const pvpScore = wins * 250 - losses * 50 + level * 100;
+    return {
+      rank: i + 1,
+      id: r.id,
+      zid: String(r.zid),
+      username: r.username,
+      level,
+      wins,
+      losses,
+      pvpScore: Math.max(0, pvpScore)
+    };
+  });
 }

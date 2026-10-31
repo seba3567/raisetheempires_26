@@ -114,7 +114,8 @@ class TestTheFormatIsTheReadersFormat:
 
         assert row["data"] is not None
         # A pickle stream opens with a protocol marker; msgpack never emits it.
-        assert not row["data"].startswith(b"\x80"), (
+        # Postgres returns BYTEA as a memoryview, so wrap with bytes().
+        assert not bytes(row["data"]).startswith(b"\x80"), (
             "something is writing pickles again; the server cannot read those"
         )
 
