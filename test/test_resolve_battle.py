@@ -18,8 +18,6 @@ from __future__ import annotations
 import pytest
 from pyamf import AMF0, remoting
 
-empires_server = __import__("empires-server")
-
 
 @pytest.fixture(scope="module")
 def client(gateway_app):

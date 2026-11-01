@@ -1,18 +1,18 @@
 import copy
 import json
+from pathlib import Path
 
 import pytest
 from flask import Flask, request, session
 from pyamf import remoting
 
-empires_server = __import__('empires-server')
-from empires_gateway.amf.handlers import player as player_handlers
-from empires_gateway.amf.handlers.player import init_user, tutorial_response
-from logger import report_tutorial_step
-from pathlib import Path
-
 import quest_engine
+from empires_gateway import shared as gateway_shared
+from empires_gateway.amf import dispatch as amf_dispatch
 from empires_gateway.amf.handlers import battle as battle_handlers
+from empires_gateway.amf.handlers import player as player_handlers
+from empires_gateway.amf.handlers import social as social_handlers
+from empires_gateway.amf.handlers.player import init_user, tutorial_response
 
 app = Flask(__name__)
 app.secret_key = 'test'
@@ -50,7 +50,7 @@ def test_neighbour_list_survives_a_save_without_pvp():
     with app.test_request_context():
         normal = _real_save()
         broken = _without_pvp(normal)
-        rows = empires_server.get_sessions_info([normal, broken])
+        rows = gateway_shared.get_sessions_info([normal, broken])
 
     assert len(rows) == 2, "one broken row dropped a neighbour off the list"
     assert all(r["pvpNumOccupiers"] == 0 for r in rows), "the fresh save has none pending either"
@@ -80,7 +80,7 @@ def test_cancel_unstarted_invasions_survives_a_save_without_pvp(monkeypatch):
 def test_add_fleet():
     with app.test_request_context():
         session["fleets"] = {}
-        empires_server.add_fleet_response(
+        battle_handlers.add_fleet_response(
             {'status': 104, 'allies': ['123'], 'name': 'fleet14_3398563345700246', 'type': 'air',
              'uid': '3398563345700246', 'ch': 5921, 'units': ['UB96,300,0,0,0', 'UB96,300,0,1,0']})
 
@@ -108,7 +108,7 @@ def test_random_fleet_challenge_response(monkeypatch):
     with app.test_request_context():
         session.sid = "0"
         session["fleets"] = {}
-        resp = empires_server.random_fleet_challenge_response(1)
+        resp = battle_handlers.random_fleet_challenge_response(1)
 
         assert resp == {'errorType': 0, 'userId': 1, 'metadata': {'newPVE': 0},
                         'data': {'state': 0,
@@ -153,7 +153,7 @@ def test_random_enemy_fleet_challenge_response():
                     'defender_fleet': ['V03,,,,', 'U04,,,,', 'U04,,,,', 'V61,,,,', 'V61,,,,'],
                     'attacker_fleet': ['U25,,,,', 'V62,,,,', 'V62,,,,', 'V04,,,,', 'V03,,,,']}}
 
-        resp = empires_server.random_enemy_fleet_challenge_response('fleet1_1')
+        resp = battle_handlers.random_enemy_fleet_challenge_response('fleet1_1')
 
         assert resp == {'errorType': 0, 'userId': 1, 'metadata': {'newPVE': 0},
                         'data': {'state': 0,
@@ -205,7 +205,7 @@ def test_load_challenge_response():
                                           'store': [0],
                                           'fleets': [], 'upgrades': None, 'hp': None, 'invader': True}}
 
-        resp = empires_server.load_challenge_response({'challengeeFleet': {'name': 'fleet14_2341959767162880',
+        resp = battle_handlers.load_challenge_response({'challengeeFleet': {'name': 'fleet14_2341959767162880',
                                                                            'type': 'army', 'uid': '2341959767162880',
                                                                            'status': 104,
                                                                            'units': ['UN06,740,0,0,0', 'V06,180,1,1,0',
@@ -291,7 +291,7 @@ def test_part_request_response():
         session['user_object']["userInfo"]["player"] = {"inventory": {"items": {}}, "energy": 0, "energyMax": 0,
                                                         "lastEnergyCheck": 0}
 
-        res = empires_server.part_request_response(['BuildingPart166', '', 'gift_request', [111, 124, 123, -1], {'source': 'quest', 'quest': 'QW240', 'task': 0}])
+        res = social_handlers.part_request_response(['BuildingPart166', '', 'gift_request', [111, 124, 123, -1], {'source': 'quest', 'quest': 'QW240', 'task': 0}])
 
         assert res == {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0, 'QuestComponent': [{'name': 'QW240', 'complete': False, 'expired': False, 'progress': [4, 5, 0], 'completedTasks': 0}]},
                       "data": []}
@@ -312,7 +312,7 @@ def test_part_request_response_inventory_count():
         session['user_object']["userInfo"]["player"] = {"inventory": {"items": {}}, "energy": 0, "energyMax": 0,
                                                         "lastEnergyCheck": 0}
 
-        res = empires_server.part_request_response(['BuildingPart134', '', 'gift_request', [111, 123], {'source': 'quest', 'quest': 'QW228', 'task': 0}])
+        res = social_handlers.part_request_response(['BuildingPart134', '', 'gift_request', [111, 123], {'source': 'quest', 'quest': 'QW228', 'task': 0}])
 
         assert res == {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0, 'QuestComponent': [{'name': 'QW228', 'complete': False, 'expired': False, 'progress': [2, 0, 1], 'completedTasks': 4}]},
                       "data": []}
@@ -340,7 +340,7 @@ def test_streak_bonus_response():
             {'name': 'Q0516', 'complete': False, 'expired': False, 'progress': [0],
              'completedTasks': 0}]
 
-        res = empires_server.streak_bonus_response({"amount": 110, "maxesReached": 3})
+        res = player_handlers.streak_bonus_response({"amount": 110, "maxesReached": 3})
 
         assert res == {"errorType": 0, "userId": 1,
                        "metadata": {"newPVE": 0, 'QuestComponent':
@@ -357,7 +357,7 @@ def test_exit_battle_response():
     with app.test_request_context():
         session['battle'] = ([40, 30], [50, 50], [])
 
-        res = empires_server.exit_battle_response()
+        res = battle_handlers.exit_battle_response()
 
         assert res == {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
              "data": []}
@@ -368,7 +368,7 @@ def test_load_survival_mode_response():
     with app.test_request_context():
         session['fleets'] = {}
 
-        res = empires_server.load_survival_mode_response({'set': 'set3', 'eliteMode': False})
+        res = battle_handlers.load_survival_mode_response({'set': 'set3', 'eliteMode': False})
 
         assert res == {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
                        "data": {'state': 2, 'storage': {"curSet": "set3", "curWave": 1, "curLoop": 0, "curPlayerFleet": None,
@@ -397,7 +397,8 @@ def test_init_user(monkeypatch):
     def get_saves_mock():
         return []
 
-    monkeypatch.setattr(empires_server, "get_saves", get_saves_mock)
+    # `get_allies_info` reads the saves, and it lives in the shared module.
+    monkeypatch.setattr(gateway_shared, "get_saves", get_saves_mock)
 
     with app.test_request_context():
         session.sid = "0"
@@ -428,7 +429,7 @@ def test_post_gateway(monkeypatch):
         nonlocal reported_service, reported_response, reported_req, reported_endpoint
         (reported_service, reported_response, reported_req, reported_endpoint) = (a, b, c, d)
 
-    monkeypatch.setattr(empires_server, "report_other_log", report_other_log_mock)
+    monkeypatch.setattr(amf_dispatch, "report_other_log", report_other_log_mock)
 
 
     with app.test_request_context():
@@ -445,7 +446,7 @@ def test_post_gateway(monkeypatch):
         raw_data = remoting.encode(envelope)
 
         request.data = raw_data
-        response_result = empires_server.post_gateway()
+        response_result = amf_dispatch.post_gateway()
 
         assert reported_service == 'WorldService.addFleet'
         assert reported_response == {'errorType': 0, 'userId': 1, 'metadata': {'newPVE': 0}, 'data': []}

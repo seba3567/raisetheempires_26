@@ -122,7 +122,6 @@ class TestInitUserSurvivesBrokenNeighbours:
         that silently returned nothing would look identical from the front door
         except that every player would be alone on the map.
         """
-        empires_server = __import__("empires-server")
         from empires_gateway.shared import get_sessions_info
         saves = [_valid_save(31337, "Vecino sano"), _valid_save(31338, "Otro vecino")]
 
@@ -140,7 +139,6 @@ class TestInitUserSurvivesBrokenNeighbours:
         defensively rather than indexing: a row that cannot be read is a
         neighbour you cannot show, not a list that cannot be built.
         """
-        empires_server = __import__("empires-server")
         from empires_gateway.shared import get_sessions_info
         saves = [_valid_save(31337, "Vecino sano"), BROKEN["sin socialXpGood"]]
 
@@ -156,7 +154,6 @@ class TestInitUserSurvivesBrokenNeighbours:
         Inventing a zero-valued neighbour for an unreadable save would put a
         phantom player on the map. Being absent is the honest answer.
         """
-        empires_server = __import__("empires-server")
         from empires_gateway.shared import get_sessions_info
 
         rows = get_sessions_info([BROKEN["sin userInfo"]])

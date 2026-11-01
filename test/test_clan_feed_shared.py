@@ -18,8 +18,6 @@ from pathlib import Path
 import pytest
 from flask import session
 
-empires_server = pytest.importorskip("empires-server")
-
 WEB_MIGRATIONS = (
     Path(__file__).resolve().parent.parent
     / "web"

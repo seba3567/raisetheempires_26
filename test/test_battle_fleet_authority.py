@@ -32,6 +32,7 @@ from battle_test import app
 from flask import session
 
 import battle_engine
+from empires_gateway.amf.handlers import player as player_handlers
 
 QUEST = [{'name': 'Q6016', 'complete': False, 'expired': False,
           'progress': [0], 'completedTasks': 0}]
@@ -140,19 +141,26 @@ class TestLoginKeepsTheFleets:
     thing that happened was it inventing an army.
     """
 
-    def test_init_user_does_not_reset_the_registry(self, monkeypatch):
-        empires_server = __import__("empires-server")
-        class _Session(dict):
-            pass
+    def test_init_user_does_not_reset_the_registry(self):
+        """The registry the client filled has to be there after a login.
 
-        fake = _Session()
-        fake['fleets'] = {"fleet1_123": ["U1,1,0,0,0"]}
-        fake['battle'] = ["stale"]
-        monkeypatch.setattr(empires_server, "session", fake, raising=False)
+        The call is ``UserService.initUser``, which is ``user_response``: it is
+        the one that ends in ``ensure_fleets()``. Calling ``init_user`` alone
+        would not touch the registry at all, so the test would pass without
+        proving anything.
+        """
+        with app.test_request_context():
+            session.sid = "0"
+            session['fleets'] = {"fleet1_123": ["U1,1,0,0,0"]}
+            session['battle'] = ["stale"]
 
-        # The rest of init_user wants a real empire; the reset is the point.
-        with contextlib.suppress(Exception):
-            empires_server.init_user()
+            with contextlib.suppress(Exception):
+                player_handlers.user_response()
 
-        assert fake['fleets'] == {"fleet1_123": ["U1,1,0,0,0"]}, \
-            "init_user must not wipe the fleet registry"
+            # The login got as far as clearing the stale battle, which is the
+            # line right before the registry is repaired. Without this the
+            # assertion below would also hold if the call had died early.
+            assert session.get('battle') is None, \
+                "initUser did not run to the point of repairing the registry"
+            assert session.get('fleets') == {"fleet1_123": ["U1,1,0,0,0"]}, \
+                "init_user must not wipe the fleet registry"

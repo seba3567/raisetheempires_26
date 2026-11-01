@@ -235,8 +235,8 @@ hardcodes. **Do not "simplify" it to `zlib.crc32`.**
 | Path | Purpose |
 | --- | --- |
 | `web/` | Public front end — SvelteKit 3 + Svelte 5 on Bun. See `web/README.md` |
-| `empires-server.py` | Flask app and AMF gateway (entry point) |
-| `empires_gateway/` | The HTTP surface, split out of the monolith: `routes/catalog.py` (the catalogue, the player state, the neighbour list), `routes/editor.py` (the empire editor), `routes/tools.py` (the operator tools), `assets.py` (the files the client downloads), `shared.py` (the pieces both halves need) |
+| `empires-server.py` | The entry point: the Flask app, the extensions, the socket.io events and nothing else |
+| `empires_gateway/` | The gateway, split out of the monolith. `routes/catalog.py` (the catalogue, the player state, the neighbour list), `routes/editor.py` (the empire editor), `routes/tools.py` (the operator tools), `assets.py` (the files the client downloads), `shared.py` (the pieces both halves need), `amf/protocol.py` (the rules of the AMF0 wire), `amf/handlers/` (the game's rules, one module per domain), `amf/dispatch.py` (the table that wires the handlers to the names the client calls, and the route that carries the batch) |
 | `service_handlers.py` | The extended AMF services (clans, gifts, PVP, matchmaking) |
 | `battle_engine.py` | Combat resolution |
 | `quest_engine.py`, `state_machine.py` | Quest progression |

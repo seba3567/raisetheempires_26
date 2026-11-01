@@ -21,6 +21,7 @@ from __future__ import annotations
 import pytest
 
 import contract
+from empires_gateway import shared as gateway_shared
 
 
 class TestTheSnapiPayload:
@@ -104,11 +105,10 @@ class TestTheResourceOrder:
         they did.
         """
         catalog = pytest.importorskip("empires_gateway.routes.catalog")
-        empires_server = pytest.importorskip("empires-server")
 
         assert tuple(catalog.RESOURCE_ORDER) == tuple(contract.RESOURCE_ORDER)
         # And the set the economy charges against is the same one.
-        assert frozenset(contract.RESOURCE_ORDER) == empires_server.WORLD_RESOURCES
+        assert frozenset(contract.RESOURCE_ORDER) == gateway_shared.WORLD_RESOURCES
 
     def test_the_coins_come_first(self):
         """The client shows them in this order and the coins are the first."""

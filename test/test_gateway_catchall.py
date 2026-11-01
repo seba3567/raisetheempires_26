@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 from pyamf import AMF0, remoting
 
-empires_server = __import__("empires-server")
+from empires_gateway.amf import dispatch as amf_dispatch
 
 
 @pytest.fixture(scope="module")
@@ -63,16 +63,14 @@ def boom(monkeypatch):
     fallback must not be keyed to a list.
     """
     def install(service, error):
-        handler = {
-            "ZlingshotService.presence": empires_server.zlingshot_response,
-        }[service]
-
         def explode(*args, **kwargs):
             raise error
 
-        # The dispatch chain calls the module-level name, so replacing the
-        # module attribute is what actually changes what runs.
-        monkeypatch.setattr(empires_server, handler.__name__, explode)
+        # The route looks the call up in the dispatch table, so replacing the
+        # entry is what actually changes what runs. Patching a module-level
+        # name would only work if the table happened to look the name up
+        # again at call time, which is not a thing to rely on.
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, service, explode)
         return explode
     return install
 
@@ -194,9 +192,9 @@ class TestTheAnswersStayInTheirOwnSlots:
         def third(*args, **kwargs):
             return {**marker, "data": ["third"]}
 
-        monkeypatch.setitem(empires_server.AMF_HANDLERS, "FirstService.one", first)
-        monkeypatch.setitem(empires_server.AMF_HANDLERS, "SecondService.two", second)
-        monkeypatch.setitem(empires_server.AMF_HANDLERS, "ThirdService.three", third)
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, "FirstService.one", first)
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, "SecondService.two", second)
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, "ThirdService.three", third)
 
         response = post_batch(client, [
             ("FirstService.one", []),
@@ -223,8 +221,8 @@ class TestTheAnswersStayInTheirOwnSlots:
             ran.append(True)
             return {**marker, "data": ["third"]}
 
-        monkeypatch.setitem(empires_server.AMF_HANDLERS, "SecondService.two", second)
-        monkeypatch.setitem(empires_server.AMF_HANDLERS, "ThirdService.three", third)
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, "SecondService.two", second)
+        monkeypatch.setitem(amf_dispatch.AMF_HANDLERS, "ThirdService.three", third)
 
         response = post_batch(client, [
             ("SecondService.two", []),

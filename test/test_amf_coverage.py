@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-empires_server = pytest.importorskip("empires-server")
+from empires_gateway.amf import dispatch as amf_dispatch
 
 SWF = Path(__file__).resolve().parent.parent / "assets" / "ZGame.109338.swf"
 
@@ -121,7 +121,7 @@ def _answers_with_nothing(handler) -> bool:
 class TestThePlumbing:
     def test_every_method_the_client_calls_is_answered(self):
         names = client_methods()
-        dispatch = empires_server.AMF_HANDLERS
+        dispatch = amf_dispatch.AMF_HANDLERS
         missing = sorted(names - set(dispatch) - {"BaseService.dispatchBatch"})
         assert not missing, f"the client calls these and nothing answers them: {missing}"
 
@@ -136,7 +136,7 @@ class TestWhatIsNotConnectedYet:
 
     def test_the_empty_answers_are_the_known_ones(self):
         """When one of them is implemented, this fails and the list shrinks."""
-        dispatch = empires_server.AMF_HANDLERS
+        dispatch = amf_dispatch.AMF_HANDLERS
         empty = {
             name
             for name, handler in dispatch.items()
@@ -154,7 +154,7 @@ class TestWhatIsNotConnectedYet:
         They are the mobile monetization feature and the half-connected
         domination mode; the list says so, so nobody has to guess.
         """
-        uncalled = set(empires_server.AMF_HANDLERS) - client_methods()
+        uncalled = set(amf_dispatch.AMF_HANDLERS) - client_methods()
         assert uncalled == KNOWN_UNCALLED, (
             f"new {sorted(uncalled - KNOWN_UNCALLED)}, "
             f"gone {sorted(KNOWN_UNCALLED - uncalled)}"
@@ -163,6 +163,6 @@ class TestWhatIsNotConnectedYet:
     def test_the_client_has_more_methods_than_the_gateway_answers(self):
         """The shape of the surface, so a change in it is noticed."""
         names = client_methods()
-        dispatch = empires_server.AMF_HANDLERS
+        dispatch = amf_dispatch.AMF_HANDLERS
         assert len(names) == 198
         assert len(names & set(dispatch)) == 197

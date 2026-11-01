@@ -12,6 +12,9 @@ from datetime import datetime
 
 from flask import session
 
+from empires_gateway.amf.handlers.economy import (
+    _economy_session,
+)
 from empires_gateway.shared import (
     MAX_ADMIN_ID,
     MIN_ADMIN_ID,
@@ -665,4 +668,70 @@ def view_zoom_response(zoom):
     view_zoom_response = {"errorType": 0, "userId": 1, "metadata": meta,
                           "data": []}
     return view_zoom_response
+
+
+def motd_action_response(param):
+    """`UserService.motdAction` -- registrar acciones del MOTD."""
+    meta = {"newPVE": 0}
+    if isinstance(param, dict) and _economy_session():
+        player = session['user_object']["userInfo"]["player"]
+        motd_id = param.get("motdId") or param.get("id") or param.get("name")
+        action = param.get("action", "viewed")
+        if motd_id:
+            if action == "accepted":
+                accepted = player.setdefault("motdsAccepted", [])
+                if motd_id not in accepted:
+                    accepted.append(motd_id)
+            else:
+                viewed = player.setdefault("motdsViewed", [])
+                if motd_id not in viewed:
+                    viewed.append(motd_id)
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+
+def open_dialog_response(param=None):
+    return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+
+
+def calculate_ransom_response(param=None):
+    return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": {"ransom": 100, "resource": "coins"}}
+
+
+def feed_response(param=None):
+    return {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0}, "data": []}
+
+
+def clear_incentive_response(param):
+    """`UserService.clearIncentive` -- marcar un incentivo/promo como limpio."""
+    meta = {"newPVE": 0}
+    if isinstance(param, dict) and _economy_session():
+        player = session['user_object']["userInfo"]["player"]
+        inc_id = param.get("incentiveId") or param.get("id") or param.get("name")
+        if inc_id:
+            cleared = player.setdefault("clearedIncentives", [])
+            if inc_id not in cleared:
+                cleared.append(inc_id)
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+
+def do_seen_quest_notification_response(param):
+    """`UserService.doSeenQuestNotification` -- marcar notificacion de quest como vista."""
+    meta = {"newPVE": 0}
+    if isinstance(param, dict) and _economy_session():
+        player = session['user_object']["userInfo"]["player"]
+        quest_name = param.get("quest") or param.get("name")
+        task_id = param.get("task", 0)
+        if quest_name:
+            seen_flags = player.setdefault("seenFlags", {})
+            seen_flags[f"quest_seen_{quest_name}_{task_id}"] = 1
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+
+def select_response(param):
+    meta = {"newPVE": 0}
+    handle_quest_progress(meta, all_lambda(progress_action("select"),
+                                           progress_parameter_equals("_item", param['itemCode'])))
+    select_response = {"errorType": 0, "userId": 1, "metadata": meta,
+                          "data": []}
+    return select_response
 

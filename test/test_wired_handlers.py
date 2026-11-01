@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from flask import Flask, session
 
-empires_server = pytest.importorskip("empires-server")
+from empires_gateway.amf.handlers import battle as battle_handlers
+from empires_gateway.amf.handlers import economy as economy_handlers
+from empires_gateway.amf.handlers import player as player_handlers
+from empires_gateway.amf.handlers import ranking as ranking_handlers
+from empires_gateway.amf.handlers import social as social_handlers
+from empires_gateway.amf.handlers import units as units_handlers
 
 app = Flask(__name__)
 app.secret_key = "test-secret"
@@ -49,14 +54,14 @@ def _user_object(**overrides):
 
 
 def test_targeting_groups_response():
-    resp = empires_server.targeting_groups_response()
+    resp = ranking_handlers.targeting_groups_response()
     assert resp["errorType"] == 0
     assert resp["metadata"]["newPVE"] == 0
     assert isinstance(resp["data"], list)
 
 
 def test_matchmaking_users_response():
-    resp = empires_server.matchmaking_users_response()
+    resp = ranking_handlers.matchmaking_users_response()
     assert resp["errorType"] == 0
     assert isinstance(resp["data"], list)
     if resp["data"]:
@@ -69,7 +74,7 @@ def test_matchmaking_users_response():
 def test_clear_incentive_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
-        resp = empires_server.clear_incentive_response({"incentiveId": "starter_pack_01"})
+        resp = player_handlers.clear_incentive_response({"incentiveId": "starter_pack_01"})
         assert resp["errorType"] == 0
         assert "starter_pack_01" in session["user_object"]["userInfo"]["player"]["clearedIncentives"]
 
@@ -77,7 +82,7 @@ def test_clear_incentive_response():
 def test_do_seen_quest_notification_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
-        resp = empires_server.do_seen_quest_notification_response({"quest": "Q0516", "task": 0})
+        resp = player_handlers.do_seen_quest_notification_response({"quest": "Q0516", "task": 0})
         assert resp["errorType"] == 0
         flags = session["user_object"]["userInfo"]["player"]["seenFlags"]
         assert flags.get("quest_seen_Q0516_0") == 1
@@ -87,12 +92,12 @@ def test_motd_action_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
         # Test viewed action
-        resp = empires_server.motd_action_response({"motdId": "motd_halloween", "action": "viewed"})
+        resp = player_handlers.motd_action_response({"motdId": "motd_halloween", "action": "viewed"})
         assert resp["errorType"] == 0
         assert "motd_halloween" in session["user_object"]["userInfo"]["player"]["motdsViewed"]
 
         # Test accepted action
-        resp2 = empires_server.motd_action_response({"motdId": "motd_promo", "action": "accepted"})
+        resp2 = player_handlers.motd_action_response({"motdId": "motd_promo", "action": "accepted"})
         assert resp2["errorType"] == 0
         assert "motd_promo" in session["user_object"]["userInfo"]["player"]["motdsAccepted"]
 
@@ -100,7 +105,7 @@ def test_motd_action_response():
 def test_unit_unlock_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
-        resp = empires_server.unit_unlock_response({"unitCode": "U15"})
+        resp = units_handlers.unit_unlock_response({"unitCode": "U15"})
         assert resp["errorType"] == 0
         assert "U15" in session["user_object"]["userInfo"]["player"]["unlockedUnits"]
 
@@ -108,7 +113,7 @@ def test_unit_unlock_response():
 def test_unit_drop_reveal_all_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
-        resp = empires_server.unit_drop_reveal_all_response({})
+        resp = units_handlers.unit_drop_reveal_all_response({})
         assert resp["errorType"] == 0
         inv = session["user_object"]["userInfo"]["player"]["inventory"]["items"]
         assert inv.get("U02", 0) >= 1
@@ -117,7 +122,7 @@ def test_unit_drop_reveal_all_response():
 
 
 def test_unit_drop_switch_unit_response():
-    resp = empires_server.unit_drop_switch_unit_response({})
+    resp = units_handlers.unit_drop_switch_unit_response({})
     assert resp["errorType"] == 0
     assert resp["data"] == []
 
@@ -125,7 +130,7 @@ def test_unit_drop_switch_unit_response():
 def test_matchmaking_opt_flag_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
-        resp = empires_server.matchmaking_opt_flag_response({"optOut": True})
+        resp = ranking_handlers.matchmaking_opt_flag_response({"optOut": True})
         assert resp["errorType"] == 0
         assert session["user_object"]["userInfo"]["player"]["matchmakingOptOut"] is True
 
@@ -134,7 +139,7 @@ def test_upgrade_state_response():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
         # id 42 exists in world
-        resp = empires_server.upgrade_state_response({"id": 42})
+        resp = units_handlers.upgrade_state_response({"id": 42})
         assert resp["errorType"] == 0
 
 
@@ -142,12 +147,12 @@ def test_random_enemy_fleet_challenge_resilience():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
         # Missing invader fallback
-        resp = empires_server.random_enemy_fleet_challenge_response("enemy_nonexistent")
+        resp = battle_handlers.random_enemy_fleet_challenge_response("enemy_nonexistent")
         assert resp["errorType"] == 0
         assert "challengerFleet" in resp["data"]
 
         # Valid invader
-        resp2 = empires_server.random_enemy_fleet_challenge_response("enemy_99")
+        resp2 = battle_handlers.random_enemy_fleet_challenge_response("enemy_99")
         assert resp2["errorType"] == 0
         assert resp2["data"]["challengerFleet"]["uid"] == "99"
 
@@ -162,13 +167,13 @@ def test_buy_quest_task_with_cash_deduction():
         session["quests"] = quests
 
         # QW122 task 0 costs 34 cash in questsettings
-        resp = empires_server.buy_quest_task_response({"name": "QW122", "taskIndex": 0})
+        resp = economy_handlers.buy_quest_task_response({"name": "QW122", "taskIndex": 0})
         assert resp["errorType"] == 0
         assert session["user_object"]["userInfo"]["player"]["cash"] == 100 - 34
 
         # When player cannot afford
         session["user_object"]["userInfo"]["player"]["cash"] = 5
-        resp2 = empires_server.buy_quest_task_response({"name": "QW122", "taskIndex": 1})
+        resp2 = economy_handlers.buy_quest_task_response({"name": "QW122", "taskIndex": 1})
         # Cash shouldn't drop negative and task refused
         assert session["user_object"]["userInfo"]["player"]["cash"] == 5
 
@@ -177,15 +182,15 @@ def test_tend_ally_handlers_resilience():
     with app.test_request_context("/"):
         session["user_object"] = _user_object()
         # visitorHelpRequests missing completely: should not raise KeyError
-        resp = empires_server.accept_tend_ally_response(["999"])
+        resp = social_handlers.accept_tend_ally_response(["999"])
         assert resp["errorType"] == 0
 
-        resp2 = empires_server.decline_tend_ally_response(["999"])
+        resp2 = social_handlers.decline_tend_ally_response(["999"])
         assert resp2["errorType"] == 0
 
         # Now with existing request
         session["user_object"]["visitorHelpRequests"] = {"999": "42"}
-        resp3 = empires_server.decline_tend_ally_response(["999"])
+        resp3 = social_handlers.decline_tend_ally_response(["999"])
         assert resp3["errorType"] == 0
         assert "999" not in session["user_object"]["visitorHelpRequests"]
 

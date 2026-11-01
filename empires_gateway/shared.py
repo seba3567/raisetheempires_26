@@ -18,6 +18,19 @@ from game_settings import allies, get_sessions_friends, get_sessions_id, get_zid
 from save_engine import backup_chain, get_saves, validate_save
 from save_store import save_invaders
 
+#: The resources the world keeps in ``world["resources"]``.
+#:
+#: A catalogue item's ``-resourceType`` is not always one of these: the ore
+#: contracts are ``rare``, the minigame fuel is ``fuel`` and the powerup
+#: factory is ``powerup``. Those are not resources the world counts, so they
+#: cannot be added to it -- an item that carries one is an object the player
+#: gets, not a pile of a resource that does not exist.
+#:
+#: The order comes from the contract; the set is what the code asks about.
+#: It used to be spelled out in three modules, which meant a resource added to
+#: the contract was only counted by the one that happened to be asked.
+WORLD_RESOURCES = frozenset(contract.RESOURCE_ORDER)
+
 #: Stand-in for anything the session holds that plain JSON cannot express.
 #: Same marker the 2013 editor used when it dumped the save into its textarea.
 NOT_SERIALIZABLE = "<not serializable>"

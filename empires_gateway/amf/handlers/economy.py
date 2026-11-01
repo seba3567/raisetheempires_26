@@ -12,7 +12,7 @@ import math
 
 from flask import session
 
-import contract
+from empires_gateway.shared import WORLD_RESOURCES
 from game_settings import (
     game_settings,
     lookup_item_by_code,
@@ -29,15 +29,6 @@ from quest_engine import (
 )
 
 logger = logging.getLogger(__name__)
-
-#: The resources the world keeps in ``world["resources"]``.
-#:
-#: A catalogue item's ``-resourceType`` is not always one of these: the ore
-#: contracts are ``rare``, the minigame fuel is ``fuel`` and the powerup
-#: factory is ``powerup``. Those are not resources the world counts, so they
-#: cannot be added to it -- an item that carries one is an object the player
-#: gets, not a pile of a resource that does not exist.
-WORLD_RESOURCES = frozenset(contract.RESOURCE_ORDER)
 
 
 def _economy_session():

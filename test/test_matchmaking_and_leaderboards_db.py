@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from flask import Flask, session
 
-empires_server = pytest.importorskip("empires-server")
 import service_handlers
+from empires_gateway.amf.handlers import ranking as ranking_handlers
 from save_engine import fetch_all_commanders
 
 app = Flask(__name__)
@@ -24,7 +24,7 @@ def test_fetch_all_commanders():
 
 def test_matchmaking_users_response_has_candidates():
     with app.test_request_context("/"):
-        resp = empires_server.matchmaking_users_response()
+        resp = ranking_handlers.matchmaking_users_response()
         assert resp["errorType"] == 0
         assert isinstance(resp["data"], list)
         assert len(resp["data"]) > 0
@@ -46,7 +46,7 @@ def test_leaderboards_response_connected():
                 }
             }
         }
-        resp = empires_server.leaderboards_response()
+        resp = ranking_handlers.leaderboards_response()
         assert resp["errorType"] == 0
         data = resp["data"]
         assert "campaign" in data

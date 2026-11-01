@@ -154,15 +154,6 @@ def snapi_bridge():
 # it from too: two copies of the list used to be expected to line up.
 RESOURCE_ORDER = contract.RESOURCE_ORDER
 
-#: The resources the world keeps in `world["resources"]`.
-#:
-#: A catalogue item's ``-resourceType`` is not always one of these: the ore
-#: contracts are ``rare``, the minigame fuel is ``fuel`` and the powerup
-#: factory is ``powerup``. Those are not resources the world counts, so they
-#: cannot be added to it -- an item that carries one is an object the player
-#: gets, not a pile of a resource that does not exist.
-WORLD_RESOURCES = frozenset(RESOURCE_ORDER)
-
 @bp.route("/player.json")
 def player_state():
     """The signed-in player's real state, for the web front end.

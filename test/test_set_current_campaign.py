@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 from flask import Flask, session
 
-empires_server = __import__('empires-server')
+from empires_gateway.amf import dispatch as amf_dispatch
 from empires_gateway.amf.handlers.world import (
     _known_campaigns,
     set_current_campaign_response,
@@ -130,7 +130,7 @@ class TestSetCurrentCampaign:
         function nobody called, and the gap was invisible because the fallback
         answers `errorType: 0`.
         """
-        assert 'UserService.setCurrentCampaign' in empires_server.AMF_HANDLERS
+        assert 'UserService.setCurrentCampaign' in amf_dispatch.AMF_HANDLERS
 
     def test_the_catalogue_it_validates_against_is_the_gamesettings_one(self):
         """Not a hardcoded list: the client's campaign list is data."""

@@ -47,7 +47,9 @@ import math
 import pytest
 from flask import Flask, session
 
-empires_server = __import__('empires-server')
+from empires_gateway.amf import dispatch as amf_dispatch
+from empires_gateway.amf.handlers import economy as economy_handlers
+
 game_settings = pytest.importorskip('game_settings')
 
 app = Flask(__name__)
@@ -123,33 +125,33 @@ class TestBuyItem:
         El item dice las dos cosas: cuanto da y cuanto cuesta. El servidor tiene
         que leer las dos del mismo sitio.
         """
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "RS01", "amount": 1})
 
         assert _resources_of(save)["aluminum"] == 1010
 
     def test_buying_a_resource_item_costs_its_cash_price(self):
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "RS01", "amount": 1})
 
         assert _player_of(save)["cash"] == 1000 - 13
 
     def test_buying_several_costs_several_times_the_price(self):
         """El precio es por unidad: tres RS01 son tres precios."""
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "RS01", "amount": 3})
 
         assert _player_of(save)["cash"] == 1000 - 39
 
     def test_buying_a_consumable_puts_it_in_the_inventory(self):
         """N01 es un consumible sin `resourceType`: va al inventario, no a los recursos."""
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "N01", "amount": 2})
 
         assert _player_of(save)["inventory"]["items"]["N01"] == 2
 
     def test_buying_a_consumable_still_costs_its_price(self):
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "N01", "amount": 2})
 
         assert _player_of(save)["cash"] == 1000 - 8
@@ -160,7 +162,7 @@ class TestBuyItem:
         Antes solo imprimia "Buying mercenary" y no entregaba nada: el jugador
         pagaba y no recibia. Ahora va al inventario, que es donde puede usarse.
         """
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "M01", "amount": 1})
 
         assert _player_of(save)["inventory"]["items"]["M01"] == 1
@@ -173,7 +175,7 @@ class TestBuyItem:
         La compra no puede fallar por esto. Un `rare` no se puede sumar a los
         recursos del mundo, asi que lo que se reparte es el item.
         """
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "G22", "amount": 1})
 
         items = _player_of(save)["inventory"]["items"]
@@ -186,13 +188,13 @@ class TestBuyItem:
         El precio dice en que moneda se paga. Cobrar cash cuando el item pide
         coins es cobrar la moneda equivocada.
         """
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "G01", "amount": 1})
 
         assert _resources_of(save)["coins"] == 5000 - 100
 
     def test_an_item_that_costs_coins_does_not_cost_cash(self):
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "G01", "amount": 1})
 
         assert _player_of(save)["cash"] == 1000
@@ -200,7 +202,7 @@ class TestBuyItem:
     def test_an_item_with_no_cost_at_all_is_free(self):
         """RG28 (coins_gift) no tiene `cost`: no cuesta nada, y no debe inventar
         un precio que el catalogo no dice."""
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "RG28", "amount": 1})
 
         assert _player_of(save)["cash"] == 1000
@@ -211,7 +213,7 @@ class TestBuyItem:
         Antes `lookup_item_by_code` reventaba con ValueError y el handler entero
         se caia: el batch perdia esa llamada y el resto del turno tambien.
         """
-        response, save = _call(empires_server.buy_item_response,
+        response, save = _call(economy_handlers.buy_item_response,
                                {"code": "NOEXISTE", "amount": 1})
 
         assert response["errorType"] == 0
@@ -220,14 +222,14 @@ class TestBuyItem:
     def test_a_missing_amount_is_treated_as_one(self):
         """El cliente puede mandar solo el codigo. Compre uno, no cero y no
         reviente."""
-        response, save = _call(empires_server.buy_item_response,
+        response, save = _call(economy_handlers.buy_item_response,
                                {"code": "RS01"})
 
         assert response["errorType"] == 0
         assert _resources_of(save)["aluminum"] == 1010
 
     def test_the_answer_has_the_shape_the_client_expects(self):
-        response, _ = _call(empires_server.buy_item_response,
+        response, _ = _call(economy_handlers.buy_item_response,
                             {"code": "RS01", "amount": 1})
 
         assert response["errorType"] == 0
@@ -240,7 +242,7 @@ class TestBuyItems:
     """`UserService.buyItems` -- comprar varios a la vez."""
 
     def test_it_buys_every_item_in_the_batch(self):
-        _, save = _call(empires_server.buy_items_response,
+        _, save = _call(economy_handlers.buy_items_response,
                         {"itemData": {"RS01": 2, "N01": 1}})
 
         assert _resources_of(save)["aluminum"] == 1020
@@ -248,7 +250,7 @@ class TestBuyItems:
 
     def test_it_charges_the_total(self):
         """2 RS01 (13) + 1 N01 (4) = 30."""
-        _, save = _call(empires_server.buy_items_response,
+        _, save = _call(economy_handlers.buy_items_response,
                         {"itemData": {"RS01": 2, "N01": 1}})
 
         assert _player_of(save)["cash"] == 1000 - 30
@@ -256,13 +258,13 @@ class TestBuyItems:
     def test_one_unknown_code_does_not_cancel_the_others(self):
         """El lote es del jugador: un codigo raro no puede cancelar lo que si
         se pudo comprar."""
-        _, save = _call(empires_server.buy_items_response,
+        _, save = _call(economy_handlers.buy_items_response,
                         {"itemData": {"NOEXISTE": 1, "RS01": 1}})
 
         assert _resources_of(save)["aluminum"] == 1010
 
     def test_an_empty_batch_is_not_an_error(self):
-        response, save = _call(empires_server.buy_items_response,
+        response, save = _call(economy_handlers.buy_items_response,
                                {"itemData": {}})
 
         assert response["errorType"] == 0
@@ -276,7 +278,7 @@ class TestUseItem:
         world = _world()
         _player_of(world)["inventory"]["items"]["N01"] = 3
 
-        _, save = _call(empires_server.use_item_response, "N01", world)
+        _, save = _call(economy_handlers.use_item_response, "N01", world)
 
         assert _player_of(save)["inventory"]["items"]["N01"] == 2
 
@@ -285,7 +287,7 @@ class TestUseItem:
         jugador no tiene pero que el cliente cuenta."""
         world = _world()
 
-        response, save = _call(empires_server.use_item_response, "N01", world)
+        response, save = _call(economy_handlers.use_item_response, "N01", world)
 
         assert response["errorType"] == 0
         assert _player_of(save)["inventory"]["items"].get("N01", 0) >= 0
@@ -294,7 +296,7 @@ class TestUseItem:
         world = _world()
         _player_of(world)["inventory"]["items"]["N01"] = 1
 
-        _, save = _call(empires_server.use_item_response, "N01", world)
+        _, save = _call(economy_handlers.use_item_response, "N01", world)
 
         assert _player_of(save)["inventory"]["items"]["N01"] == 0
 
@@ -303,7 +305,7 @@ class TestPurchaseEnergyRefill:
     """`UserService.purchaseEnergyRefill` -- rellenar la energia."""
 
     def test_the_refill_fills_the_energy_to_the_maximum(self):
-        _, save = _call(empires_server.purchase_energy_refill_response, {})
+        _, save = _call(economy_handlers.purchase_energy_refill_response, {})
 
         assert _player_of(save)["energy"] == 25
 
@@ -313,7 +315,7 @@ class TestPurchaseEnergyRefill:
         Antes se rellenaba primero y luego se calculaba el coste, con la energia
         ya llena: `energyMax - energy` daba cero y el refill salia gratis.
         """
-        _, save = _call(empires_server.purchase_energy_refill_response, {})
+        _, save = _call(economy_handlers.purchase_energy_refill_response, {})
 
         assert _player_of(save)["cash"] == 1000 - 15
 
@@ -322,12 +324,12 @@ class TestPurchaseEnergyRefill:
         world = _world()
         _player_of(world)["energy"] = 25
 
-        _, save = _call(empires_server.purchase_energy_refill_response, {}, world)
+        _, save = _call(economy_handlers.purchase_energy_refill_response, {}, world)
 
         assert _player_of(save)["cash"] == 1000
 
     def test_the_energy_stays_an_integer(self):
-        _, save = _call(empires_server.purchase_energy_refill_response, {})
+        _, save = _call(economy_handlers.purchase_energy_refill_response, {})
 
         assert isinstance(_player_of(save)["energy"], int)
 
@@ -336,7 +338,7 @@ class TestPurchaseEnergyRefill:
         world = _world()
         _player_of(world)["energy"] = 24
 
-        _, save = _call(empires_server.purchase_energy_refill_response, {}, world)
+        _, save = _call(economy_handlers.purchase_energy_refill_response, {}, world)
 
         assert _player_of(save)["energy"] == 25
 
@@ -345,7 +347,7 @@ class TestPurchaseContractUnlock:
     """`UserService.purchaseContractUnlock` -- desbloquear un contrato."""
 
     def test_unlocking_records_the_contract(self):
-        _, save = _call(empires_server.purchase_contact_unlock,
+        _, save = _call(economy_handlers.purchase_contact_unlock,
                         {"itemCode": "UL2"})
 
         assert "UL2" in _player_of(save)["unlockedContracts"]
@@ -353,7 +355,7 @@ class TestPurchaseContractUnlock:
     def test_unlocking_costs_cash(self):
         """UL2 cuesta 10 de cash, y el catalogo dice que un unlock de contrato
         se paga cuatro veces (`-contractUnlockMultiple: 4`)."""
-        _, save = _call(empires_server.purchase_contact_unlock,
+        _, save = _call(economy_handlers.purchase_contact_unlock,
                         {"itemCode": "UL2"})
 
         assert _player_of(save)["cash"] == 1000 - 40
@@ -361,14 +363,14 @@ class TestPurchaseContractUnlock:
     def test_unlocking_twice_does_not_record_it_twice(self):
         """El mismo contrato desbloqueado dos veces no es dos contratos."""
         world = _world()
-        _call(empires_server.purchase_contact_unlock, {"itemCode": "UL2"}, world)
-        _, save = _call(empires_server.purchase_contact_unlock,
+        _call(economy_handlers.purchase_contact_unlock, {"itemCode": "UL2"}, world)
+        _, save = _call(economy_handlers.purchase_contact_unlock,
                         {"itemCode": "UL2"}, world)
 
         assert _player_of(save)["unlockedContracts"].count("UL2") == 1
 
     def test_an_unknown_code_does_not_take_the_payment(self):
-        response, save = _call(empires_server.purchase_contact_unlock,
+        response, save = _call(economy_handlers.purchase_contact_unlock,
                                {"itemCode": "NOEXISTE"})
 
         assert response["errorType"] == 0
@@ -379,26 +381,26 @@ class TestBuyQuestTask:
     """`UserService.buyQuestTask` -- comprar un task de quest."""
 
     def test_buying_a_task_answers_without_error(self):
-        response, _ = _call(empires_server.buy_quest_task_response,
+        response, _ = _call(economy_handlers.buy_quest_task_response,
                             {"name": "Q0001", "taskIndex": 0})
 
         assert response["errorType"] == 0
 
     def test_buying_a_task_does_not_touch_the_wallet(self):
         """Comprar un task no es comprar un item: no se descuenta cash."""
-        _, save = _call(empires_server.buy_quest_task_response,
+        _, save = _call(economy_handlers.buy_quest_task_response,
                         {"name": "Q0001", "taskIndex": 0})
 
         assert _player_of(save)["cash"] == 1000
 
     def test_a_missing_name_does_not_reach_the_crash_handler(self):
         """Un parametro ausente no puede tumbar la llamada entera."""
-        response, _ = _call(empires_server.buy_quest_task_response, {})
+        response, _ = _call(economy_handlers.buy_quest_task_response, {})
 
         assert response["errorType"] == 0
 
     def test_a_missing_task_index_does_not_reach_the_crash_handler(self):
-        response, _ = _call(empires_server.buy_quest_task_response,
+        response, _ = _call(economy_handlers.buy_quest_task_response,
                             {"name": "Q0001"})
 
         assert response["errorType"] == 0
@@ -410,7 +412,7 @@ class TestBuyExpansion:
     def test_buying_an_expansion_sets_its_bit(self):
         """Las expansiones se guardan como un mapa de bits: `index >> 5` es el
         indice del entero y `index & 31` es el bit dentro de ese entero."""
-        _, save = _call(empires_server.buy_expansion_response, {"index": 3})
+        _, save = _call(economy_handlers.buy_expansion_response, {"index": 3})
 
         expansions = _player_of(save)["expansions"]["data"]
         assert expansions[0] & (1 << 3)
@@ -418,7 +420,7 @@ class TestBuyExpansion:
     def test_buying_an_expansion_just_over_a_word_boundary_sets_the_next_word(self):
         """El indice 32 es el bit 0 del segundo entero: si el calculo del
         desplazamiento estuviera mal, pondria el bit 32 del primero."""
-        _, save = _call(empires_server.buy_expansion_response, {"index": 32})
+        _, save = _call(economy_handlers.buy_expansion_response, {"index": 32})
 
         expansions = _player_of(save)["expansions"]["data"]
         assert expansions[1] & (1 << 0)
@@ -433,7 +435,7 @@ class TestBuyExpansion:
         world = _world()
         _player_of(world)["inventory"]["items"]["xk01"] = 20
 
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "x01", "amount": 1}, world)
 
         assert _resources_of(save)["coins"] == 5000 - 5000
@@ -444,7 +446,7 @@ class TestBuyExpansion:
         world = _world()
         _player_of(world)["inventory"]["items"]["xk01"] = 3
 
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "x01", "amount": 1}, world)
 
         assert _resources_of(save)["coins"] == 5000
@@ -466,12 +468,12 @@ class TestBuyExpansion:
     def test_an_index_beyond_the_word_list_does_not_crash(self):
         """El mapa de bits tiene 11 palabras. Un indice fuera de rango no puede
         reventar la llamada."""
-        response, _ = _call(empires_server.buy_expansion_response, {"index": 9999})
+        response, _ = _call(economy_handlers.buy_expansion_response, {"index": 9999})
 
         assert response["errorType"] == 0
 
     def test_a_missing_index_does_not_crash(self):
-        response, _ = _call(empires_server.buy_expansion_response, {})
+        response, _ = _call(economy_handlers.buy_expansion_response, {})
 
         assert response["errorType"] == 0
 
@@ -500,7 +502,7 @@ class TestThePriceCatalogueIsTheSource:
     def test_the_cheapest_resource_item_costs_what_we_charged(self):
         """La suma de los precios del catalogo tiene que ser la que el handler
         descuenta. Si el handler inventa un precio, esta suma no cuadra."""
-        _, save = _call(empires_server.buy_item_response,
+        _, save = _call(economy_handlers.buy_item_response,
                         {"code": "RS01", "amount": 1})
 
         item = game_settings.lookup_item_by_code("RS01")
@@ -524,7 +526,7 @@ class TestTheHandlersAreWired:
         "UserService.purchaseEnergyRefill",
     ])
     def test_it_is_registered_on_the_dispatch_table(self, method):
-        assert method in empires_server.AMF_HANDLERS
+        assert method in amf_dispatch.AMF_HANDLERS
 
 
 class TestAPurchaseWithoutASession:
@@ -537,13 +539,13 @@ class TestAPurchaseWithoutASession:
     """
 
     @pytest.mark.parametrize("handler,param", [
-        (empires_server.buy_item_response, {"code": "RS01", "amount": 1}),
-        (empires_server.buy_items_response, {"itemData": {"RS01": 1}}),
-        (empires_server.use_item_response, "N01"),
-        (empires_server.buy_expansion_response, {"index": 3}),
-        (empires_server.buy_quest_task_response, {"name": "Q0001", "taskIndex": 0}),
-        (empires_server.purchase_contact_unlock, {"itemCode": "UL2"}),
-        (empires_server.purchase_energy_refill_response, {}),
+        (economy_handlers.buy_item_response, {"code": "RS01", "amount": 1}),
+        (economy_handlers.buy_items_response, {"itemData": {"RS01": 1}}),
+        (economy_handlers.use_item_response, "N01"),
+        (economy_handlers.buy_expansion_response, {"index": 3}),
+        (economy_handlers.buy_quest_task_response, {"name": "Q0001", "taskIndex": 0}),
+        (economy_handlers.purchase_contact_unlock, {"itemCode": "UL2"}),
+        (economy_handlers.purchase_energy_refill_response, {}),
     ])
     def test_it_answers_instead_of_crashing(self, handler, param):
         with app.test_request_context():

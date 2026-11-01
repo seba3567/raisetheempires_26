@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import pytest
 
-empires_server = pytest.importorskip("empires-server")
-
 
 def test_the_connection_asks_for_utf8(gateway_app):
     """The encoding is a decision, not something left to the locale."""

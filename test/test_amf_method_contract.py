@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-empires_server = pytest.importorskip("empires-server")
+from empires_gateway.amf import dispatch as amf_dispatch
 
 SWF = Path(__file__).resolve().parent.parent / "assets" / "ZGame.109338.swf"
 
@@ -86,7 +86,7 @@ def swf_method_names(path: Path = SWF) -> set[str]:
 @pytest.fixture(scope="module")
 def dispatch() -> dict:
     """Everything the gateway answers, core and extended."""
-    return empires_server.AMF_HANDLERS
+    return amf_dispatch.AMF_HANDLERS
 
 
 class TestTheClientAndTheGatewayAgree:

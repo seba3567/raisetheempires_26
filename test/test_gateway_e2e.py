@@ -26,8 +26,6 @@ from typing import ClassVar
 import pytest
 from pyamf import AMF0, remoting
 
-empires_server = __import__("empires-server")
-
 GATEWAY_PATH = "/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/gateway.php"
 
 _sequence = iter(range(1001, 100000))

@@ -26,9 +26,9 @@ import pytest
 
 import save_engine
 from conftest import asset_status
+from empires_gateway.routes import catalog as catalog_routes
 
-empires_server = __import__("empires-server")
-get_avail_avatars = empires_server.get_avail_avatars
+get_avail_avatars = catalog_routes.get_avail_avatars
 
 
 @pytest.fixture(scope="module")

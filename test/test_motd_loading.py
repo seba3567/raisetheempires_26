@@ -23,8 +23,7 @@ import pytest
 
 import save_engine
 from conftest import asset_status
-
-empires_server = __import__("empires-server")
+from empires_gateway.routes import catalog as catalog_routes
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +44,7 @@ class TestMotdCatalogue:
     def test_the_endpoint_lists_the_catalogue_and_a_pick(self, bare):
         state = bare.get("/motd.json").get_json()
 
-        assert state["motds"] == empires_server.get_avail_motds()
+        assert state["motds"] == catalog_routes.get_avail_motds()
         assert state["current"] in state["motds"]
 
     def test_every_listed_art_is_one_we_ship(self, bare):
