@@ -1,0 +1,34 @@
+amf: the last two methods that answered with nothing
+
+`UserService.checkForPromoReward` and `UserService.crewNeighborPoll` were
+the last two on the surface that answered with the empty result, which is
+what a feature that does not exist looks like from the outside. Both are
+answered now, out of the game's own data.
+
+The promotional reward is the `incentives` section of the game settings,
+which the server already loads: 37 codes with the items and the resources
+they give, the text key that describes them, the level the player has to be
+at and how many times they may be claimed. The client sends a code and the
+server hands the reward over. The codes with a calendar -- "the fourteenth
+day of the campaign" -- are not offered, because this server has no
+campaign epoch to date them against.
+
+The neighbour poll reads the crew templates, so it knows which slots an
+empire has empty, and answers with the ones that could lend a crew member.
+That list is what `RequestService.crewRequest` takes next, so the two calls
+fit together.
+
+Two things fell out of it. The reward deposit lived in `service_handlers.py`,
+where only that file could reach it; a reward going in is not a service, so
+it moved to the economy handler and the file calls it from there. And an
+incentive with no click limit is granted once, not for ever: without that,
+any code the client cared to send would print empire points.
+
+The coverage test learned to look at the `data` of an answer instead of at
+the dict around it, so it can tell a handler that returns nothing from one
+that returns a fixed response. The backlog is empty, and there is now a
+test that says so.
+
+Also: the last MySQL branch in the test setup is gone -- the database is
+PostgreSQL, and the code that dropped a database with MySQL syntax had
+been dead since the migration.

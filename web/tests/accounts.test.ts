@@ -1,5 +1,5 @@
 /**
- * Accounts, friendships and progress against a real MariaDB database.
+ * Accounts, friendships and progress against a real PostgreSQL database.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
 

@@ -66,6 +66,10 @@ from empires_gateway.amf.handlers.player import (
     user_response,
     view_zoom_response,
 )
+from empires_gateway.amf.handlers.promo import (
+    check_for_promo_reward_response,
+    promo_data_response,
+)
 from empires_gateway.amf.handlers.ranking import (
     collect_leaderboard_response,
     leaderboards_response,
@@ -95,6 +99,7 @@ from empires_gateway.amf.handlers.units import (
     upgrade_state_response,
 )
 from empires_gateway.amf.handlers.world import (
+    crew_neighbor_poll_response,
     crew_request_response,
     load_world_response,
     perform_world_response,
@@ -272,6 +277,16 @@ AMF_HANDLERS: dict[str, Callable[[Any, Any, Any], Any]] = {
     'UserService.unitDropSwitchUnit': lambda p, *_: unit_drop_switch_unit_response(p[0] if p else {}),
     'UserService.upgradeState': lambda p, *_: upgrade_state_response(p[0] if p else {}),
     'UserService.matchMakingOptFlag': lambda p, *_: matchmaking_opt_flag_response(p[0] if p else {}),
+
+    # Registered by name, not through a lambda.
+    #
+    # The coverage test reads the source of every handler to see whether it
+    # answers with the empty result. A lambda hides the body -- it cannot be
+    # read -- so a handler that hides behind one cannot be told apart from a
+    # real one.
+    'UserService.checkForPromoReward': check_for_promo_reward_response,
+    'DataServicesService.getPromoData': promo_data_response,
+    'UserService.crewNeighborPoll': crew_neighbor_poll_response,
 }
 
 

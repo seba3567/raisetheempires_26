@@ -6,7 +6,7 @@
  * The tests get real SQL against a real database rather than a mocked driver,
  * which is the only way to catch a migration that does not apply. That makes
  * the target database important: the suite used to be a throwaway file per
- * process, but MariaDB is a shared server, so pointing it at the configured
+ * process, but the server is a shared one, so pointing it at the configured
  * database would have `resetDb` delete every real account before the first
  * assertion ran.
  *
@@ -32,15 +32,9 @@ process.env.GATEWAY_ORIGIN = 'http://127.0.0.1:5005';
 async function dropTestDatabase(): Promise<void> {
 	try {
 		const url = process.env.RTE_DB_URL!;
-		if (url.startsWith('postgres')) {
-			const withoutDb = url.replace(/\/([^/?]+)(\?|$)/, '/postgres$2');
-			const server = new SQL(withoutDb);
-			await server.unsafe(`DROP DATABASE IF EXISTS "${process.env.RTE_DB_NAME}" WITH (FORCE)`);
-			server.close();
-			return;
-		}
-		const server = new SQL(url.replace(/\/([^/?]+)(\?|$)/, '/$2'));
-		await server.unsafe(`DROP DATABASE IF EXISTS \`${process.env.RTE_DB_NAME}\``);
+		const withoutDb = url.replace(/\/([^/?]+)(\?|$)/, '/postgres$2');
+		const server = new SQL(withoutDb);
+		await server.unsafe(`DROP DATABASE IF EXISTS "${process.env.RTE_DB_NAME}" WITH (FORCE)`);
 		server.close();
 	} catch {
 		// No server, or already gone. The tests themselves will say so.

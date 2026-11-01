@@ -9,6 +9,7 @@ from typing import Any
 from flask import session
 
 import contract
+from empires_gateway.amf.handlers.economy import deposit_reward
 from game_settings import get_zid, lookup_item_by_code
 from save_engine import (
     ensure_fleets,
@@ -178,37 +179,13 @@ def _sync_clan(real: dict[str, Any]) -> None:
 
 
 def _deposit_reward(item_type: str, item_code: str, amount: int) -> None:
-    """Deposita una recompensa en el inventario o recursos del jugador."""
-    player = _get_player()
-    world = _get_world()
-    if not player or not world:
-        return
+    """Deposita una recompensa en el inventario o recursos del jugador.
 
-    resources = world.get("resources")
-    if not isinstance(resources, dict):
-        resources = {}
-        world["resources"] = resources
-
-    inventory_wrapper = player.get("inventory")
-    if not isinstance(inventory_wrapper, dict):
-        inventory_wrapper = {}
-        player["inventory"] = inventory_wrapper
-
-    inventory = inventory_wrapper.get("items")
-    if not isinstance(inventory, dict):
-        inventory = {}
-        inventory_wrapper["items"] = inventory
-
-    if item_type in ("cash", "cash_item") or item_code == "cash":
-        player["cash"] = int(player.get("cash", 0)) + amount
-    elif item_type in ("xp", "experience"):
-        player["xp"] = int(player.get("xp", 0)) + amount
-    elif item_code == "energy" or item_type == "energy":
-        player["energy"] = int(player.get("energy", 0)) + amount
-    elif item_code in ("coins", "oil", "wood", "aluminum", "copper", "iron", "gold", "uranium"):
-        resources[item_code] = int(resources.get(item_code, 0)) + amount
-    else:
-        inventory[item_code] = int(inventory.get(item_code, 0)) + amount
+    The deposit itself moved to the economy handler: a reward going in is not
+    a service, and the two halves of the ledger belong together. This name
+    stays because every caller in this file already reads it.
+    """
+    deposit_reward(item_type, item_code, amount)
 
 
 def _format_fleet_unit(code: str) -> str:
@@ -1867,10 +1844,6 @@ def user_promo_action(params: Any = None, *args: Any) -> dict[str, Any]:
     return _response(["success"])
 
 
-def user_get_promo_data(params: Any = None, *args: Any) -> dict[str, Any]:
-    return _response({})
-
-
 def cross_promo_accepted(params: Any = None, *args: Any) -> dict[str, Any]:
     player = _get_player()
     if player:
@@ -1880,10 +1853,6 @@ def cross_promo_accepted(params: Any = None, *args: Any) -> dict[str, Any]:
             player["seenFlags"] = seen
         seen["crossPromoAccepted"] = 1
     return _response(["success"])
-
-
-def user_check_for_promo_reward(params: Any = None, *args: Any) -> dict[str, Any]:
-    return _response([])
 
 
 def user_ep_gift_send(params: Any = None, *args: Any) -> dict[str, Any]:
@@ -2013,10 +1982,6 @@ def user_mega_series_reset(params: Any = None, *args: Any) -> dict[str, Any]:
     if player:
         player["megaSeriesProgress"] = 0
     return _response(["success"])
-
-
-def user_crew_neighbor_poll(params: Any = None, *args: Any) -> dict[str, Any]:
-    return _response([])
 
 
 def user_crew_zmc_event(params: Any = None, *args: Any) -> dict[str, Any]:
@@ -2308,9 +2273,7 @@ EXTENDED_AMF_HANDLERS: dict[str, Any] = {
     "UserService.energizerSetup": user_energizer_setup,
     "UserService.spend": user_spend,
     "UserService.promoAction": user_promo_action,
-    "DataServicesService.getPromoData": user_get_promo_data,
     "CrossPromoService.accepted": cross_promo_accepted,
-    "UserService.checkForPromoReward": user_check_for_promo_reward,
     "UserService.EPGiftSend": user_ep_gift_send,
     "UserService.EPGiftThankYou": user_ep_gift_thank_you,
     "UserService.acceptedGDP": user_accepted_gdp,
@@ -2332,7 +2295,6 @@ EXTENDED_AMF_HANDLERS: dict[str, Any] = {
     "UserService.grantWatchToEarnRewardNew": user_grant_watch_to_earn_reward,
     "UserService.lcs": user_lcs,
     "UserService.megaSeriesReset": user_mega_series_reset,
-    "UserService.crewNeighborPoll": user_crew_neighbor_poll,
     "UserService.crewZMCEvent": user_crew_zmc_event,
 
     # WorldService Extra

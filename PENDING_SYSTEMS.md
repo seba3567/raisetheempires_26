@@ -10,12 +10,17 @@ Un servicio AMF registrado no significa un servicio implementado. Los handlers
 de `service_handlers.py` se registran todos —para que el cliente Flash reciba
 una respuesta y no un error— pero la respuesta de muchos de ellos es fija.
 
-El reparto actual de los **129** handlers de la tabla extendida:
+El reparto actual de los **128** handlers de la tabla extendida:
 
 | | Cantidad |
 | --- | --- |
-| Con lógica real | 59 |
-| Respuesta fija ("stub") | 70 |
+| Con lógica real | 99 |
+| Respuesta fija ("stub") | 29 |
+
+Tres de ellos ya no viven en `service_handlers.py`: `UserService.checkForPromoReward`
+y `DataServicesService.getPromoData` están en
+`empires_gateway/amf/handlers/promo.py`, y `UserService.crewNeighborPoll` en
+`empires_gateway/amf/handlers/world.py`.
 
 Un *stub* devuelve algo fijo y no toca la base de datos. Cuando una sección de
 este documento dice **COMPLETADO**, todos sus handlers tienen lógica real; cuando
@@ -24,7 +29,9 @@ se dice cuál es cuál.
 
 El estado de cada handler se puede volver a comprobar con el análisis de
 `service_handlers.py`: un handler es un stub cuando su cuerpo es un único
-`return _response(...)`.
+`return _response(...)`. Y el estado de la superficie completa —los 202 métodos
+que el cliente puede llamar— lo comprueba `test/test_amf_coverage.py`, que además
+deja constancia de que ninguno responde con el vacío.
 
 ---
 

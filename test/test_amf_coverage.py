@@ -30,12 +30,10 @@ SWF = Path(__file__).resolve().parent.parent / "assets" / "ZGame.109338.swf"
 #: result instead of doing anything.
 #:
 #: Each one is a feature the 2012 client asks for and this server does not
-#: have. The two promo ones are the 2013 promotional rewards; the neighbour
-#: poll is the little question the neighbours ask you.
-KNOWN_EMPTY_ANSWERS = {
-    "UserService.checkForPromoReward",
-    "UserService.crewNeighborPoll",
-}
+#: have. The list was two long -- the promotional reward and the neighbour
+#: poll -- and it is empty now: both are answered out of the game's own
+#: data, the incentives catalogue and the crew templates.
+KNOWN_EMPTY_ANSWERS: set[str] = set()
 
 #: The methods the gateway answers that the client never asks for.
 #:
@@ -79,6 +77,40 @@ def client_methods() -> set[str]:
     return names
 
 
+def _is_the_empty_answer(node) -> bool:
+    """Whether a returned expression is the empty answer.
+
+    The empty answer is the one with nothing in it: ``data: []``. A handler
+    that returns a dict with something in ``data`` is doing something, even
+    though the dict around it is a literal -- and a handler that returns a
+    computed value cannot be assumed to be empty.
+    """
+    if node is None:
+        return True
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name == "dummy_response":
+            return True
+        if name == "_response":
+            if not node.args:
+                return True
+            first = node.args[0]
+            return isinstance(first, (ast.List, ast.Tuple)) and not first.elts
+        return False
+    if isinstance(node, ast.Dict):
+        for key, value in zip(node.keys, node.values):
+            if isinstance(key, ast.Constant) and key.value == "data":
+                if isinstance(value, (ast.List, ast.Tuple)):
+                    return not value.elts
+                if isinstance(value, ast.Dict):
+                    return not value.keys
+                return False
+        return False
+    if isinstance(node, ast.Constant):
+        return node.value is None
+    return False
+
+
 def _answers_with_nothing(handler) -> bool:
     """Whether every path out of a handler gives the empty answer.
 
@@ -96,26 +128,7 @@ def _answers_with_nothing(handler) -> bool:
     if not returns:
         return True
 
-    for child in returns:
-        value = child.value
-        if value is None:
-            continue
-        if isinstance(value, ast.Call):
-            name = getattr(value.func, "id", None) or getattr(value.func, "attr", None)
-            if name == "dummy_response":
-                continue
-            if (
-                name == "_response"
-                and value.args
-                and isinstance(value.args[0], (ast.List, ast.Tuple))
-                and not value.args[0].elts
-            ):
-                continue
-            return False
-        if isinstance(value, (ast.Constant, ast.List, ast.Tuple, ast.Dict)):
-            continue
-        return False
-    return True
+    return all(_is_the_empty_answer(child.value) for child in returns)
 
 
 class TestThePlumbing:
@@ -147,6 +160,19 @@ class TestWhatIsNotConnectedYet:
             f"new {sorted(empty - KNOWN_EMPTY_ANSWERS)}, "
             f"gone {sorted(KNOWN_EMPTY_ANSWERS - empty)}"
         )
+
+    def test_no_method_answers_with_nothing(self):
+        """Nothing on the surface is a stub any more.
+
+        This is the same pin as the one above, said the other way round: a
+        method that answers with the empty result and nothing else is a
+        feature that does not exist, wearing the costume of one that does.
+        """
+        dispatch = amf_dispatch.AMF_HANDLERS
+        empty = sorted(
+            name for name, handler in dispatch.items() if _answers_with_nothing(handler)
+        )
+        assert not empty, f"these answer with nothing: {empty}"
 
     def test_the_uncalled_handlers_are_the_known_ones(self):
         """Handlers the client never asks for are not dead code by accident.

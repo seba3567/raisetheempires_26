@@ -1,9 +1,13 @@
-"""What the empire spends.
+"""What the empire spends, and what it earns.
 
 Everything the player buys: the catalogue items, the energy, the ammunition
 and the mana refills, the contract unlocks, the quest tasks and the expansions.
 The pricing lives here too, because the price and the thing being paid for
 are the same decision.
+
+The other side of the same ledger lives here as well: ``deposit_reward`` is
+how a reward reaches the player, whether it comes from a quest, from a gift
+or from a promotion.
 """
 from __future__ import annotations
 
@@ -29,6 +33,56 @@ from quest_engine import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def deposit_reward(item_type: str, item_code: str, amount: int) -> None:
+    """Put a reward where the player can see it.
+
+    The four kinds are the ones the game pays out in: empire points, which
+    are the player's ``cash``; experience; the resources the world counts;
+    and everything else, which is an item in the inventory.
+
+    It used to live in ``service_handlers.py``, where only that file could
+    reach it. A reward is not a service though -- it is money going in --
+    so it belongs with the rest of the economy.
+    """
+    save = session.get("user_object")
+    if not isinstance(save, dict):
+        return
+    user_info = save.get("userInfo")
+    if not isinstance(user_info, dict):
+        return
+    player = user_info.get("player")
+    world = user_info.get("world")
+    if not isinstance(player, dict) or not isinstance(world, dict):
+        return
+
+    resources = world.get("resources")
+    if not isinstance(resources, dict):
+        resources = {}
+        world["resources"] = resources
+
+    inventory_wrapper = player.get("inventory")
+    if not isinstance(inventory_wrapper, dict):
+        inventory_wrapper = {}
+        player["inventory"] = inventory_wrapper
+
+    inventory = inventory_wrapper.get("items")
+    if not isinstance(inventory, dict):
+        inventory = {}
+        inventory_wrapper["items"] = inventory
+
+    if item_type in ("cash", "cash_item") or item_code == "cash":
+        player["cash"] = int(player.get("cash", 0)) + amount
+    elif item_type in ("xp", "experience"):
+        player["xp"] = int(player.get("xp", 0)) + amount
+    elif item_code == "energy" or item_type == "energy":
+        player["energy"] = int(player.get("energy", 0)) + amount
+    elif item_code in WORLD_RESOURCES:
+        resources[item_code] = int(resources.get(item_code, 0)) + amount
+    else:
+        inventory[item_code] = int(inventory.get(item_code, 0)) + amount
+
 
 
 def _economy_session():

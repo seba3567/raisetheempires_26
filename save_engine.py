@@ -169,6 +169,16 @@ def _get_world_objects(container: Any) -> list[dict[str, Any]]:
     return objs if isinstance(objs, list) else []
 
 
+def world_objects(container: Any) -> list[dict[str, Any]]:
+    """The objects of a save, or of the session's save.
+
+    ``container`` is either a save or the session itself. It used to be
+    private, and the only reader was ``lookup_object``; the neighbour poll
+    needs the objects of *another* player's save, which is what this is for.
+    """
+    return _get_world_objects(container)
+
+
 def lookup_object(id: Any) -> dict[str, Any]:
     objects = _get_world_objects(session)
     target = str(id)

@@ -31,7 +31,7 @@ from quest_engine import (
     handle_quest_progress,
     progress_action,
 )
-from save_engine import get_save_by_uid
+from save_engine import get_save_by_uid, get_saves, world_objects
 from save_store import save_invaders
 from state_machine import click_next_state, do_costs, lookup_object
 
@@ -384,11 +384,11 @@ def crew_request_response(params):
     building_id = params[1]
     building_name = params[2]
     action = params[3]
-    
+
     building = lookup_object(building_id)
-    
+
     if action == 'crew':
-        
+
         current_crew = building.get("crewInfo", [])
 
         crewTemplate = lookup_crew_template(building_name)
@@ -400,9 +400,104 @@ def crew_request_response(params):
         avail_slots = max(min(num_slots - len(current_crew), num_slots), 0)
         new_crew = current_crew + auto_accept_friends[:avail_slots]
         building["crewInfo"] = [str(x) for x in new_crew] # string needed, so that no friend is 'deleted' on display
-        
+
         print(building_name, "new crew (max", num_slots, "slots):", building.get("crewInfo", []))
-    
+
     meta = {"newPVE": 0}
     crew_request_response = {"errorType": 0, "userId": 1, "metadata": meta, 'data': []}
     return crew_request_response
+
+
+def _staff_position(params) -> str:
+    """The crew slot the client is asking about.
+
+    A slot is a key of a crew template -- "parliament1", "immunity3" -- and
+    the client sends it as a plain string or inside an object. Both are read
+    the same way, because which one arrives is the client's business.
+    """
+    if isinstance(params, str):
+        return params
+    if isinstance(params, dict):
+        for key in ("staffPosition", "position", "slot"):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, dict):
+                inner = value.get("-key") or value.get("key")
+                if isinstance(inner, str) and inner:
+                    return inner
+        return ""
+    if isinstance(params, list):
+        for value in params:
+            found = _staff_position(value)
+            if found:
+                return found
+    return ""
+
+
+def _free_crew_positions(save) -> set[str]:
+    """The crew slots a save has empty.
+
+    A crewable building holds a list of crew, one per slot of its template.
+    The slots it does not fill are the ones it could lend.
+    """
+    free: set[str] = set()
+    for obj in world_objects(save):
+        if not isinstance(obj, dict):
+            continue
+        name = obj.get("itemName")
+        if not name:
+            continue
+        try:
+            template = lookup_crew_template(name)
+        except Exception:
+            # An object the catalogue does not know has no crew slots. The
+            # catalogue prints the reason and keeps going; so does this.
+            logger.info("no crew template for %r", name)
+            continue
+        crew = obj.get("crewInfo")
+        if not isinstance(crew, list):
+            crew = []
+        for index, slot in enumerate(template.get("position", [])):
+            if not isinstance(slot, dict):
+                continue
+            key = slot.get("-key")
+            if key and index >= len(crew):
+                free.add(key)
+    return free
+
+
+def crew_neighbor_poll_response(params):
+    """`UserService.crewNeighborPoll` -- who could lend a crew member.
+
+    The client asks, for one crew slot, which of the neighbours have
+    somebody to spare. The answer is the list of their uids, which is
+    exactly what `RequestService.crewRequest` takes next: the two calls fit
+    together, and the client does not have to know who is next door.
+
+    A neighbour can lend when one of its own crewable buildings has that
+    slot empty. The neighbours are the other empires on this server, the
+    ones the neighbour list already knows about.
+    """
+    meta = {"newPVE": 0}
+    position = _staff_position(params)
+    if not position:
+        return {"errorType": 0, "userId": 1, "metadata": meta, "data": []}
+
+    mine = None
+    user_obj = session.get("user_object")
+    if isinstance(user_obj, dict):
+        mine = user_obj.get("userInfo", {}).get("player", {}).get("uid")
+
+    candidates = []
+    for save in get_saves():
+        if not isinstance(save, dict):
+            continue
+        player = save.get("user_object", {}).get("userInfo", {}).get("player", {})
+        uid = player.get("uid")
+        if uid is None or uid == mine:
+            continue
+        if position in _free_crew_positions(save):
+            candidates.append(uid)
+
+    return {"errorType": 0, "userId": 1, "metadata": meta, "data": candidates}
