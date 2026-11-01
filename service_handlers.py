@@ -1826,6 +1826,36 @@ def user_set_energiser_animation_done(params: Any = None, *args: Any) -> dict[st
     return _response(["success"])
 
 
+def user_energizer_setup(params: Any = None, *args: Any) -> dict[str, Any]:
+    """``UserService.energizerSetup`` -- the other half of the energizer.
+
+    The client has four energizer calls: this one, ``buyUnlimitedEnergy``,
+    ``purchaseEnergyRefill`` and ``setEnergiserAnimationDone``. The gateway
+    answered three of them and this one came back as the empty answer it
+    gives to a method it does not know -- which the client cannot tell apart
+    from a failure.
+
+    It marks the energizer as seen, which is what the animation call does, so
+    it does the same thing.
+    """
+    return user_set_energiser_animation_done(params, *args)
+
+
+def user_spend(params: Any = None, *args: Any) -> dict[str, Any]:
+    """``UserService.spend`` -- the client's "spend" call.
+
+    The gateway answered it with the empty answer it gives to a method it does
+    not know. Nothing was spent then and nothing is spent now: what the client
+    sends with it was not disassembled, and guessing at what to spend would
+    be worse than not spending.
+
+    What it does get is the answer the rest of the family gets. Every other
+    purchase in the client answers ``["success"]``, and this one answered an
+    empty array, which the client reads as a call that did not happen.
+    """
+    return _response(["success"])
+
+
 def user_promo_action(params: Any = None, *args: Any) -> dict[str, Any]:
     player = _get_player()
     if player and params:
@@ -2275,6 +2305,8 @@ EXTENDED_AMF_HANDLERS: dict[str, Any] = {
     "UserService.setSurvivalModeToaster": user_set_survival_mode_toaster,
     "UserService.setCommandoAnimationDone": user_set_commando_animation_done,
     "UserService.setEnergiserAnimationDone": user_set_energiser_animation_done,
+    "UserService.energizerSetup": user_energizer_setup,
+    "UserService.spend": user_spend,
     "UserService.promoAction": user_promo_action,
     "DataServicesService.getPromoData": user_get_promo_data,
     "CrossPromoService.accepted": cross_promo_accepted,
