@@ -170,22 +170,6 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
             get_consumable_shield(second_target, active_consumables)
         damage += max(consumable_extra_damage, -damage) # can't get negative damage by shield
 
-        # A weak unit changes what a hit is worth.
-        #
-        # The roll is -2 when the attacker is the weak one and 2 when the
-        # defender is, and the client scales the damage by a tenth of the
-        # roll. It is the client's own numbers that say so: it expects the
-        # enemy to be left with 38 where the server says 40, and it refuses
-        # the fight with "unit strength out of sync" when the two differ.
-        #
-        # Only the weak rolls are scaled. A plain roll is a fraction between
-        # zero and one, and scaling by it would change every hit in the game
-        # to fix one turn.
-        if roll == 2:
-            damage *= 1.2
-        elif roll == -2:
-            damage *= 0.8
-
         if consumable_extra_damage:
             print("Consumable extra damage", max(consumable_extra_damage, -damage))
 
