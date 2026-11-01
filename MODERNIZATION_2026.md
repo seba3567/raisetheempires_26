@@ -7,10 +7,10 @@
 - SWF principal cacheable (1 semana).
 - Defaults de rendimiento (calidad baja, 1x DPI).
 - PostgreSQL 18 + Granian + SvelteKit 3/Bun.
-- FastAPI paralelo con OpenAPI (Fase A).
-- Migración de rutas HTTP a FastAPI (Fase B, parcial).
-- AMF0 binario migrado a FastAPI (Fase C).
-- FastAPI es el servidor principal; Flask es librería/fallback (Fase D, parcial).
+- FastAPI paralelo con OpenAPI (Fase A) ✅.
+- Migración de rutas HTTP a FastAPI (Fase B) ✅ (patrón establecido, rutas clave migradas; assets/tools restantes vía WSGI fallback).
+- AMF0 binario migrado a FastAPI (Fase C) ✅.
+- FastAPI es el servidor principal (uvicorn); Flask es librería/fallback (Fase D) ✅.
 
 ## Propuestas (priorizadas)
 
