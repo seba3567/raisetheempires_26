@@ -42,7 +42,7 @@
 	let isTheater = $state(false);
 	let quality = $state<'low' | 'medium' | 'high'>('low');
 	let activeRenderer = $state<'webgpu' | 'wgpu-webgl'>('wgpu-webgl');
-	let forceLowDpi = $state(false);
+	let forceLowDpi = $state(true);
 	let loadStartTime = 0;
 
 	function cycleQuality() {
@@ -328,6 +328,9 @@
 
 <svelte:head>
 	<title>Juego — Raise the Empires</title>
+	<!-- Precarga del loader de Ruffle para reducir el tiempo hasta el primer frame. -->
+	<link rel="preload" href="/ruffle/ruffle.js" as="script" />
+	<link rel="modulepreload" href="/ruffle/ruffle.js" />
 </svelte:head>
 
 <div class="flex flex-col items-center gap-2 w-full">

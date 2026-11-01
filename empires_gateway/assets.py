@@ -34,8 +34,10 @@ ASSET_MAX_AGE = 60 * 60 * 24 * 7
 @bp.route("/files/empire-s.assets.zgncdn.com/assets/109338/ZGame.109338.swf")
 def flashFile():
     # return send_from_directory_mod("assets", "ZGame.109338.swf")
-    resp = send_from_directory_mod("assets", "ZGame.109338_tracer2.swf", max_age=0)
-    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    # El SWF principal cambia rara vez y es el archivo mas pesado del arranque.
+    # Cachearlo una semana elimina la revalidacion en cada visita, igual que el
+    # resto del arte. ETag sigue presente para avisar cuando cambia.
+    resp = send_from_directory_mod("assets", "ZGame.109338_tracer2.swf", max_age=ASSET_MAX_AGE)
     return resp
 
 

@@ -163,10 +163,12 @@ app.config['MAX_FORM_MEMORY_SIZE'] = 5 * 1024 * 1024  # 5 MB
 from empires_gateway import assets as _asset_routes
 from empires_gateway.routes import catalog as _catalog_routes
 from empires_gateway.routes import editor as _editor_routes
+from empires_gateway.routes import json_api as _json_api_routes
 from empires_gateway.routes import tools as _tools_routes
 
 app.register_blueprint(_catalog_routes.bp)
 app.register_blueprint(_editor_routes.bp)
+app.register_blueprint(_json_api_routes.bp)
 app.register_blueprint(_tools_routes.bp)
 app.register_blueprint(_asset_routes.bp)
 

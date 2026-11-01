@@ -43,6 +43,7 @@ export default defineConfig({
 			// HOST are absent from the environment. Without it the adapter
 			// binds 3000 while the origin points at 8080.
 			adapter: adapter({
+				precompress: true,
 				serverOptions: adapterServerOptions(config.port, config.host)
 			}),
 			paths: { origin: config.publicOrigin },

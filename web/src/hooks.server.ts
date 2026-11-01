@@ -63,5 +63,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return result;
 	}
 
-	return resolve(event);
+	const response = await resolve(event);
+
+	// Ruffle's loader and WASM binaries are immutable for a given vendored
+	// version. Serving them with a long-lived immutable cache removes the
+	// revalidation round trip on every visit (the adapter sets no header for
+	// static/ by default). See web/README.md "El arte del juego se cachea".
+	if (event.url.pathname.startsWith('/ruffle/')) {
+		response.headers.set('cache-control', 'public, max-age=31536000, immutable');
+	}
+
+	return response;
 };

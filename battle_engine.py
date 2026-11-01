@@ -91,7 +91,9 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
     else:
         player_turn = False
         attack_res = ai_best_attack(friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables)
-        enemy_unit_id, _, player_unit_id = attack_res if attack_res else (None, 0, None)
+        enemy_unit_id, _, player_unit_id, ai_drawn = attack_res if attack_res else (None, 0, None, None)
+    if player_turn:
+        ai_drawn = None
 
     if (
         enemy_unit_id is not None
@@ -135,7 +137,13 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
         baddie_strength = baddie_strengths[enemy_unit_id]
 
         init_seed = ["init seed", get_seed_w(), get_seed_z()]
-        roll = unit_roll(friendly_weak if player_turn else baddie_weak, baddie_weak if player_turn else friendly_weak)
+        # The enemy's turn has already taken a number for the battle AI, and
+        # the client uses that same number for the roll of the turn.
+        roll = unit_roll(
+            friendly_weak if player_turn else baddie_weak,
+            baddie_weak if player_turn else friendly_weak,
+            drawn=ai_drawn,
+        )
 
         crit, direct = get_hit_value(friendly_unit_type if player_turn else baddie_unit_type, baddie_unit_type if player_turn else friendly_unit_type)
         if player_turn:
@@ -166,6 +174,22 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
             get_consumable_damage(first_target, active_consumables) - \
             get_consumable_shield(second_target, active_consumables)
         damage += max(consumable_extra_damage, -damage) # can't get negative damage by shield
+
+        # A weak unit changes what a hit is worth.
+        #
+        # The roll is -2 when the attacker is the weak one and 2 when the
+        # defender is, and the client scales the damage by a tenth of the
+        # roll. It is the client's own numbers that say so: it expects the
+        # enemy to be left with 38 where the server says 40, and it refuses
+        # the fight with "unit strength out of sync" when the two differ.
+        #
+        # Only the weak rolls are scaled. A plain roll is a fraction between
+        # zero and one, and scaling by it would change every hit in the game
+        # to fix one turn.
+        if roll == 2:
+            damage *= 1.2
+        elif roll == -2:
+            damage *= 0.8
 
         if consumable_extra_damage:
             print("Consumable extra damage", max(consumable_extra_damage, -damage))
@@ -801,7 +825,7 @@ def decode_unit_strings(unit_strings):
     return [decode_unit_string(unit_string) for unit_string in unit_strings]
 
 
-def unit_roll(attacker_weak, defender_weak):
+def unit_roll(attacker_weak, defender_weak, drawn=None):
     """The roll of a turn.
 
     A weak unit makes the roll worth -2 or 2, but it does not save the
@@ -813,8 +837,14 @@ def unit_roll(attacker_weak, defender_weak):
     That is not theoretical. A turn where the enemy was weak did not draw at
     all here, the client drew, and the fight ended with the two sides
     disagreeing about what number came next.
+
+    ``drawn`` is the number a previous step of this same turn already took
+    from the stream. The enemy's turn has one: the battle AI takes a number
+    to choose its target, and the client takes one for the same reason. The
+    roll of the turn is that same number -- taking a second one is what put
+    the two sides a step apart in the first place.
     """
-    rolled = roll_random_between(0, 1)
+    rolled = drawn if drawn is not None else roll_random_between(0, 1)
     if attacker_weak:
         return -2
     if defender_weak:
@@ -1516,6 +1546,11 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
        - If only 1 best baddie: NO extra random float rolled!
     3. If not m_shouldFocusFire (player level < combatAIFocusFireMinLevel=25):
        Returns (chosen_baddie, max_grade, chosen_defender) directly without further rolls.
+
+    It also returns the number it took, because that number is the turn's
+    roll: the client takes one number for the AI and uses that same number
+    for the roll of the turn. Taking a second one here is what left the
+    two sides a step apart.
     """
     first_random = roll_random_float()
 
@@ -1532,7 +1567,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
     ]
 
     if not baddies_alive or not friendlies_alive:
-        return None, 0, None
+        return None, 0, None, first_random
 
     for b_idx, baddie in baddies_alive:
         cand_grades = [(p_idx, get_hit_chance(baddie, friendly)) for p_idx, friendly in friendlies_alive]
@@ -1551,7 +1586,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
             best_attackers.append((b_idx, chosen_def))
 
     if not best_attackers:
-        return None, 0, None
+        return None, 0, None, first_random
 
     if len(best_attackers) > 1:
         f = roll_random_float()
@@ -1560,7 +1595,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
     else:
         chosen_baddie, chosen_player = best_attackers[0]
 
-    return chosen_baddie, best_value, chosen_player
+    return chosen_baddie, best_value, chosen_player, first_random
 
 
 def ai_best_unit(first_units, first_units_strengths, second_unit, random, active_consumables, target_group):
