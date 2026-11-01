@@ -75,7 +75,16 @@ def list_methods() -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 import random
 
-from empires_gateway.routes.catalog import avatar_state, get_avail_motds, player_state, snapi_bridge
+from empires_gateway.routes.catalog import (
+    api_gift_claim,
+    api_gift_send,
+    api_pvp_reward,
+    avatar_state,
+    get_avail_motds,
+    player_state,
+    snapi_bridge,
+)
+from empires_gateway.routes.editor import editor_restore, editor_save, editor_state
 
 
 @app.get("/motd.json")
@@ -84,30 +93,76 @@ def motd_state() -> dict:
     return {"motds": motds, "current": random.choice(motds)}
 
 
-def _call_flask_view(view_func, request: Request):
+async def _call_flask_view(view_func, request: Request):
     cookie = request.headers.get("cookie", "")
-    with _flask_app.test_request_context("/", headers={"Cookie": cookie}):
+    body = await request.body()
+    content_type = request.headers.get("content-type", "application/x-www-form-urlencoded")
+    with _flask_app.test_request_context(
+        request.url.path,
+        method=request.method,
+        data=body,
+        headers={"Cookie": cookie, "Content-Type": content_type},
+    ):
         resp = view_func()
         if isinstance(resp, tuple):
             resp = resp[0]
         data = resp.get_json() if hasattr(resp, "get_json") else None
         status = resp.status_code if hasattr(resp, "status_code") else 200
+        # Handle redirects
+        if hasattr(resp, "location") and resp.status_code in (301, 302, 303, 307, 308):
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url=resp.location, status_code=resp.status_code)
+        if data is None:
+            return Response(content=resp.get_data() if hasattr(resp, "get_data") else b"", status_code=status, media_type=resp.mimetype if hasattr(resp, "mimetype") else None)
         return JSONResponse(data, status_code=status)
 
 
 @app.get("/player.json")
-def player_state_route(request: Request):
-    return _call_flask_view(player_state, request)
+async def player_state_route(request: Request):
+    return await _call_flask_view(player_state, request)
 
 
 @app.get("/snapi.json")
-def snapi_route(request: Request):
-    return _call_flask_view(snapi_bridge, request)
+async def snapi_route(request: Request):
+    return await _call_flask_view(snapi_bridge, request)
 
 
 @app.get("/avatar.json")
-def avatar_route(request: Request):
-    return _call_flask_view(avatar_state, request)
+async def avatar_route(request: Request):
+    return await _call_flask_view(avatar_state, request)
+
+
+# Editor (stateful, delegated to Flask view inside request context)
+@app.get("/editor.json")
+async def editor_state_route(request: Request):
+    return await _call_flask_view(editor_state, request)
+
+
+@app.post("/editor/save")
+async def editor_save_route(request: Request):
+    return await _call_flask_view(editor_save, request)
+
+
+@app.post("/editor/restore")
+async def editor_restore_route(request: Request):
+    return await _call_flask_view(editor_restore, request)
+
+
+# Gifts / PvP rewards
+@app.post("/api/gift/claim")
+async def gift_claim_route(request: Request):
+    return await _call_flask_view(api_gift_claim, request)
+
+
+@app.post("/api/gift/send")
+async def gift_send_route(request: Request):
+    return await _call_flask_view(api_gift_send, request)
+
+
+@app.post("/api/pvp/reward")
+async def pvp_reward_route(request: Request):
+    return await _call_flask_view(api_pvp_reward, request)
 
 
 # Migrated redirects (stateless)
