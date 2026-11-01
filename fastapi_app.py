@@ -15,8 +15,8 @@ import json
 import time
 from typing import Any
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 # The handlers live in the Flask gateway and rely on Flask's request/session
@@ -27,6 +27,7 @@ _spec.loader.exec_module(_es)
 _flask_app = _es.configure_app()
 
 from empires_gateway.amf import dispatch as _amf_dispatch
+from empires_gateway.shared import dummy_response as _dummy_response
 
 IDEMPOTENT = {
     "WorldService.loadWorld",
@@ -74,13 +75,70 @@ def list_methods() -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 import random
 
-from empires_gateway.routes.catalog import get_avail_motds
+from empires_gateway.routes.catalog import avatar_state, get_avail_motds, player_state, snapi_bridge
 
 
 @app.get("/motd.json")
 def motd_state() -> dict:
     motds = get_avail_motds()
     return {"motds": motds, "current": random.choice(motds)}
+
+
+def _call_flask_view(view_func, request: Request):
+    cookie = request.headers.get("cookie", "")
+    with _flask_app.test_request_context("/", headers={"Cookie": cookie}):
+        resp = view_func()
+        if isinstance(resp, tuple):
+            resp = resp[0]
+        data = resp.get_json() if hasattr(resp, "get_json") else None
+        status = resp.status_code if hasattr(resp, "status_code") else 200
+        return JSONResponse(data, status_code=status)
+
+
+@app.get("/player.json")
+def player_state_route(request: Request):
+    return _call_flask_view(player_state, request)
+
+
+@app.get("/snapi.json")
+def snapi_route(request: Request):
+    return _call_flask_view(snapi_bridge, request)
+
+
+@app.get("/avatar.json")
+def avatar_route(request: Request):
+    return _call_flask_view(avatar_state, request)
+
+
+# Migrated redirects (stateless)
+from fastapi.responses import RedirectResponse
+
+
+@app.get("/")
+@app.get("/game")
+@app.get("/play")
+def index():
+    return RedirectResponse(url="/juego", status_code=302)
+
+
+@app.get("/home.html")
+@app.get("/ruffle.html")
+@app.get("/nodebug.html")
+@app.get("/new.html")
+def legacy_player_pages():
+    return RedirectResponse(url="/juego", status_code=302)
+
+
+@app.get("/friends.html")
+def friends_page():
+    return RedirectResponse(url="/admin/sessions", status_code=302)
+
+
+@app.get("/changelog.txt")
+def change_log():
+    from fastapi.responses import FileResponse
+
+    return FileResponse("web/static/changelog.txt", media_type="text/plain")
 
 
 def _dispatch(method: str, params: list[Any]) -> JSONResponse:
@@ -124,6 +182,68 @@ def user_init() -> JSONResponse:
 def world_load(request: CallRequest) -> JSONResponse:
     params = request.params if isinstance(request.params, list) else [request.params]
     return _dispatch("WorldService.loadWorld", params)
+
+
+# ---------------------------------------------------------------------------
+# Fase C: AMF0 binary endpoint migrated to FastAPI.
+# ---------------------------------------------------------------------------
+import time as _time
+from datetime import datetime as _datetime
+
+import pyamf
+from pyamf import remoting
+
+from empires_gateway.amf import protocol as _amf_protocol
+from empires_gateway.amf.dispatch import _amf_as_list, _amf_detach, _pad_batch_results, _tolerate_call_failure
+
+
+@app.post("/flashservices/gateway.php")
+async def amf_gateway(request: Request):
+    data = await request.body()
+    with _flask_app.test_request_context(
+        "/flashservices/gateway.php", method="POST", data=data, content_type="application/x-amf"
+    ):
+        try:
+            resp_msg = remoting.decode(data)
+        except Exception as error:
+            return Response("Bad AMF request", status_code=400)
+
+        try:
+            batch_body = resp_msg.bodies[0][1].body
+            calls = _amf_as_list(batch_body[1])
+        except Exception as error:
+            return Response("Bad AMF batch", status_code=400)
+
+        resps = []
+        called_methods = []
+        for reqq in calls:
+            if not isinstance(reqq, dict):
+                resps.append(_dummy_response())
+                continue
+            if reqq.get("params") is not None:
+                reqq["params"] = _amf_as_list(reqq["params"])
+            fn_name = getattr(reqq, "functionName", None) or reqq.get("functionName")
+            if fn_name:
+                called_methods.append(fn_name)
+            handler = _amf_dispatch.AMF_HANDLERS.get(fn_name)
+            if handler is not None:
+                resp = _tolerate_call_failure(fn_name, handler, reqq.get("params"), reqq, resp_msg)
+            else:
+                resp = _dummy_response()
+            resps.append(resp if resp is not None else _dummy_response())
+
+        resps = _pad_batch_results(resps, len(calls))
+
+        emsg = _amf_detach({
+            "serverTime": _datetime.now().timestamp(),
+            "errorType": 0,
+            "data": resps,
+        })
+        req = remoting.Response(emsg)
+        ev = remoting.Envelope(pyamf.AMF0)
+        ev[resp_msg.bodies[0][0]] = req
+        ret_body = remoting.encode(ev, strict=True, logger=True).getvalue()
+        return Response(content=ret_body, media_type="application/x-amf")
 
 
 # Mount the legacy Flask app as a fallback so routes not yet migrated keep
