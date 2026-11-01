@@ -63,9 +63,10 @@ app = FastAPI(
 # exposing the session through fastapi_session.session (no Flask import in handlers).
 @app.middleware("http")
 async def session_middleware(request: Request, call_next):
-    from fastapi_session import set_session, get_session
+    from fastapi_session import set_request, set_session, get_session
 
     cookie = request.headers.get("cookie", "")
+    set_request(request)
     with _flask_app.test_request_context(request.url.path, method=request.method, headers={"Cookie": cookie}):
         flask_req = _flask_app.test_request_context().request
         sess = _flask_app.session_interface.open_session(_flask_app, flask_req)

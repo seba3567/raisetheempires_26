@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from flask import has_request_context, request, session
+from fastapi_session import has_request_context, request, session
 
 import contract
 import mod_engine

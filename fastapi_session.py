@@ -13,6 +13,10 @@ _current_session: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Co
     "fastapi_session", default=None
 )
 
+_current_request: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "fastapi_request", default=None
+)
+
 
 class _SessionProxy(dict):
     def _get(self) -> dict[str, Any]:
@@ -100,6 +104,30 @@ class _SessionProxy(dict):
 session = _SessionProxy()
 
 
+class _RequestProxy:
+    def _get(self):
+        r = _current_request.get()
+        if r is not None:
+            return r
+        try:
+            from flask import has_request_context, request as flask_request
+
+            if has_request_context():
+                return flask_request._get_current_object()
+        except Exception:
+            pass
+        return None
+
+    def __getattr__(self, name):
+        r = self._get()
+        if r is None:
+            raise RuntimeError("No request context")
+        return getattr(r, name)
+
+
+request = _RequestProxy()
+
+
 def set_session(data: dict[str, Any] | None) -> None:
     _current_session.set(data if data is not None else {})
 
@@ -110,3 +138,22 @@ def get_session() -> dict[str, Any]:
         s = {}
         _current_session.set(s)
     return s
+
+
+def set_request(req: Any) -> None:
+    _current_request.set(req)
+
+
+def get_request() -> Any:
+    return _current_request.get()
+
+
+def has_request_context() -> bool:
+    if _current_request.get() is not None:
+        return True
+    try:
+        from flask import has_request_context as _flask_has
+
+        return _flask_has()
+    except Exception:
+        return False
