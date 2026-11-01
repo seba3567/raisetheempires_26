@@ -17,7 +17,7 @@ import type { Handle } from '@sveltejs/kit/hooks';
 import { adminDecision } from '#lib/access';
 import { findById, publicUser } from '#lib/server/models/accounts';
 import { proxyToGateway } from '#lib/server/proxy';
-import { resolveRequestOrigin } from '#lib/server/config';
+import { config, resolveRequestOrigin } from '#lib/server/config';
 import { isSecureRequest, readSession } from '#lib/server/session';
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -42,6 +42,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// paths the gateway owns: the SWF, its assets, the AMF0 endpoint, the XML
 	// settings files and the cheat routes.
 	if (!event.route.id) {
+		// FastAPI owns the JSON API surface (Fase A of the migration); everything
+		// else keeps going to the Flask gateway.
+		const upstreamOrigin =
+			event.url.pathname.startsWith('/api/v1/')
+				? config.fastapi.origin
+				: undefined;
+
 		// The account's id goes along so the game files the save under the
 		// account instead of under a hash of the gateway's own cookie. Null for
 		// anonymous traffic, which the gateway falls back to handling exactly as
@@ -53,7 +60,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 		const result = await proxyToGateway(
 			event.request,
 			publicOrigin,
-			undefined,
+			upstreamOrigin,
 			event.locals.user?.zid ?? null,
 			event.locals.user?.role ?? null
 		);

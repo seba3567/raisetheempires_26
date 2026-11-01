@@ -357,6 +357,9 @@ export const config = {
     /** Longest AMF0 request we will buffer, matching the Flask MAX_FORM_MEMORY_SIZE. */
     maxBodyBytes: envBytes("GATEWAY_MAX_BODY", 5 * 1024 * 1024),
   },
+  fastapi: {
+    origin: process.env.FASTAPI_ORIGIN ?? fromFile("FASTAPI_ORIGIN") ?? "http://127.0.0.1:5006",
+  },
 
   /**
    * The account/friends/progress store.
