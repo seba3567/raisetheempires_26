@@ -184,6 +184,26 @@
 		]
 	},
 
+	"clans": {
+		"_readme": [
+			"A new alliance starts like this, and this is the whole list of shields.",
+			"",
+			"The web front door and the gateway both create alliances, from the",
+			"page and from inside the game, and they used to write the same",
+			"numbers twice. The gateway also accepted any shield, so an alliance",
+			"created in the game could carry one the page does not know about."
+		],
+		"defaults": {
+			"level": 1,
+			"xp": 0,
+			"health": 100,
+			"maxHealth": 100,
+			"slots": 10
+		},
+		"defaultCrest": "crest_01",
+		"crests": ["crest_01", "crest_02", "crest_03", "crest_04", "crest_05"]
+	},
+
 	"zid": {
 		"_readme": "The player's stable id. CRC-64/GO-ISO divided down so the result is an exact integer for the Flash client, which has no integer type.",
 		"divisor": 2048,

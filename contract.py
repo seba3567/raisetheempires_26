@@ -41,6 +41,9 @@ from typing import Any
 __all__ = [
     "ADMIN_ONLY_EXACT",
     "ADMIN_ONLY_PREFIXES",
+    "CLAN_CRESTS",
+    "CLAN_DEFAULTS",
+    "CLAN_DEFAULT_CREST",
     "CONTRACT_PATH",
     "DATABASE_NAME",
     "DATABASE_URL",
@@ -144,6 +147,7 @@ _env = _section("env")
 _snapi = _section("snapi")
 _player_state = _section("playerState")
 _resources = _section("resources")
+_clans = _section("clans")
 
 
 def _require(section: dict[str, Any], key: str, where: str) -> Any:
@@ -249,6 +253,25 @@ PLAYER_STATE_KEYS = _string_list(_player_state, "keys", "playerState")
 
 #: The resources the world keeps, in the order the 2012 editor showed them.
 RESOURCE_ORDER = _string_list(_resources, "order", "resources")
+
+
+def _clan_defaults() -> dict[str, int]:
+    raw = _clans.get("defaults")
+    if not isinstance(raw, dict):
+        raise TypeError("The runtime contract has no clans.defaults.")
+    return {str(key): int(value) for key, value in raw.items()}
+
+
+#: What a new alliance starts as.
+CLAN_DEFAULTS = _clan_defaults()
+
+#: The shields an alliance can carry. The web front door knows this list and
+#: the gateway used not to: it accepted any shield, so an alliance created
+#: inside the game could carry one the page had never heard of.
+CLAN_CRESTS = _string_list(_clans, "crests", "clans")
+
+#: The shield an alliance gets when none is given.
+CLAN_DEFAULT_CREST = str(_require(_clans, "defaultCrest", "clans"))
 
 
 #: The canonical name of every environment variable both runtimes read.

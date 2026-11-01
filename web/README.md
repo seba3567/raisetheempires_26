@@ -393,6 +393,7 @@ del repositorio:
 | `snapi` | Las claves del objeto de usuario y del payload que el SWF pide. |
 | `playerState` | Las claves de `/player.json`. |
 | `resources` | Los recursos del mundo, en orden. |
+| `clans` | Con qué empieza una alianza y qué escudos existen. |
 | `zid` | El divisor del checksum y el máximo exacto para el cliente Flash. |
 
 Python lo lee con `contract.py`; TypeScript con `#lib/server/contract`. Los dos
@@ -426,6 +427,21 @@ que quien lo afirma es esta puerta, que es la única que conoce la sesión: en
 la cabecera de rol, que la puerta pone y nunca reenvía desde el navegador. El
 gateway escucha en loopback y esta puerta es su única puerta; por eso confía
 en ella, igual que en la cabecera con el id del jugador.
+
+### Las reglas de alianza y amistad, por las dos puertas
+
+Una alianza se puede crear desde la página o desde dentro del juego, y una
+petición de amistad se puede mandar por cualquiera de las dos puertas. Las
+reglas tienen que dar igual por las dos, y antes no daba: la página
+impedía una petición entre dos jugadores cuando uno había bloqueado al otro,
+y el gateway escribía la fila igual. Un jugador bloqueado podía seguir
+mandándole peticiones desde el juego — la misma acción, dos puertas, una
+regla en una sola.
+
+Ahora los valores viven en `clans` del contrato (con qué empieza una alianza,
+qué escudos existen) y la regla de bloqueo está **en el INSERT** del gateway,
+que es donde no se puede olvidar: una regla que solo vive en un comentario es
+una regla que una edición posterior puede tirar sin querer.
 
 ### El puerto y el origen tienen que ser el mismo servidor
 

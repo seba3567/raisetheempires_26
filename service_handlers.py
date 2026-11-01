@@ -8,6 +8,7 @@ from typing import Any
 
 from flask import session
 
+import contract
 from game_settings import get_zid, lookup_item_by_code
 from save_engine import (
     ensure_fleets,
@@ -1001,10 +1002,19 @@ def clans_create_clan(params: Any = None, *args: Any) -> dict[str, Any]:
     The clan and the leader's membership are one statement, so a clan without
     a leader cannot exist. A player who already belongs to an alliance keeps
     it instead of getting a second one.
+
+    The shield is checked against the list in the runtime contract, which is
+    the same list the web front door uses. It used to be taken as it came: an
+    alliance created inside the game could carry a shield the page had never
+    heard of.
     """
+    defaults = contract.CLAN_DEFAULTS
     name = params[0].get("name", "New Alliance") if params and isinstance(params[0], dict) else "New Alliance"
-    crest = params[0].get("crest", "crest_01") if params and isinstance(params[0], dict) else "crest_01"
+    crest = params[0].get("crest", contract.CLAN_DEFAULT_CREST) if params and isinstance(params[0], dict) else contract.CLAN_DEFAULT_CREST
     name = str(name).strip() or "New Alliance"
+    crest = str(crest)
+    if crest not in contract.CLAN_CRESTS:
+        crest = contract.CLAN_DEFAULT_CREST
 
     account_id = _player_account_id()
     if account_id is not None:
@@ -1016,13 +1026,23 @@ def clans_create_clan(params: Any = None, *args: Any) -> dict[str, Any]:
                 """
                 WITH new_clan AS (
                     INSERT INTO clans (name, crest, level, xp, health, max_health, slots, leader_id, created_at, updated_at)
-                    VALUES (%s, %s, 1, 0, 100, 100, 10, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING id
                 )
                 INSERT INTO clan_members (clan_id, user_id, role, joined_at)
                 SELECT id, %s, 'leader', CURRENT_TIMESTAMP FROM new_clan
                 """,
-                (name, crest, account_id, account_id),
+                (
+                    name,
+                    crest,
+                    defaults["level"],
+                    defaults["xp"],
+                    defaults["health"],
+                    defaults["maxHealth"],
+                    defaults["slots"],
+                    account_id,
+                    account_id,
+                ),
             )
         real = _real_clan(account_id)
         if real is not None:
@@ -1036,11 +1056,11 @@ def clans_create_clan(params: Any = None, *args: Any) -> dict[str, Any]:
         "name": name,
         "crest": crest,
         "members": [{"uid": 1, "role": "leader", "name": "Commander"}],
-        "level": 1,
-        "xp": 0,
-        "health": 100,
-        "maxHealth": 100,
-        "slots": 10,
+        "level": defaults["level"],
+        "xp": defaults["xp"],
+        "health": defaults["health"],
+        "maxHealth": defaults["maxHealth"],
+        "slots": defaults["slots"],
     }
     user_obj = session.setdefault("user_object", {})
     if isinstance(user_obj, dict):
@@ -1690,6 +1710,13 @@ def _record_social_request(kind: str, params: Any) -> list[int]:
 
 
 def request_neighbor(params: Any = None, *args: Any) -> dict[str, Any]:
+    """Pide amistad a un vecino, respetando las mismas reglas que la pagina.
+
+    The web front door refuses a request between two players when either one
+    has the other blocked. This did not: the row went in, so a player who had
+    been blocked could still send them a request from inside the game -- the
+    same action, two doors, one rule on one of them.
+    """
     targets = _record_social_request("neighborRequestSent", params)
     account_id = _player_account_id()
     if account_id is not None:
@@ -1700,9 +1727,15 @@ def request_neighbor(params: Any = None, *args: Any) -> dict[str, Any]:
                 SELECT %s, u.id, 'pending', %s, CURRENT_TIMESTAMP
                   FROM users u
                  WHERE u.zid = %s AND u.id != %s
+                   AND NOT EXISTS (
+                       SELECT 1 FROM friendships f
+                        WHERE f.status = 'blocked'
+                          AND ((f.user_id = %s AND f.friend_id = u.id)
+                            OR (f.user_id = u.id AND f.friend_id = %s))
+                       )
                 ON CONFLICT DO NOTHING
                 """,
-                (account_id, account_id, target_zid, account_id),
+                (account_id, account_id, target_zid, account_id, account_id, account_id),
             )
     return _response(["success"])
 

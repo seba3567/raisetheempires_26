@@ -1,4 +1,5 @@
 import { all, now, one, run, transact } from '../db/client.ts';
+import { contract } from '../contract.ts';
 
 export interface Clan {
 	id: number;
@@ -24,15 +25,26 @@ export interface ClanMemberView {
 	joined_at: string;
 }
 
-export const VALID_CRESTS = ['crest_01', 'crest_02', 'crest_03', 'crest_04', 'crest_05'];
+/**
+ * The shields an alliance can carry.
+ *
+ * The list lives in `contract/runtime.json` because the gateway creates
+ * alliances too, from inside the game, and it used to accept any shield: an
+ * alliance made in the game could carry one this page had never heard of.
+ */
+export const VALID_CRESTS = contract.clans.crests;
+
+/** The shield an alliance gets when none is given. */
+export const DEFAULT_CREST = contract.clans.defaultCrest;
 
 export async function createClan(
 	leaderId: number,
 	name: string,
-	crest = 'crest_01'
+	crest = DEFAULT_CREST
 ): Promise<Clan> {
 	const stamp = now();
-	const safeCrest = VALID_CRESTS.includes(crest) ? crest : 'crest_01';
+	const safeCrest = VALID_CRESTS.includes(crest) ? crest : DEFAULT_CREST;
+	const defaults = contract.clans.defaults;
 	return transact(async () => {
 		const existing = await one<{ id: number }>(
 			'SELECT clan_id AS id FROM clan_members WHERE user_id = ?',
@@ -44,9 +56,14 @@ export async function createClan(
 
 		await run(
 			`INSERT INTO clans (name, crest, level, xp, health, max_health, slots, leader_id, created_at, updated_at)
-       VALUES (?, ?, 1, 0, 100, 100, 10, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			name.trim(),
 			safeCrest,
+			defaults.level,
+			defaults.xp,
+			defaults.health,
+			defaults.maxHealth,
+			defaults.slots,
 			leaderId,
 			stamp,
 			stamp

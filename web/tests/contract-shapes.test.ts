@@ -20,6 +20,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { contract } from '#lib/server/contract';
 import { RESOURCE_KEYS } from '#lib/resources';
+import { DEFAULT_CREST, VALID_CRESTS } from '#lib/server/models/clans';
 import { PLAYER_STATE_KEYS } from '#lib/server/player';
 import { SNAPI_PAYLOAD_KEYS, SNAPI_USER_KEYS } from '#lib/snapi';
 
@@ -61,5 +62,32 @@ describe('the resources', () => {
 
 	test('the first one is the coins, which is what the client shows first', () => {
 		expect(RESOURCE_KEYS[0]).toBe('coins');
+	});
+});
+
+/**
+ * The alliance rules.
+ *
+ * An alliance can be made from the page or from inside the game, and the two
+ * have to start the same way. The gateway used to accept any shield, so an
+ * alliance made in the game could carry one this page had never heard of.
+ */
+describe('the clan rules', () => {
+	test('the shields are the ones the contract names', () => {
+		expect([...VALID_CRESTS]).toEqual([...contract.clans.crests]);
+	});
+
+	test('a new alliance starts with the contracted values', () => {
+		expect(contract.clans.defaults).toEqual({
+			level: 1,
+			xp: 0,
+			health: 100,
+			maxHealth: 100,
+			slots: 10
+		});
+	});
+
+	test('the default shield is one of them', () => {
+		expect(VALID_CRESTS).toContain(DEFAULT_CREST);
 	});
 });

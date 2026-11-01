@@ -36,6 +36,11 @@ export type RuntimeContract = {
 	snapi: { userKeys: string[]; payloadKeys: string[] };
 	playerState: { keys: string[] };
 	resources: { order: string[] };
+	clans: {
+		defaults: { level: number; xp: number; health: number; maxHealth: number; slots: number };
+		defaultCrest: string;
+		crests: string[];
+	};
 	zid: { divisor: number; maxSafe: number };
 	env: {
 		databaseUrl: string;
@@ -66,6 +71,7 @@ export function parseContract(raw: string): RuntimeContract {
 	const snapi = data.snapi;
 	const playerState = data.playerState;
 	const resources = data.resources;
+	const clans = data.clans;
 
 	if (
 		!database ||
@@ -76,11 +82,12 @@ export function parseContract(raw: string): RuntimeContract {
 		!env ||
 		!snapi ||
 		!playerState ||
-		!resources
+		!resources ||
+		!clans
 	) {
 		throw new TypeError(
 			'The runtime contract is missing one of: database, gateway, public, headers, ' +
-				'zid, env, snapi, playerState, resources.'
+				'zid, env, snapi, playerState, resources, clans.'
 		);
 	}
 
@@ -140,6 +147,17 @@ export function parseContract(raw: string): RuntimeContract {
 		},
 		playerState: { keys: (playerState.keys ?? []).map(String) },
 		resources: { order: (resources.order ?? []).map(String) },
+		clans: {
+			defaults: {
+				level: Number(clans.defaults.level),
+				xp: Number(clans.defaults.xp),
+				health: Number(clans.defaults.health),
+				maxHealth: Number(clans.defaults.maxHealth),
+				slots: Number(clans.defaults.slots)
+			},
+			defaultCrest: String(clans.defaultCrest),
+			crests: (clans.crests ?? []).map(String)
+		},
 		zid: { divisor: Number(zid.divisor), maxSafe: Number(zid.maxSafe) },
 		env: {
 			databaseUrl: String(env.databaseUrl),
