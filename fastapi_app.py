@@ -66,6 +66,11 @@ def list_methods() -> dict[str, list[str]]:
 
 # ---------------------------------------------------------------------------
 # Migrated routes (Fase B): native FastAPI, OpenAPI-documented.
+# TODO: migrate remaining routes from catalog.py, editor.py, tools.py.
+#   - /player.json, /snapi.json, /avatar.json (need Flask session bridge)
+#   - /editor.json, /editor/save, /editor/restore (need session + store)
+#   - /api/gift/*, /api/pvp/reward (need session + store)
+#   - redirects: /home.html, /ruffle.html, /nodebug.html, /new.html, /friends.html
 # ---------------------------------------------------------------------------
 import random
 
