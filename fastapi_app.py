@@ -53,8 +53,8 @@ class CallResponse(BaseModel):
 
 
 app = FastAPI(
-    title="Raise the Empires — JSON API",
-    description="FastAPI mirror of the AMF0 gateway's JSON surface (Fase A).",
+    title="Raise the Empires — Gateway",
+    description="FastAPI gateway wrapping the legacy Flask app (Fase B migration).",
     version="0.08a",
 )
 
@@ -62,6 +62,20 @@ app = FastAPI(
 @app.get("/api/v1/methods")
 def list_methods() -> dict[str, list[str]]:
     return {"methods": sorted(_amf_dispatch.AMF_HANDLERS.keys())}
+
+
+# ---------------------------------------------------------------------------
+# Migrated routes (Fase B): native FastAPI, OpenAPI-documented.
+# ---------------------------------------------------------------------------
+import random
+
+from empires_gateway.routes.catalog import get_avail_motds
+
+
+@app.get("/motd.json")
+def motd_state() -> dict:
+    motds = get_avail_motds()
+    return {"motds": motds, "current": random.choice(motds)}
 
 
 def _dispatch(method: str, params: list[Any]) -> JSONResponse:
@@ -105,3 +119,10 @@ def user_init() -> JSONResponse:
 def world_load(request: CallRequest) -> JSONResponse:
     params = request.params if isinstance(request.params, list) else [request.params]
     return _dispatch("WorldService.loadWorld", params)
+
+
+# Mount the legacy Flask app as a fallback so routes not yet migrated keep
+# working. Migrated routes defined above take precedence.
+from starlette.middleware.wsgi import WSGIMiddleware
+
+app.mount("/", WSGIMiddleware(_flask_app))
