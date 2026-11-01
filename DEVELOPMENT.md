@@ -438,11 +438,43 @@ cd web; bun run --bun build; bun .\build
 
 ```powershell
 cd web
-bun test          # 146 tests
+bun test          # 179 tests
 bun run check     # svelte-check
 bun run --bun build
-bun run scripts/manage-user.ts list-admins
 ```
+
+## The accounts (admin commands)
+
+There is no route in the web surface for creating an account or changing a
+password: both mean proving you can already log in, and an account that
+cannot log in is exactly the case a route cannot reach. They are scripts
+instead, and they go through the same database layer the application does.
+
+```powershell
+cd web
+
+# the first administrator, when there is none
+$env:ADMIN_USER = "seba3567"; $env:ADMIN_PASS = "..."
+bun run scripts/manage-user.ts create-admin
+
+# who is an administrator
+bun run scripts/manage-user.ts list-admins
+
+# give an account the administrator role, or take it away
+bun run scripts/manage-user.ts promote <username>
+bun run scripts/manage-user.ts demote <username>
+
+# remove an account
+bun run scripts/manage-user.ts delete <username>
+
+# an account that cannot log in
+bun run reset-password.ts <username> <new-password>
+```
+
+`create-admin` reads the name and the password from `ADMIN_USER` and
+`ADMIN_PASS` rather than from the command line, so they do not end up in
+the shell history. The last admin cannot be demoted or deleted: the script
+refuses rather than lock every moderator out of the server.
 
 ## Adding tests
 

@@ -121,7 +121,13 @@ def test_minigame_bomber_run(test_session):
     buy_fuel_h = EXTENDED_AMF_HANDLERS["MiniGameService.buyMiniGameFuel"]
     fuel_res = buy_fuel_h([])
     assert fuel_res["data"]["fuel"] >= 100
-    assert test_session["user_object"]["userInfo"]["player"]["cash"] == 95
+    # The fuel costs five empire points. The bomb picks one of five crates at
+    # random and one of them pays empire points back, so the balance is the
+    # cost plus whatever that crate gave -- which used to make this test fail
+    # one time in twenty.
+    reward = drop_res["data"]["reward"]
+    given_back = reward["count"] if reward["type"] == "cash" else 0
+    assert test_session["user_object"]["userInfo"]["player"]["cash"] == 95 + given_back
 
     # Stop game
     stop_h = EXTENDED_AMF_HANDLERS["MiniGameService.stop"]

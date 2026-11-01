@@ -1649,13 +1649,6 @@ def get_unit_max_strength(unit, ally, params=None):
     return strength
 
 
-# def get_current_island(params):
-#     if params and 'map' in params and params['map'] and params['map'][0] == 'C':
-#         if 'campaign' in session and params['map'] in session['campaign']:
-#             map_item = lookup_item_by_code(params["map"])
-#             return session['campaign'][params['map']]["island"], map_item
-#     return None, None
-
 def get_current_island(params):
     # Campaign 01
     if params and 'map' in params and params['map'] and params['map'][0] == 'C':
@@ -1701,14 +1694,6 @@ def set_active_island_by_map(map_name, island_id):
         campaign['active'][map_name]["status"] = status
 
 
-#
-# def get_current_island_from_session():
-#     campaign = session['user_object']['userInfo']['world']['campaign']
-#     if 'current' in campaign:
-#         return get_active_island_by_map()
-#     return None, None
-
-
 def apply_map_mod_strength(unit, strength, strengths):
     for e in strengths:
         if e["-code"] == unit["-code"]:
@@ -1720,24 +1705,11 @@ def apply_map_mod_strength(unit, strength, strengths):
 def get_unit_weak(unit):
     return int(unit["unit"].get("-weak", "0"))
 
-# unused?
-# def getAbsolute(baddie_strength):
-#     base_damage = 25  # TODO tier difference & increments
-#
-#     # if player_turn:
-#     damage = base_damage * (3 * friendly_max_strength + baddie_strength) / (
-#                 3 * baddie_strength + friendly_max_strength)
-#     damage = damage / 100 * baddie_max_strength
-#     # else:
-#     #     damage = base_damage * (3 * baddie_max_strength + friendly_strength) / (
-#     #                 3 * friendly_strength + baddie_max_strength)
-#     #     damage = damage / 100 * friendly_max_strength
-#
-#     damage = math.floor(damage * 10 ** 3) / 10 ** 3
 
-
-
-#TODO: fix kill has more coins?
+# The reward of a kill is bigger than the reward of a hit, because the coins
+# are proportional to the damage: a kill takes the whole unit off, and a hit
+# does not. The game's own "combatRewards" only says what the experience and
+# the energy are, so the coins are this server's reading of it.
 def doBattleRewards(hit_type, max_strength, damage, friendly_max_strength):
     #mod strength?
     coin_amount = math.ceil(max_strength * damage * 0.01)  # * unit mult * ammo experiment
