@@ -6,6 +6,9 @@ from flask import Flask, request, session
 from pyamf import remoting
 
 empires_server = __import__('empires-server')
+from empires_gateway.amf.handlers import player as player_handlers
+from empires_gateway.amf.handlers.player import init_user, tutorial_response
+from logger import report_tutorial_step
 from pathlib import Path
 
 import quest_engine
@@ -25,7 +28,7 @@ def _real_save():
     """
     session.sid = "0"
     session['profilePic'] = "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"
-    return {"user_object": empires_server.init_user(),
+    return {"user_object": init_user(),
             "profilePic": session['profilePic']}
 
 
@@ -241,7 +244,7 @@ def test_tutorial_response(monkeypatch):
         return []
 
     monkeypatch.setattr(quest_engine, "get_saves", get_saves_mock)
-    monkeypatch.setattr(empires_server, "report_tutorial_step", report_tutorial_step)
+    monkeypatch.setattr(player_handlers, "report_tutorial_step", report_tutorial_step)
 
     with app.test_request_context():
         session["quests"] = [{'name': 'Q1140', 'complete': False, 'expired': False, 'progress': [0], 'completedTasks': 0},
@@ -263,7 +266,7 @@ def test_tutorial_response(monkeypatch):
         session['user_object']["experiments"] = {}
 
 
-        resp = empires_server.tutorial_response('tut_step_inviteFriendsEndPauseTutorial', 18, '/14')
+        resp = tutorial_response('tut_step_inviteFriendsEndPauseTutorial', 18, '/14')
 
         assert resp == {'errorType': 0, 'userId': 1, 'metadata': {'newPVE': 0, 'QuestComponent': [
             {'name': 'Q1140', 'complete': True, 'expired': False, 'progress': [1], 'completedTasks': 1}]}, 'data': []}
@@ -399,7 +402,7 @@ def test_init_user(monkeypatch):
     with app.test_request_context():
         session.sid = "0"
         session['profilePic'] = "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"
-        user = empires_server.init_user()
+        user = init_user()
 
         with (TEST_DIR / 'init_user.json').open(encoding="utf-8") as f:
             user["userInfo"]["player"]["lastEnergyCheck"] = 0

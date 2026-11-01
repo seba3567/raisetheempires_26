@@ -24,6 +24,7 @@ from quest_engine import (
     lookup_quest,
     progress_action,
     progress_buy_consumable,
+    progress_market_added_count,
     progress_quest_task,
 )
 
@@ -440,3 +441,43 @@ def _charge(player, resources, inventory, price, key_costs):
 
     for code, units in key_costs.items():
         inventory[code] = inventory.get(code, 0) - units
+
+
+def place_market_order(market, order, meta):
+    world = session['user_object']["userInfo"]["world"]
+    resources = world['resources']
+    if order["type"] == "resource":
+        standard_resources = ["coins", "oil", "wood", "aluminum", "copper", "gold", "iron", "uranium"]
+        resources[standard_resources[int(order["item"])]] -= order["units"]
+        print("Market: Order placed & removed", standard_resources[int(order["item"])] + ":", str(order["units"])
+              + "(" + str(resources[standard_resources[int(order["item"])]]) + ")")
+        handle_quest_progress(meta, progress_market_added_count(order["units"]))
+    else:
+        print("TODO: Can't reserve market type", order.get("type"), "yet")
+    market["type"] = order["type"]
+    market["item"] = order["item"]
+    market["units"] = order["units"]
+
+
+def refund_market_order(market):
+    world = session['user_object']["userInfo"]["world"]
+    resources = world['resources']
+    if market.get("type") == "resource":
+        standard_resources = ["coins", "oil" , "wood", "aluminum", "copper", "gold", "iron", "uranium"]
+        item_idx = market.get("item")
+        if item_idx is not None:
+            try:
+                item_idx = int(item_idx)
+                if 0 <= item_idx < len(standard_resources):
+                    res_name = standard_resources[item_idx]
+                    units = market.get("units", 0) or 0
+                    resources[res_name] = resources.get(res_name, 0) + units
+                    print(f"Market: Refunded {res_name}: {units} ({resources[res_name]})")
+            except (ValueError, TypeError) as e:
+                print(f"Market refund error: {e}")
+    else:
+        print("TODO: Can't refund market type", market.get("type"), "yet")
+    market["type"] = None
+    market["item"] = None
+    market["units"] = None
+

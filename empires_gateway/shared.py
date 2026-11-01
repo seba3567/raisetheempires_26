@@ -193,3 +193,27 @@ def serving_port():
     except ValueError:
         return None
 
+
+def get_suggested_friends():
+    return [ally["friend"] for ally in allies.values()
+            if "friend" in ally and ally["friend"] and not ally["neighbor"]]
+
+
+#: Who the neighbours are.
+#:
+#: The game has one real enemy and a couple of empty slots that the world
+#: fills with whatever it has. These are their ids.
+MIN_ADMIN_ID = -1
+
+STEELE_ID = -1
+
+MAX_ADMIN_ID = 123
+
+
+rand_seed_w = 5445  # very random
+
+
+rand_seed_z = 844
+
+
+version = "0.08a.2026_08_13"

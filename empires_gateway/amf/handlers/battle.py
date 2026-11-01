@@ -23,7 +23,12 @@ from battle_engine import (
     register_fleetname_fleet,
 )
 from game_settings import get_zid, lookup_item_by_code, lookup_item_by_name, lookup_wave
-from save_engine import get_save_by_uid, lookup_objects_save_by_position, store_session
+from save_engine import (
+    ensure_fleets,
+    get_save_by_uid,
+    lookup_objects_save_by_position,
+    store_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,3 +453,22 @@ def is_new_wave_survival(param):
 def is_resume_survival():
     return session.get("last_battle") and "FleetName" in session["fleets"] and session["fleets"]["FleetName"][
         "status"] == 4096
+
+
+def add_fleet_response(param):
+    meta = {"newPVE": 0}
+
+    add_fleet_response = {"errorType": 0, "userId": 1, "metadata": meta,
+                          "data": []}
+
+    # ensure_fleets, not `session["fleets"][...]`: the client can call addFleet
+    # on a session whose registry was never created (a save restored from a
+    # paste, or one that has not run the startup call), and this used to raise
+    # KeyError there and take the whole gateway request down with it.
+    fleets = ensure_fleets()
+    fleets[param['name']] = param['units']
+    if "allies" in param:
+        fleets["ally_" + param['name']] = param['allies']
+    print("Player fleet:", param['units'])
+    return add_fleet_response
+

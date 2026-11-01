@@ -22,7 +22,7 @@ from empires_gateway.shared import (
     player_url,
     serving_port,
 )
-from game_settings import allies, get_zid
+from game_settings import get_zid
 from save_engine import (
     get_save_by_uid,
     get_saves,
@@ -360,9 +360,6 @@ def api_gift_send():
     return jsonify({"success": True})
 
 
-def get_suggested_friends():
-    return [ally["friend"] for ally in allies.values()
-            if "friend" in ally and ally["friend"] and not ally["neighbor"]]
 
 
 @bp.route("/nodebug.html")

@@ -28,7 +28,6 @@ if not settings.debug and __name__ == '__main__':
 if os.name == 'nt':
     os.system('color')
 
-import copy
 import random
 import threading  #, webbrowaser
 import time
@@ -68,9 +67,9 @@ from battle_engine import (
 )
 from empires_gateway.amf.handlers.battle import (
     accept_friend_repel_response,
+    add_fleet_response,
     cancel_unstarted_challenge_response,
     exit_battle_response,
-    invader_entry,
     load_challenge_response,
     load_survival_mode_response,
     neighbor_repel_challenge_response,
@@ -89,6 +88,39 @@ from empires_gateway.amf.handlers.economy import (
     purchase_contact_unlock,
     purchase_energy_refill_response,
     use_item_response,
+)
+from empires_gateway.amf.handlers.player import (
+    full_screen_response,
+    generic_string_response,
+    save_options_response,
+    seen_flag_response,
+    streak_bonus_response,
+    tutorial_response,
+    user_response,
+    view_zoom_response,
+)
+from empires_gateway.amf.handlers.social import (
+    accept_tend_ally_response,
+    decline_tend_ally_response,
+    friend_info_response,
+    friend_response,
+    invader_response,
+    neighbor_invader_response,
+    neighbor_suggestion_response,
+    part_request_response,
+    recent_response,
+    stream_publish_response,
+    tend_ally_response,
+    zlingshot_response,
+)
+from empires_gateway.amf.handlers.world import (
+    crew_request_response,
+    load_world_response,
+    perform_world_response,
+    set_current_campaign_response,
+    stop_mayhem_response,
+    update_roads_response,
+    world_name_response,
 )
 from empires_gateway.amf.protocol import (
     _amf_as_list,
@@ -119,38 +151,24 @@ from empires_gateway.shared import (  # noqa: F401  (re-exported for the tools)
 #: cannot be added to it -- an item that carries one is an object the player
 #: gets, not a pile of a resource that does not exist.
 WORLD_RESOURCES = frozenset(contract.RESOURCE_ORDER)
-from game_settings import (
-    game_settings,
-    get_zid,
-    initial_island,
-    lookup_crew_template,
-    randomReward,
-    unlock_expansion,
-)
-from logger import init_socketio, report_other_log, report_tutorial_step, report_world_log, socketio
+from logger import init_socketio, report_other_log, report_world_log, socketio
 from quest_engine import *
 from save_engine import (
     InvalidSaveException,
     _crash_editor_allowed,
     base_path,
     db,
-    ensure_fleets,
     fetch_all_commanders,
-    get_save_by_uid,
     log_path,
     logger,
     my_games_path,
     save_store_url,
     set_crash_log,
-    store_session,
-    validate_save,
 )
-from save_migration import is_0_08a_preview, migrate
 
 # save_invaders reads the invasion map out of a save without raising on one that
 # never had it. It lives with the other save-shape readers in save_store, which
 # imports no Flask, so pulling it from there cannot cycle.
-from save_store import save_invaders
 from serve import serve
 from state_machine import *
 
@@ -270,9 +288,9 @@ def admin_tools_need_an_admin():
         return None
     return jsonify({"success": False, "error": "Admin only"}), 403
 
-MIN_ADMIN_ID = -1
-STEELE_ID = -1
-MAX_ADMIN_ID = 123
+# MIN_ADMIN_ID = -1
+# STEELE_ID = -1
+# MAX_ADMIN_ID = 123
 
 @app.route("/motd.json")
 def motd_state():
@@ -395,549 +413,9 @@ def post_gateway():
     # return ('', 204)
 
 
-def init_user():
-    # global game_objects
-    unit = "U01,,,,"
-
-    # resources = {"energy": 100, "coins": 100000, "oil": 7000, "wood": 5000, "aluminum": 9000,
-    #                                 "copper": 4000, "gold": 3000, "iron": 2000, "uranium": 1000}
-
-    resources = {"energy": 25, "coins": 5000, "oil": 25, "wood": 150, "aluminum": 1000,
-                 "copper": 0, "gold": 0, "iron": 0, "uranium": 0}
-
-    # xp = 20000
-    # level =100
-    # zcash = 1000
-    # energy = 200
-    # energy_max = 400
-    xp = 0
-    level = 1
-    zcash = 15
-    energy = 25
-    energy_max = 25
-
-    # user_fleet = {
-    #     "type": "army",
-    #     "uid": "0",
-    #     "name": "FleetName",
-    #     "status": 0,
-    #     "target": "",
-    #     "consumables": [],
-    #     "inventory": [],
-    #     "playerLevel": 1,
-    #     "specialBits": None,
-    #     "lost": None,
-    #     "lastUnitLost": None,
-    #     "lastIndexLost": None,
-    #     "allies": None,
-    #     "battleTarget": None,
-    #     "battleTimestamp": None,
-    #     "ransomRandom": None,
-    #     "ransomResource": None,
-    #     "ransomAmount": None,
-    #     "units": [unit],  # only one unit for tutorial [unit, unit, unit],
-    #     "store": [0],  # [0, 0, 0],
-    #     "fleets": None,
-    #     "upgrades": None,
-    #     "hp": None
-    # }
-
-    user = {
-        "userInfo": {
-            "player": {
-                "uid": get_zid(),
-                "lastTrackingTimestamp": 0,
-                "viralSurfacing": {"seen": [], "counts": {}},
-                "crewNeighbors": [],
-                "dm_band": None,
-                "dm_endTS": None,
-                "tutorialProgress": "",
-                "xp_multiplier": 1,
-                "cp_static": 1,
-                "lightningDeals": {},
-                "friendFlashSessionInfo": {},
-                "m_friendFlashEPBank": 1000,
-                "playerResourceType": 3,  # 0:coins 1:oil 2: wood 3:alum,
-                "meetsCriteriaLowWalletOnly": False,
-                "newInstallExperiments": None,
-                "staticWorkers": 20,
-                "staticWorkersCap": 100,
-                # "expansions": {
-                #     "data": [4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295,
-                #              4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295,
-                #              4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295,
-                #              4294967295, 4294967295]},
-                "expansions": {"data": [0,0,0,0,805306368,6291456,49152,0,0,0,0]},
-                "questTrees": {},
-                "questTreeUnlocks": {},
-                "questTreeData": {},
-                "starredQuests": [],
-                "seenQuests": [],
-                "megaseriesList": {},
-                "questGatesComplete": False,
-                "warpSeconds": 0,
-                "worldGamesOver": 0,
-                "lastLoginTimestamp": 0,
-                "RUXStatus": False,
-                "RUXQuest": False,
-                "RUXDay": 0,
-                "RUXInitShow": False,
-                "RUXDelta": 0,
-                "MFSRewardPoints": 0,
-                "MFSRewardClaimed": False,
-                "MFSRewardLap": 0,
-                "mana": {"value": 100},
-                "cash": zcash,
-                "level": level,
-                "xp": xp,
-                "numCashTransactions": 100,
-                "cashPurchasedTotal": 1000,
-                "transactionLog": [],
-                "combatSpecialBits": None,
-                "promos": None,
-                "autopromo": None,
-                "motdMerchHistory": None,
-                "motdMerchUnlockHistory": None,
-                "lufCodes": None,
-                "lufEndDate": 0,
-                "lufZRTData": None,
-                "lufCodesLevelUnlocked": None,
-                "miniGamePlayedTS": 0,
-                "bomberFuel": 1000,
-                "bombTierReached": 0,
-                "miniGameRewardTier": 0,
-                "miniGameRewards": [],
-                "miniGameTotalFuel": 1500,
-                "mgrsData": "",
-                "seenFlags": {},
-                # seen "introCine":True otherwise blackscreen but no startepisode then ->  either false (ZGlobal.noIntroCineVariant != ZGlobal.EXPERIMENT_NO_INTRO_CINE && Zlab.getFlashVar("mute") == null)
-                "motdsViewed": [],
-                "motdsAccepted": [],
-                "m_mayhemEvents": None,
-                "bountyCenter": {"lastActivated": 0, "bountyBonds": 0},
-                "energizerRefill": 1000,
-                "energiserEventFinished": False,
-                "energiserAnimationInitTime": 0,
-                "energyDeduct": 0,
-                "energizerMax": 1000,
-                "energy": energy,
-                "energyMax": energy_max,
-                "unlimitedEnergyTS": 0,
-                "unlimitedEnergyIndex": 0,
-                "lastEnergyCheck": datetime.now().timestamp(),
-                "ammo": 1234,
-                "ammoMax": 2000,
-                "options": {"musicDisabled": False, "sfxDisabled": False},
-                "socialLevelGood": 100,
-                "socialXpGood": 10000,
-                "socialLevelBad": 0,
-                "socialXpBad": 0,
-                "scrap": None,
-                "enableIdlePopup": False,
-                "enableInterPage": False,
-                "enableOnetimePopup": False,
-                "alliesUsed": None,
-                "storageData": {},
-                "inventory": {"items": {"B01": 20}},
-                "neighborVisits": {},
-                "unlockedUnits": [],
-                "unlockedItems": [],
-                "unlockedContracts": [],
-                "tags": {},
-                "consumableUsedByCode": None,
-                "treasureVaultOpenTS": 0,
-                "watchToEarn": {"dailyWatchCount": 0, "dailyWatchStartTime": 0},
-                "userGroups": None,
-                "flashFeedTokens": None,
-                "lastSurvialModeToaster": 0,
-                "clanStatus": None,
-                "allianceStorage": None,
-                "acceptedAllianceQuests": None,
-                "isCIP": False,
-                "acceptedGDP": True,
-                "acceptedTOS": True,
-                "fightMeter": {"lastActivated": 0, "lastInitWeek": 0, "weekInitTarget": 0},
-                "fightsPerDay": 1,
-                # "fleets": None,
-                "activeVirals": {},
-                "sequentialLogins": 1,
-                "mechDailyRewardOffset": 0,
-
-                "world": {
-                    "deathMatch": None
-                }
-            },
-            "worldName": "Rising Empire",
-            "titanName": "Titan",
-            "isCIP": False,
-            "dominanceDefaultFleets": [],
-            "bookmarkReward": 0,
-            "iconCodes": None,
-
-            "world": {"fleets": [], "enemies": [], "globalFleetId": 0, "battleStatus": {},  # user_fleet
-                      "research": {}, "research2": {"buildingTypesUpgraded": None, "treesUnlocked": None},
-                      "resourceOrder": ["aluminum", "copper", "gold", "iron", "uranium"],
-                      "globalObjectId": 10000,  # initial id high enough not to overlap with preloaded objects
-                      "sizeX": 200,
-                      "sizeY": 200,
-                      "ownerId": 0,
-                      "randSeedW": rand_seed_w,
-                      "randSeedZ": rand_seed_z,
-                      "unitDropData": {"unclaimedUnits": []},
-                      "islands": 1,
-                      "roadData": initial_island["roads"],
-                      "objects": initial_island["objects"],
-                      "rewardRandSeedW": 484584,
-                      "rewardRandSeedZ": 7549,
-                      "ransomRandSeedW": 456647,
-                      "ransomRandSeedZ": 4546,
-                      "scrapRandSeedW": 5646,
-                      "scrapRandSeedZ": 3567,
-                      "resources": resources,
-                      "campaign": {"current": "camp001", "active": {}, "mastery": {}}
-                      }
-
-        },
-        "neighbors": get_allies_info(),
-        "unlockedResource": {"aluminum": 3, "copper": 4, "gold": 5, "iron": 6},
-        "showBookmark": True,
-        "firstDay": True,
-        "survivalMode": None,
-        "prisonerInfo": [],
-        "pvp": {"invaders": {"pve": {"quest": True}}, "gpInv": None, "nAssists": None, "immunity": [],
-                "notifications": None, "pcCapturedNotify": None, "pcEscapedNotify": None},
-        "autoFilledCrewBuildings": None,
-        "numCrewNeighborsDirty": 0,
-        "ineligibleGiftRecipients": [],
-        "priceTestSettings": {},
-        "buyBackSettings": {},
-        "DEATHMATCH_FRAG_LIMITS": None,
-        "DEATHMATCH_CACHE_TTL": None,
-        "DEATHMATCH_OPP_COOLDOWN": None,
-        "DEATHMATCH_STANDARD_REWARDS": None,
-        "DEATHMATCH_GRAND_REWARDS": None,
-        "DEATHMATCH_START_TIME": None,
-        "DEATHMATCH_DURATION": None,
-        "clansInfo": None,
-        "immunityTimeVariant": 0,
-        "experiments": {"empire_combataicancritical": 2, "empire_decorations_master": 2, "empire_doober_pickup": 3,
-                        "empires_consumable_2": 3, "empire_research_shield_upgrade": 2, "empires_support_units": 5,
-                        "empire_buildable_zrig_master": 3, "empire_request2_master": 2, "empire_mfs_uili": 4,
-                        "empire_survivalmode3_master": 3, "empire_survivalMode_master": 2,
-                        "empire_survivalmode_enhancements": 2, "empire_mech_fight_master": 3, "empire_mech_fight_gate_flat": 5,
-                        "empire_mech_lab_master": 3, "empire_titanresearch_master": 2, "empire_tier_8": 4,
-                        "empire_campv2_enabled": 2, "empire_campaign_mastery": 2,
-                        "empire_domination_master": 4, "empire_domination_warchest": 2,
-                        "empire_globalpvp_master": 2, "empire_globalpvp_strangerbar_enable": 2,
-                        "empire_alliances_master": 3, "empire_alliances_phase_4": 3,
-                        "empire_alliances_quest_connections": 3, "empire_alliances_quest_power": 3,
-                        "empire_leaderboard_summary": 1, "empire_blackmarket_master": 2},
-        "completedQuests": [],
-        "decorationsInfo": None,
-        "treasureVaultHighlights": None,
-        "crewSlotCostExperiment": 0,
-        "combatAllyGatingVarient": 0,
-        "cashOnLevelUpVarient": 0,
-        "immunityViralVarient": 0,
-        "autopublishFeedVarient": 0,
-        "autopublishFeedMessageVarient": 0,
-        "publishFeedPermissionVarient": 0,
-        "autopublishAllFeedVarient": 0,
-        "researchPartsVariantArmy": 0,
-        "researchPartsVariantNavy": 0,
-        "researchPartsVariantAir": 0,
-        "noIntroCineVariant": 2,  # disable intro cinematics (we don't have yet)
-        "energyRewardVariant_v2": 0,
-        "energyRewardVariant_v3": 0,
-        "allyTimeoutVariant": 0,
-        "speedUpViralVarient": 0,
-        "pricetestEarlyUnitUnlockVariant": 0,
-        "starterBundleVariant": 0,
-        "meetsCriteriaStarterPack": False,
-        "energyRewardModVariant": 0,
-        "enhancedProgressBarVariant": 0,
-        "epSpendConfirmation": 0,
-        "leaderboardsVariant": 3,
-        "survivalModeMaster": 1,
-        "survivalModeContinueCost": 1,
-        "survivalModeCardAccess": 1,
-        "INTERSTITIAL_GIFTING_REWARDS": "",
-        "FREE_GIFT_PARTS_BUILDING_DATA": "",
-        "snid": 0,
-        "snuid": 0,
-        "visitorHelpRequests": {},
-        "LE_DISCOUNT_SALE": 0,
-        "LOW_EP_POPUP": None,
-        "COMBAT_NO_ENERGY": 0,
-        "COMBAT_DOUBLE_XP": 2,
-        "COMBAT_HALF_RANSOM": 1,
-        "overlaySurveyURL": None,
-        "friendBarVarient": 0,
-        "requestTracker": {"giftRequestSent": {}, "helpRequestSent": {}, "crewRequestSent": {},
-                           "neighborRequestSent": {}, "repelInvasionRequestSent": {}, "allianceInviteRequestSent": {}},
-        "activeRequests": {"request_speedup": None, "request_buildingpart_send": None, "request_crew": None,
-                           "request_gift_request": None, "request_gift_send": None, "request_neighbor": None,
-                           "request_repel_invasion": None, "request_alliance_invite": None},
-        "activeGiftRequests": [],
-        "activeHelpRequests": [],
-        "allPendingNeighbors": [],
-        "playerAsn": 1,
-        "questInitAsn": 1,
-        "partsGatherInitAsn": 1,
-        "blackmarketItems": None,
-        "worldEvents": None,
-        "FLASHFEED_EXPIRE_TIME": 0,
-        "FB_REQ_PERMS": "gdpr",
-    }
-    return user
 
 
 # Q0516 ? start
-def user_response():
-    new_quests = []
-    if 'user_object' in session:
-        print("Loading user from save")
-        if not validate_save(session):
-            print("invalid save file")
-            raise InvalidSaveException
-        user = session['user_object']
-        user["userInfo"]["player"]["uid"] = get_zid()
-        if session.get('save_version') != version:
-            print("WARNING: Save game was saved with version", session.get('save_version'), "while game is version",
-                  version)
-
-        qc = session['quests']
-
-        user["neighbors"] = get_allies_info()
-
-        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if not e["complete"]]}
-
-    else:
-        user = copy.deepcopy(init_user())
-        print("initialized new")
-        session['user_object'] = user
-        # qc = [{"name": "Q0516", "complete":False, "expired":False,"progress":[0],"completedTasks":0}]
-        session['quests'] = []
-
-        session['save_version'] = version
-        session['original_save_version'] = version
-        session['saved_on'] = datetime.now().timestamp()
-        meta = {"newPVE": 0, "QuestComponent": [e for e in session['quests'] if not e["complete"]]}
-        new_quest_with_sequels("Q0516", new_quests, meta)
-
-    # session['user_object']["userInfo"]["player"]["tutorialProgress"] = "tut_step_krunsch1Battle2Speeech" #'tut_step_inviteFriendsViral'
-    # session['user_object']["userInfo"]["player"]["tutorialProgress"] = 'tut_step_remindCombatUIWaitForPreBattleUI'
-    # session['user_object']["userInfo"]["player"]["tutorialProgress"] = 'tut_step_remindCombatUIClearCircles'
-    # session['user_object']["userInfo"]["player"]["lastEnergyCheck"] = datetime.now().timestamp()
-    # save migration only
-    # if "lastEnergyCheck" not in session['user_object']["userInfo"]["player"]:
-    #     session['user_object']["userInfo"]["player"]["lastEnergyCheck"] = datetime.now().timestamp()
-
-    replenish_energy()
-
-    session["battle"] = None
-    # The fleet registry survives a re-login.
-    #
-    # It used to be reset here, and that was the quiet half of a battle bug:
-    # the client's troops only ever reach the server through `addFleet`, so
-    # wiping the registry left it simulating units it did not have. When the
-    # next fight started, `init_battle` found nothing and fell back to the
-    # quest's troops -- which the client, already drawing its own, refused to
-    # accept ("TResolveBattle: unit strength out of sync"). A login in the
-    # middle of a session is normal; losing the troops because of it was not.
-    ensure_fleets()
-    session['population'] = lookup_yield()
-
-    if "market" not in session:
-        session["market"] = {}
-    # #temp migration
-    # session['user_object']["experiments"]["empire_store_sorting_rev_enhanced"] = 0
-    # session['user_object']["experiments"]["empires_shop_improvements"] = 0
-    session['user_object']["experiments"]["empire_combataicancritical"] = 2
-    # Ensure leaderboards and competition modes are fully unlocked for existing sessions
-    session['user_object']["leaderboardsVariant"] = 3
-    session['user_object']["survivalModeMaster"] = 1
-    session['user_object']["survivalModeContinueCost"] = 1
-    session['user_object']["survivalModeCardAccess"] = 1
-    exp = session['user_object'].setdefault("experiments", {})
-    exp["empire_domination_master"] = 4
-    exp["empire_domination_warchest"] = 2
-    exp["empire_globalpvp_master"] = 2
-    exp["empire_globalpvp_strangerbar_enable"] = 2
-    exp["empire_alliances_master"] = 3
-    exp["empire_alliances_phase_4"] = 3
-    exp["empire_alliances_quest_connections"] = 3
-    exp["empire_alliances_quest_power"] = 3
-    exp["empire_survivalmode3_master"] = 3
-    exp["empire_survivalMode_master"] = 2
-    exp["empire_survivalmode_enhancements"] = 2
-    exp["empire_leaderboard_summary"] = 1
-    exp["empire_blackmarket_master"] = 2
-    unlock_expansion(156)
-    unlock_expansion(157)
-    unlock_expansion(181)
-    unlock_expansion(182)
-    unlock_expansion(206)
-    unlock_expansion(207)
-
-    # Ensure quest gates and resource counters (wood, oil, rare ores) are unlocked and visible
-    player_data = session['user_object']["userInfo"]["player"]
-    player_data["questGatesComplete"] = True
-    default_unlocked_res = {"wood": 1, "oil": 1, "aluminum": 3, "copper": 4, "gold": 5, "iron": 6, "uranium": 7}
-    if not player_data.get("unlockedResource"):
-        player_data["unlockedResource"] = default_unlocked_res.copy()
-    if not session['user_object'].get("unlockedResource"):
-        session['user_object']["unlockedResource"] = default_unlocked_res.copy()
-
-    # Ensure player has starting oil if depleted
-    world_res = session['user_object']["userInfo"]["world"].setdefault("resources", {})
-    if world_res.get("oil", 0) <= 0:
-        world_res["oil"] = 50
-    if world_res.get("copper", 0) <= 0:
-        world_res["copper"] = 250
-    if world_res.get("gold", 0) <= 0:
-        world_res["gold"] = 250
-    if world_res.get("iron", 0) <= 0:
-        world_res["iron"] = 250
-    if world_res.get("uranium", 0) <= 0:
-        world_res["uranium"] = 100
-    # battle_status = 0
-    # island = 2
-    # replay_island = 0
-    #
-    # status_campaign = battle_status | replay_island << 8 | island << 20
-    # status_campaign_2 = battle_status | replay_island << 8 | 5 << 20
-    # # #
-    # user['userInfo']['world']['campaign'] = {"current": "camp001", "active":{'C000': {"status": status_campaign, "fleets":[]},
-    #                                                                        'C003': {"status": status_campaign_2, "fleets":[]}}, "mastery": {}}
-
-    camp = user['userInfo']['world'].setdefault('campaign', {"current": "camp001", "active": {}, "mastery": {}})
-    if not camp.get('current'):
-        camp['current'] = 'camp001'
-    if 'C000' not in camp.setdefault('active', {}):
-        camp['active']['C000'] = {"status": 0, "fleets": []}
-    completed_quests = user.setdefault('completedQuests', [])
-    if 'Q1061' not in completed_quests:
-        completed_quests.append('Q1061')
-
-    # session['campaign'] = {}
-    # session['campaign']['C003'] = {'island':4} #will receive a next "island": 1
-
-    # if ""B01": 20"
-
-
-    item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
-    if item_inventory.get("B01", 0) < 20:
-        item_inventory["B01"] = 20
-        print("Refilling upgrade blueprints to 20")  # until friend gift mechanisms are working
-    if item_inventory.get("B05", 0) < 25:
-        item_inventory["B05"] = 25
-        print("Refilling advanced hull plating to 25")  # until friend gift mechanisms are working
-    if item_inventory.get("B18", 0) < 25:
-        item_inventory["B18"] = 25
-        print("Refilling propeller to 25")  # until friend gift mechanisms are working
-    if item_inventory.get("B04", 0) < 25:
-        item_inventory["B04"] = 25
-        print("Refilling mission map to 25")  # until friend gift mechanisms are working
-    if item_inventory.get("B23", 0) < 25:
-        item_inventory["B23"] = 25
-        print("Refilling blast shield to 25")  # until friend gift mechanisms are working
-    if item_inventory.get("B17", 0) < 25:
-        item_inventory["B17"] = 25
-        print("Refilling deck turret to 25")  # until friend gift mechanisms are working
-
-    mechLab_inventory_req = session['user_object']["userInfo"]["player"]["xp"]
-    # Set level 21 (1881 xp) for all players to get Titan Lab in inventory
-    if mechLab_inventory_req > 1880:
-        # every session should only get once
-        if not any(i["itemName"] == "MechLab" for i in session['user_object']["userInfo"]["world"]["objects"]) and item_inventory.get("TL01", 0) < 1:
-            item_inventory["TL01"] = 1
-            print("Level 21 has been reached, Titan Lab unlocked at inventory")
-
-    handle_quest_progress(meta, progress_inventory_count())
-    handle_quest_progress(meta, progress_neighbor_count())
-    handle_quest_progress(meta, progress_upgrades_count())
-
-    activate_unlocked_quests(new_quests, meta)
-
-    for neighbor in user["neighbors"]:
-        if neighbor["uid"] in [MIN_ADMIN_ID, MAX_ADMIN_ID]:
-            neighbor["level"] =  user["userInfo"]["player"]["level"] + 5
-
-    if session.get('save_version') != version or is_0_08a_preview(version):
-        print("Trying migration")
-        migrate(meta, session.get('save_version'), version)
-
-    # sleep(0.05)  # Legacy delay no longer needed with PostgreSQL & Granian
-
-    # for e in session['user_object']["userInfo"]["world"]["objects"]:
-    #     e['lastUpdated'] = 1308211628  #1 minute earlier to test
-    user["completedQuests"] = [e["name"] for e in session['quests'] if e["complete"]]
-
-    merge_quest_progress(new_quests, meta['QuestComponent'], "output quest")
-    merge_quest_progress(new_quests, session['quests'], "session quest")
-    user_response = {"errorType": 0, "userId": get_zid(), "metadata": meta,
-                     # {"name": "Q0531", "complete":False, "expired":False,"progress":[0],"completedTasks":0},{"name": "QW120", "complete":False, "expired":False,"progress":[0],"completedTasks":0}
-                     "data": user}
-    return user_response
-
-
-def friend_response():
-    friend_types = ["recommendedFriends", "zyngaFriends", "empireFriends", "sevenDayFriends", "fourteenDayFriends",
-                    "thirtyDayFriends", "payerFriends", "allFriends", "zyngaFriendsByEngagement", "empireFriendsByEngagement"]
-    friend = {friend_type: {"data": [ally["friend"] for ally in allies.values() if ally.get("friend") and ally.get(friend_type)]} for friend_type in friend_types}
-
-
-
-    #     "recommendedFriends": {"data": [{"zid": 124, "uid":124, "first_name": "MissTery", "sex": 'F',"portrait": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"}]},
-    #     "zyngaFriends": {"data": [{"zid": 124,"uid":124, "first_name": "MissTery", "sex": 'F', "portrait": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"}]},
-    #     "empireFriends": {"data": [{"zid": 124,"uid":124, "first_name": "MissTery", "sex": 'F', "portrait": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"}]},
-    #     "sevenDayFriends": {"data": [{"zid": 124, "uid":124,"first_name": "MissTery", "sex": 'F', "portrait": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"}]},
-    #     "fourteenDayFriends": {"data": []},
-    #     "thirtyDayFriends": {"data": []},
-    #     "payerFriends": {"data": []},
-    #     "allFriends": {"data": [{"zid": 124,"uid":124, "first_name": "MissTery", "sex": 'F',"portrait": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png",
-    # "pic_square": "assets/game/GeneralAssetGroup_UI.swf/TheVille_50.png"}]},
-    #     "zyngaFriendsByEngagement": {"data": []},
-    #     "empireFriendsByEngagement": {"data": []},
-
-
-    friend_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                       "data": friend}
-    return friend_response
-
-
-def invader_response():
-    invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                        "data": [invader_entry(k[1:]) for k, v in session['user_object']["pvp"]["invaders"].items() if k != "pve"]}
-    return invader_response
-
-
-def neighbor_invader_response(uid):
-    """The invasions aimed at one neighbour, by their uid.
-
-    A miss here is a normal answer, not an anomaly: this is a list of who is
-    currently poking at that player, and a player with no save has nobody. So
-    ``required`` is off and the empty result stands.
-    """
-    save = get_save_by_uid(uid)
-
-    if save:
-        neigbor_invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                            "data": [invader_entry(k[1:]) for k, v in save['user_object']["pvp"]["invaders"].items() if k != "pve"]}
-    else:
-        neigbor_invader_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                                    "data": []}
-    return neigbor_invader_response
 
 
 
@@ -950,625 +428,74 @@ def neighbor_invader_response(uid):
 
 
 
-def zlingshot_response():
-    zlingshot_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                          "data": {}}
-    return zlingshot_response
 
 
-def recent_response():
-    recent_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                       "data": []}
-    return recent_response
 
 
-def friend_info_response():
-    friend_info_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                            "data": {"nonAppFriends": [
-                                ]}}
-    return friend_info_response
 
 
-def tutorial_response(step, sequence, endpoint):
-    meta = {"newPVE": 0}
-    qz = {"name": "Q0516", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    qz_cadets_start = {"name": "Q0531", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    # complete cadets?
-    qz_cadets_start = {"name": "Q0531", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    qz_cadets_done = {"name": "Q0531", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    qz_invasion_start = {"name": "Q6016", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    qz_invasion_done = {"name": "Q6016", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    flag_Q1098_start = {"name": "Q1098", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    flag_Q1098_done = {"name": "Q1098", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    cadets_Q0611_start = {"name": "Q0611", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    cadets_Q0611_done = {"name": "Q0611", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    flag_Q6011_start = {"name": "Q6011", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    flag_Q6011_done = {"name": "Q6011", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
 
-    sergeant_Q0671_start = {"name": "Q0671", "complete": False, "expired": False, "progress": [0, 0],
-                            "completedTasks": 0}  # after 6011
-    sergeant_Q0671_done = {"name": "Q0671", "complete": True, "expired": False, "progress": [1, 1], "completedTasks": 2}
-    flag_Q0591_start = {"name": "Q0591", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    flag_Q0591_done = {"name": "Q0591", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    farm_Q0571_start = {"name": "Q0571", "complete": False, "expired": False, "progress": [0, 0], "completedTasks": 0}
-    farm_Q0571_done = {"name": "Q0571", "complete": True, "expired": False, "progress": [1, 1], "completedTasks": 2}
-    corn_Q0521_start = {"name": "Q0521", "complete": False, "expired": False, "progress": [0], "completedTasks": 0}
-    corn_Q0521_done = {"name": "Q0521", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
-    parliament_Q0691_start = {"name": "Q0691", "complete": False, "expired": False, "progress": [0],
-                              "completedTasks": 0}
-    parliament_Q0691_done = {"name": "Q0691", "complete": True, "expired": False, "progress": [1], "completedTasks": 1}
 
-    # if step == 'tut_step_placeBarracksServer':
-    #     meta['QuestComponent'] = [qz, qz_cadets_start]
-    # if step == 'tut_step_cadetsComplete':
-    #     pass
-    # handle_quest_progress(meta, progress_action("build")) build is covered
-    # meta['QuestComponent'] = [qz_cadets_done, qz_invasion_start]  #what starts invasion?
-    ## meta["newPVE"] = {"status": 2, "pos": "60,63,0", "villain":"v18", "quest":"Q6016"}
-    # if step == 'tut_step_firstInvasionEnd':
-    # if step == 'tut_step_postFirstInvasionResumeQuests':
-    #     handle_quest_progress(meta, progress_action(
-    #         "fight"))
-    # meta['QuestComponent'] = [qz_invasion_done,flag_Q1098_start,cadets_Q0611_start]
-    #  meta["newPVE"] = {"status": 2, "pos": "60,66,0", "villain":"v18", "quest":"Q6016"}  #contineous battle mode experience QT01_05b_2
-    # if step == 'tut_step_placeFlagQuestDialog':
-    #     meta['QuestComponent'] = [flag_Q1098_done, flag_Q6011_start]
 
-    # if step == 'tut_step_placeFlagWaitForInventoryOpen':   # sometimes one of them is skipped?
-    #     meta['QuestComponent'] = [flag_Q1098_done, flag_Q6011_start]
-    # if step == 'tut_step_placeFlagEnd':
-    #     meta['QuestComponent'] = [flag_Q6011_done, sergeant_Q0671_start, flag_Q0591_start]
-    # if step == 'tut_step_buildFarm':  #after cadets placed?
-    #     meta['QuestComponent'] = [cadets_Q0611_done, sergeant_Q0671_start] #possibly already done by this point see if it doesn't redo quests already done
-    # if step == 'tut_step_placeHouseEnd':  #after cadets placed?
-    #     meta['QuestComponent'] = [flag_Q0591_done, farm_Q0571_start]
-    # if step == 'tut_step_placeFarmEnd':  #after cadets placed?
-    #     meta['QuestComponent'] = [farm_Q0571_done, corn_Q0521_start, parliament_Q0691_start, sergeant_Q0671_start]
-    #
-    if step == 'tut_step_inviteFriendsEndPauseTutorial':
-        handle_quest_progress(meta, progress_neighbor_count())
 
-    merge_quest_progress(meta.get('QuestComponent', []), session['quests'], "session quest")
-    session['user_object']["userInfo"]["player"]["tutorialProgress"] = step  # TODO: revert step when loading if needed
 
-    report_tutorial_step(step, meta.get('QuestComponent'), meta['newPVE'], sequence,
-                         endpoint)
-    tutorial_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                         "data": []}
-    return tutorial_response
+
 
 
 #def perform_world_response(step, supplied_id, position, item_name, reference_item, from_inventory, elapsed, cancel, req2):
-def perform_world_response(params):
-
-    step=params[0]
-    supplied_id=_amf_field(params[1], 'id')
-    position=_amf_field(params[1], 'position')
-    item_name=_amf_field(params[1], 'itemName')
-
-    # The third parameter carries the action context. A batch may omit it
-    # entirely, so it is read defensively: indexing ``params[2]`` on a
-    # two-parameter call raised IndexError and took the whole batch with it.
-    context = params[2] if len(params) > 2 else None
-    context = context[0] if isinstance(context, list) and len(context) > 0 else None
-
-    reference_item=context.get('referenceItem') if context else None
-    from_inventory=context.get('isGift') if context else None
-    elapsed=context.get('elapsed') if context else None
-    cancel=context.get('cancel') if context else None
-    req2=context
-    index_ref=context
-
-    print("this is step",step, supplied_id, position)
-
-    id = supplied_id
-    if step == "place":
-        session['user_object']["userInfo"]["world"]["globalObjectId"] += 1  # for place only!
-        id = session['user_object']["userInfo"]["world"]["globalObjectId"]
-        session['user_object']["userInfo"]["world"]["objects"].append({
-            "id": id,
-            "itemName": item_name,
-            "position": position,
-            "referenceItem": reference_item,
-            "state": 0
-        })
-
-    # cur_object = lookup_object(id)
-    # print("cur_object used:"`, repr(cur_object))
-    #
-    #
-    # game_item = lookup_item(item_name)
-    # print("item used:", repr(game_item))
-    #
-    # state_machine = lookup_state_machine(game_item['stateMachineValues']['-stateMachineName'])
-    # print("state_machine used:", repr(state_machine))
-    # state = lookup_state(state_machine, cur_object['state'])
-    # print("cur state:", repr(state))
-    # next_click_state = lookup_state(state_machine, state['-clickNext']) # not all states have this!! end states? autostate after time?
-    # print("next_click_state:", repr(next_click_state))
-    meta = {"newPVE": 0}
-    print(step)
-    if step in ["place", "setState"]:
-        click_next_state(True, id, meta, step, reference_item, cancel=cancel)  # place & setstate only
-
-    if step == "setState":
-        if lookup_object(id)["referenceItem"] is None and reference_item is not None:
-            ref_item = lookup_item_by_code(reference_item.split(":")[0])
-            if item_name == "Mastery Factory 01" and int(ref_item.get("masteryTokenCost","0"))> 0:
-                session['user_object']["userInfo"]["player"]["inventory"]["items"]["VTK"] -= int(ref_item["masteryTokenCost"])
-            else:
-                costs = ref_item.get("cost")
-                do_costs({k: v for k, v in costs.items() if k != "-cash"})
-        lookup_object(id)["referenceItem"] = reference_item
-
-    if step == "clear":
-        session['user_object']["userInfo"]["world"]["objects"].remove(lookup_object(id))
-        print("Object", id, "removed")
-
-    if step == "move":
-        lookup_object(id)["position"] = position
-        print("Object", id, "moved to", position)
-
-    if step == "place":
-        if not from_inventory:
-            # 774 of the 3990 catalogue items have no `cost` key at all --
-            # "Super Ore Mine" (S01), "SurveillanceTower" (BB10) and the
-            # Alien_Spate units among them. An item that costs nothing has an
-            # empty cost, not a missing one, and reading the missing key gave
-            # `None` and then called `.items()` on it. That raised, ended the
-            # gateway batch, and left the client with an empty answer for the
-            # placement it had asked for.
-            item = lookup_item_by_name(item_name)
-            costs = item.get("cost") or {}
-            if "-unitClass" in item:
-                do_costs({k: v for k, v in costs.items() if k == "-cash"})
-            else:
-                do_costs(costs)
-        else:
-            item = lookup_item_by_name(item_name)
-            item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
-
-            if item['-code'] in item_inventory:
-                item_inventory[item['-code']] -= 1
-                if item_inventory[item['-code']] <= 0:
-                    del item_inventory[item['-code']]
-                print("Placing", item_name + "(" + item['-code'] + ")", "from inventory")
-            else:
-                print("ERROR: Placing", item_name + "(" + item['-code'] + ")",
-                      "from inventory but not in inventory. Ignoring for now.")
-
-    if step == "speedUp":
-        # lookup_object(id)['lastUpdated'] = lookup_object(id).get('lastUpdated', 0) - elapsed * 1000
-        click_next_state(False, id, meta, step, reference_item, speed_up=True)
-    # TODO: cost of speedup?
-
-    if step == "add":
-        market = lookup_object(id)
-        refund_market_order(market)
-        place_market_order(market, req2, meta)
-
-    wr: dict[str, Any] = {"errorType": 0, "userId": 1, "metadata": meta,
-                           "data": {"id": id}}
-    if step == "list":
-        market = lookup_object(id)
-        # wr["data"].update(session['market'].get(str(id), {}))
-        wr["data"] = [market]
-        # wr["data"][0]["id"] = id
-
-    if step == "remove":
-        market = lookup_object(id)
-        wr["data"] = ["success"]  #  TODO fail if bought
-        refund_market_order(market)
-
-    if step == "sell":
-        objects = session['user_object']["userInfo"]["world"].get("objects", [])
-        deleted = False
-        if id is not None:
-            for i, obj in enumerate(objects):
-                if isinstance(obj, dict) and (obj.get('id') == id or str(obj.get('id')) == str(id)):
-                    del objects[i]
-                    deleted = True
-                    break
-        if not deleted and position is not None:
-            for i, obj in enumerate(objects):
-                if isinstance(obj, dict) and obj.get('position') == position:
-                    del objects[i]
-                    break
-        #TODO cost for selling
-        # list1 = session['user_object']["userInfo"]["world"]["objects"]
-        # session['user_object']["userInfo"]["world"]["objects"] = list(filter(lambda i: i['position'] != position), list1)
-
-    if step == "staffPosition":
-        crewTemplate = lookup_crew_template(item_name)
-        num_slots = len(crewTemplate["position"])
-        decoration = lookup_object(id)
-
-        # Crew index position is given, but not used.
-        position_index = index_ref.get('index') if isinstance(index_ref, dict) else None
-
-        current_crew = decoration.get("crewInfo", [])
-        new_crew = current_crew + ["-1"]
-        decoration["crewInfo"] = new_crew[:num_slots]
-
-        print("staffing")
-
-    if step == "decoCrewBuyOnce":
-        crewTemplate = lookup_crew_template(item_name)
-        num_slots = len(crewTemplate["position"])
-        decoration = lookup_object(id)
-
-        decoration["crewInfo"] = ["-1"] * num_slots
-        print("staffing full")
-
-    if step == "randomRewards":
-        print(lookup_item_by_name(item_name).get("-code", 0))
-        item_info = randomReward(lookup_item_by_name(item_name).get("-code", 0))
-        item_code = item_info[0]
-        item_amount = item_info[1]
-        item_type = item_info[2]
-        if not isinstance(wr["data"], dict):
-            wr["data"] = {"id": id}
-        wr["data"]["data"] = {
-            "type": item_type,
-            "item": item_code,
-            "count": item_amount
-        }
-        if item_type == "item":
-            if item_code not in session['user_object']["userInfo"]["player"]["inventory"]["items"]:
-                session['user_object']["userInfo"]["player"]["inventory"]["items"][item_code] = item_amount
-            else:
-                session['user_object']["userInfo"]["player"]["inventory"]["items"][item_code] += item_amount
-        elif item_type == "cash":
-            session['user_object']["userInfo"]["player"]["cash"] += item_amount
-        else:
-            session['user_object']["userInfo"]["world"]['resources']["coins"] += item_amount
-
-    print("perform_world_response", repr(wr))
-    return wr
-
-
-def refund_market_order(market):
-    world = session['user_object']["userInfo"]["world"]
-    resources = world['resources']
-    if market.get("type") == "resource":
-        standard_resources = ["coins", "oil" , "wood", "aluminum", "copper", "gold", "iron", "uranium"]
-        item_idx = market.get("item")
-        if item_idx is not None:
-            try:
-                item_idx = int(item_idx)
-                if 0 <= item_idx < len(standard_resources):
-                    res_name = standard_resources[item_idx]
-                    units = market.get("units", 0) or 0
-                    resources[res_name] = resources.get(res_name, 0) + units
-                    print(f"Market: Refunded {res_name}: {units} ({resources[res_name]})")
-            except (ValueError, TypeError) as e:
-                print(f"Market refund error: {e}")
-    else:
-        print("TODO: Can't refund market type", market.get("type"), "yet")
-    market["type"] = None
-    market["item"] = None
-    market["units"] = None
-
-
-def place_market_order(market, order, meta):
-    world = session['user_object']["userInfo"]["world"]
-    resources = world['resources']
-    if order["type"] == "resource":
-        standard_resources = ["coins", "oil", "wood", "aluminum", "copper", "gold", "iron", "uranium"]
-        resources[standard_resources[int(order["item"])]] -= order["units"]
-        print("Market: Order placed & removed", standard_resources[int(order["item"])] + ":", str(order["units"])
-              + "(" + str(resources[standard_resources[int(order["item"])]]) + ")")
-        handle_quest_progress(meta, progress_market_added_count(order["units"]))
-    else:
-        print("TODO: Can't reserve market type", order.get("type"), "yet")
-    market["type"] = order["type"]
-    market["item"] = order["item"]
-    market["units"] = order["units"]
-
 
-def neighbor_suggestion_response():
-    neighbor_suggestion_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                                    "data": get_suggested_friends()}
-    return neighbor_suggestion_response
 
 
-def seen_flag_response(flag):
-    seen_flags = session['user_object']["userInfo"]["player"]["seenFlags"]
-
-    seen_flags[flag] = seen_flags.get(flag, 0) + 1
-
-    seen_flag_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                          "data": []}
-    return seen_flag_response
-
-
-
-
-
-
-
-
-
-
-
-
-
-def generic_string_response(param):
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, all_lambda(progress_action("genericString"),
-                                           progress_parameter_equals("_string", str(param))))
-
-    generic_string_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                               "data": []}
-    return generic_string_response
-
-
-def streak_bonus_response(param):
-    meta = {"newPVE": 0}
-
-    do_rewards("Streak", {"_type": "coins", "_count": param["amount"]}, meta)
-
-    streak_bonus_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                             "data": []}
-    return streak_bonus_response
-
-
-def world_name_response(name):
-    world_name_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                           "data": []}
-    session['user_object']["userInfo"]["worldName"] = name
-
-    return world_name_response
-
-
-def update_roads_response(roads):
-    session["user_object"]["userInfo"]["world"]["roadData"] = roads
-    update_roads_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                             "data": []}
-    return update_roads_response
-
-
-def stream_publish_response(params):
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_feed(params[0]))
-    stream_publish_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                               "data": []}
-    return stream_publish_response
-
-
-def stop_mayhem_response():
-    stop_mayhem_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                            "data": []}
-    return stop_mayhem_response
-
-
-def _known_campaigns():
-    """The campaign catalogue, as ``{name: entry}``.
-
-    Read from gameSettings rather than hardcoded: the client's campaign list is
-    data, and a server that disagrees with it about which campaigns exist is a
-    server that eventually hands the client a map it cannot load.
-    """
-    campaigns = game_settings.get("settings", {}).get("campaigns", {}).get("campaign", [])
-    return {entry["-name"]: entry for entry in campaigns if entry.get("-name")}
-
-
-def set_current_campaign_response(params):
-    """The client naming the PvE campaign it is playing.
-
-    Sent once, right after ``initUser``, with the campaign id as its only
-    argument -- ``["camp001"]``, read off the wire rather than guessed.
-
-    Until this was implemented the call fell through to ``dummy_response()``:
-    ``errorType: 0`` and no data, which the client reads as "fine, nothing to
-    do". So the server kept whatever ``campaign.current`` happened to say in the
-    save, the client moved on with its own idea of the campaign, and nothing on
-    the server ever registered which campaign was actually being played.
-
-    ``init_user`` already seeds ``campaign.current`` with the first campaign, so
-    on a fresh account this is a confirmation rather than a change. It earns its
-    keep on a save that came from the editor or an old backup, where
-    ``current`` is whatever was stored.
-
-    The name is checked against the catalogue instead of trusted: a typo, or a
-    hand-edited save, must not be able to write a campaign id that no map lookup
-    will ever match. An unknown name is refused the way an unimplemented
-    service is -- success, no change -- because the client's own fallback is to
-    keep playing the campaign it already had, and silently moving it somewhere
-    else would be worse than ignoring it.
-    """
-    set_current_campaign_response = {"errorType": 0, "userId": 1,
-                                     "metadata": {"newPVE": 0}, "data": []}
-
-    requested = params[0] if isinstance(params, (list, tuple)) and params else None
-    entry = _known_campaigns().get(requested)
-    if entry is None:
-        # The client asks for campaigns this server does not know. It is
-        # answered by keeping the campaign the player already had, which is
-        # the whole point of the branch, so it is expected traffic rather than
-        # a warning.
-        logger.info("setCurrentCampaign: unknown campaign %r; ignoring", requested)
-        return set_current_campaign_response
-
-    campaign = session['user_object']["userInfo"]["world"]["campaign"]
-    campaign["current"] = requested
-
-    # Register the opening chapter. `get_active_island_by_map` would create this
-    # entry the same way on first read; doing it here means the campaign is
-    # already there in the save rather than appearing as a side effect of the
-    # next PvE call.
-    start = entry.get("-startChapter")
-    if start and start not in campaign["active"]:
-        campaign["active"][start] = {"status": 0, "fleets": []}
-
-    return set_current_campaign_response
-
-
-def save_options_response(options):
-    save_options_response = {"errorType": 0, "userId": 1, "metadata": {"newPVE": 0},
-                             "data": []}
-    session['user_object']["userInfo"]["player"]["options"] = options
-    return save_options_response
-
-
-def full_screen_response():
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_action("fullscreen"))
-    full_screen_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                            "data": []}
-    return full_screen_response
-
-
-def view_zoom_response(zoom):
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, all_lambda(progress_action("zoom"), progress_parameter_equals("_zoom", str(zoom))))
-    view_zoom_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                          "data": []}
-    return view_zoom_response
-
-
-def _extract_world_uid(params) -> int:
-    if not params:
-        return 0
-    param = params[0]
-    if isinstance(param, dict):
-        for k in ("uid", 0, "0", "id"):
-            if k in param:
-                return _extract_world_uid([param[k]])
-        if param:
-            return _extract_world_uid([next(iter(param.values()))])
-    try:
-        return int(param)
-    except (TypeError, ValueError):
-        return 0
-
-
-def load_world_response(params):
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_action("visit"))
-
-    target_uid = _extract_world_uid(params)
-    current_uid = session.get("user_object", {}).get("userInfo", {}).get("player", {}).get("uid")
-    print(f"world response. requested uid={target_uid} {current_uid}")
-    if current_uid is not None and target_uid == current_uid:
-        ally = session["user_object"]["userInfo"]
-        print("reloading user from save")
-    else:
-        ally = copy.deepcopy(init_user()["userInfo"])
-        if target_uid == STEELE_ID:
-            ally["world"]["sizeX"] = 100
-            ally["world"]["sizeY"] = 100
-        ally["player"]["uid"] = target_uid
-        if str(target_uid) in allies:
-            if "objects" in allies[str(target_uid)]:
-                ally["world"]["objects"] = allies[str(target_uid)]["objects"]
-            if "roads" in allies[str(target_uid)]:
-                ally["world"]["roadData"] = allies[str(target_uid)]["roads"]
-            if "expansions" in allies[str(target_uid)]:
-                ally["expansions"] = allies[str(target_uid)]["expansions"]
-            if "worldName" in allies[str(target_uid)]:
-                ally["worldName"] = allies[str(target_uid)]["worldName"]
-            if "titanName" in allies[str(target_uid)]:
-                ally["titanName"] = allies[str(target_uid)]["titanName"]
-        else:
-            save = get_save_by_uid(target_uid, required=True)
-            ally["world"]["objects"] = save["user_object"]["userInfo"]["world"]["objects"]
-            ally["world"]["roadData"] = save["user_object"]["userInfo"]["world"]["roadData"]
-            ally["expansions"] = save["user_object"]["userInfo"]["player"]["expansions"]
-            ally["worldName"] = save["user_object"]["userInfo"]["worldName"]
-            ally["titanName"] = save["user_object"]["userInfo"]["titanName"]
-            ally["pvpInvaders"] = save_invaders(save)
-
-        # ally["gf"] = False
-        # ally["yimf"] = ""
-        # ally["novisit"] = False
-        # ally["globalPVP"] = {}
-        # ally["nonFriendInfo"] = {}
-        # ally["untendableObjIDs"] = []
-
-        # ally["world"]["yimf"] = ""
-    ally["pvpMode"] = params[2] if len(params) > 2 else False
-    ally["pvpImmunity"] = {"expTS": None}
-    ally["visitorEnergy"] = 5
-
-    load_world_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                           "data": ally}
-    return load_world_response
-
-
-def tend_ally_response(params):
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_action("tending"))
-
-    target_uid = int(params[0]) if params else 0
-    target_building_id = int(params[1]) if len(params) > 1 else 0
-    tend_type = params[2] if len(params) > 2 else None
-
-    target_save = get_save_by_uid(target_uid)
-    saves_to_try = [target_save] if target_save else get_saves()
-
-    for save in saves_to_try:
-        if not save:
-            continue
-        user_obj = save.get('user_object', {})
-        if user_obj.get("userInfo", {}).get("player", {}).get("uid") == target_uid:
-            if "visitorHelpRequests" not in user_obj or not isinstance(user_obj["visitorHelpRequests"], dict):
-                user_obj["visitorHelpRequests"] = {}
-            zid_str = str(get_zid())
-            if zid_str in user_obj["visitorHelpRequests"]:
-                user_obj["visitorHelpRequests"][zid_str] += "," + str(target_building_id)
-            else:
-                user_obj["visitorHelpRequests"][zid_str] = str(target_building_id)
-            click_next_state(False, target_building_id, meta, None, None, tending=True, save=save, tend_type=tend_type)
-            store_session(save)
-            break
-
-    tend_ally_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                          "data": []}
-    return tend_ally_response
-
-
-def accept_tend_ally_response(params):
-    meta = {"newPVE": 0}
-    visitor_reqs = session.get('user_object', {}).setdefault("visitorHelpRequests", {})
-    if params and str(params[0]) in visitor_reqs:
-        for item in str(visitor_reqs[str(params[0])]).split(","):
-            if item.strip():
-                click_next_state(False, int(item.strip()), meta, None, None, playback_tend=True)
-        visitor_reqs.pop(str(params[0]), None)
-
-    accept_tend_ally_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                          "data": []}
-    return accept_tend_ally_response
-
-
-def decline_tend_ally_response(params):
-    meta = {"newPVE": 0}
-    visitor_reqs = session.get('user_object', {}).get("visitorHelpRequests", {})
-    if params and str(params[0]) in visitor_reqs:
-        visitor_reqs.pop(str(params[0]), None)
-
-    decline_tend_ally_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                          "data": []}
-    return decline_tend_ally_response
-
-
-def add_fleet_response(param):
-    meta = {"newPVE": 0}
-
-    add_fleet_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                          "data": []}
-
-    # ensure_fleets, not `session["fleets"][...]`: the client can call addFleet
-    # on a session whose registry was never created (a save restored from a
-    # paste, or one that has not run the startup call), and this used to raise
-    # KeyError there and take the whole gateway request down with it.
-    fleets = ensure_fleets()
-    fleets[param['name']] = param['units']
-    if "allies" in param:
-        fleets["ally_" + param['name']] = param['allies']
-    print("Player fleet:", param['units'])
-    return add_fleet_response
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def select_response(param):
     meta = {"newPVE": 0}
@@ -1579,48 +506,7 @@ def select_response(param):
     return select_response
 
 
-def part_request_response(params):
-    item = lookup_item_by_name(params[0])
-    item_inventory = session['user_object']["userInfo"]["player"]["inventory"]["items"]
 
-    item_inventory[item["-code"]] = item_inventory.get(item["-code"], 0) + len(params[3])
-
-    meta = {"newPVE": 0}
-    handle_quest_progress(meta, progress_gifted_parts(item, len(params[3])))
-    handle_quest_progress(meta, progress_inventory_count())
-
-    part_request_response = {"errorType": 0, "userId": 1, "metadata": meta,
-                      "data": []}
-    return part_request_response
-
-def crew_request_response(params):
-    # 'params': [[124], 10003, 'Parliament', 'crew']
-    friends = params[0]
-    building_id = params[1]
-    building_name = params[2]
-    action = params[3]
-    
-    building = lookup_object(building_id)
-    
-    if action == 'crew':
-        
-        current_crew = building.get("crewInfo", [])
-
-        crewTemplate = lookup_crew_template(building_name)
-        max_buyable_slots = int(crewTemplate["-numUnbuyableSlots"])
-        num_slots = len(crewTemplate["position"])
-
-        # Empty slots are automatically filled.
-        auto_accept_friends = [f for f in friends if allies.get(str(f), {}).get("neighbor", False)] # only neighbor allies can be added
-        avail_slots = max(min(num_slots - len(current_crew), num_slots), 0)
-        new_crew = current_crew + auto_accept_friends[:avail_slots]
-        building["crewInfo"] = [str(x) for x in new_crew] # string needed, so that no friend is 'deleted' on display
-        
-        print(building_name, "new crew (max", num_slots, "slots):", building.get("crewInfo", []))
-    
-    meta = {"newPVE": 0}
-    crew_request_response = {"errorType": 0, "userId": 1, "metadata": meta, 'data': []}
-    return crew_request_response
 
 
 

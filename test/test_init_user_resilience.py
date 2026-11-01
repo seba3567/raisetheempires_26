@@ -24,6 +24,8 @@ import uuid
 import pytest
 from flask import session
 
+from empires_gateway.amf.handlers.player import init_user
+
 
 @pytest.fixture
 def gateway(gateway_app):
@@ -96,7 +98,7 @@ class TestInitUserSurvivesBrokenNeighbours:
         with gateway.test_request_context():
             session.sid = "0"
             session["profilePic"] = None
-            user = __import__("empires-server").init_user()
+            user = init_user()
 
         assert "userInfo" in user
         assert isinstance(user.get("neighbors"), list)
@@ -108,7 +110,7 @@ class TestInitUserSurvivesBrokenNeighbours:
         with gateway.test_request_context():
             session.sid = "0"
             session["profilePic"] = None
-            user = __import__("empires-server").init_user()
+            user = init_user()
 
         assert "userInfo" in user, f"a {shape!r} neighbour broke sign-up"
 
@@ -121,11 +123,12 @@ class TestInitUserSurvivesBrokenNeighbours:
         except that every player would be alone on the map.
         """
         empires_server = __import__("empires-server")
+        from empires_gateway.shared import get_sessions_info
         saves = [_valid_save(31337, "Vecino sano"), _valid_save(31338, "Otro vecino")]
 
         with gateway.test_request_context():
             session.sid = "0"
-            rows = empires_server.get_sessions_info(saves)
+            rows = get_sessions_info(saves)
 
         assert [r["uid"] for r in rows] == [31337, 31338]
         assert [r["level"] for r in rows] == [12, 12]
@@ -138,11 +141,12 @@ class TestInitUserSurvivesBrokenNeighbours:
         neighbour you cannot show, not a list that cannot be built.
         """
         empires_server = __import__("empires-server")
+        from empires_gateway.shared import get_sessions_info
         saves = [_valid_save(31337, "Vecino sano"), BROKEN["sin socialXpGood"]]
 
         with gateway.test_request_context():
             session.sid = "0"
-            rows = empires_server.get_sessions_info(saves)
+            rows = get_sessions_info(saves)
 
         assert [r["uid"] for r in rows] == [31337]
 
@@ -153,7 +157,8 @@ class TestInitUserSurvivesBrokenNeighbours:
         phantom player on the map. Being absent is the honest answer.
         """
         empires_server = __import__("empires-server")
+        from empires_gateway.shared import get_sessions_info
 
-        rows = empires_server.get_sessions_info([BROKEN["sin userInfo"]])
+        rows = get_sessions_info([BROKEN["sin userInfo"]])
 
         assert rows == []

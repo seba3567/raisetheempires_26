@@ -23,6 +23,10 @@ import pytest
 from flask import Flask, session
 
 empires_server = __import__('empires-server')
+from empires_gateway.amf.handlers.world import (
+    _known_campaigns,
+    set_current_campaign_response,
+)
 
 app = Flask(__name__)
 app.secret_key = 'test'
@@ -40,7 +44,7 @@ def _call(param):
     with app.test_request_context():
         session.sid = "0"
         session['user_object'] = _world()
-        response = empires_server.set_current_campaign_response(param)
+        response = set_current_campaign_response(param)
         return response, session['user_object']["userInfo"]["world"]["campaign"]
 
 
@@ -65,7 +69,7 @@ class TestSetCurrentCampaign:
         """
         _, campaign = _call(["camp001"])
 
-        start = empires_server._known_campaigns()["camp001"]["-startChapter"]
+        start = _known_campaigns()["camp001"]["-startChapter"]
         assert campaign["active"][start] == {"status": 0, "fleets": []}
 
     def test_an_existing_chapter_is_not_wiped(self):
@@ -78,12 +82,12 @@ class TestSetCurrentCampaign:
         with app.test_request_context():
             session.sid = "0"
             world = _world()
-            start = empires_server._known_campaigns()["camp001"]["-startChapter"]
+            start = _known_campaigns()["camp001"]["-startChapter"]
             world["userInfo"]["world"]["campaign"]["active"][start] = {
                 "status": 3 << 20, "fleets": []}
             session['user_object'] = world
 
-            empires_server.set_current_campaign_response(["camp001"])
+            set_current_campaign_response(["camp001"])
 
             assert session['user_object']["userInfo"]["world"]["campaign"]["active"][start] == {
                 "status": 3 << 20, "fleets": []}
@@ -99,7 +103,7 @@ class TestSetCurrentCampaign:
             session.sid = "0"
             session['user_object'] = _world()
 
-            empires_server.set_current_campaign_response(["camp999"])
+            set_current_campaign_response(["camp999"])
 
             assert session['user_object']["userInfo"]["world"]["campaign"]["current"] == "camp001"
 
@@ -130,7 +134,7 @@ class TestSetCurrentCampaign:
 
     def test_the_catalogue_it_validates_against_is_the_gamesettings_one(self):
         """Not a hardcoded list: the client's campaign list is data."""
-        catalogue = empires_server._known_campaigns()
+        catalogue = _known_campaigns()
 
         assert "camp001" in catalogue
         assert catalogue["camp001"]["-startChapter"]
