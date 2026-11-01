@@ -10,7 +10,7 @@ import copy
 import logging
 from datetime import datetime
 
-from flask import session
+from fastapi_session import session
 
 from empires_gateway.amf.handlers.economy import (
     _economy_session,
@@ -359,7 +359,9 @@ def init_user():
 def user_response():
     new_quests = []
     if 'user_object' in session:
-        print("Loading user from save")
+        print("Loading user from save, modified=", session.modified)
+        _p = session.get("user_object", {}).get("userInfo", {}).get("player", {})
+        print("level=", _p.get("level"), "uid=", _p.get("uid"), "worldName=", session.get("user_object", {}).get("userInfo", {}).get("worldName"), "xp=", _p.get("xp"), "prt=", _p.get("playerResourceType"), "coins=", session.get("user_object", {}).get("userInfo", {}).get("world", {}).get("resources", {}).get("coins"), "socialXpGood=", _p.get("socialXpGood"), "socialLevelGood=", _p.get("socialLevelGood"), "socialXpBad=", _p.get("socialXpBad"), "socialLevelBad=", _p.get("socialLevelBad"))
         if not validate_save(session):
             print("invalid save file")
             raise InvalidSaveException

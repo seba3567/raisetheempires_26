@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import session
+from fastapi_session import session
 
 from empires_gateway.amf.handlers.battle import invader_entry
 from empires_gateway.shared import get_suggested_friends

@@ -10,7 +10,7 @@ import copy
 import logging
 from typing import Any
 
-from flask import session
+from fastapi_session import session
 
 from empires_gateway.amf.handlers.economy import (
     place_market_order,

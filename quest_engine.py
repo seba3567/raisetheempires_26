@@ -7,7 +7,7 @@ from typing import Any
 
 Predicate = Callable[..., Any]
 
-from flask import session
+from fastapi_session import session
 
 import game_random
 from game_settings import (

@@ -4,7 +4,7 @@ import math
 from typing import Any
 
 import msgspec
-from flask import session
+from fastapi_session import session
 
 import game_random
 from game_settings import game_settings, get_zid, lookup_item_by_code, lookup_items_by_type_and_subtype

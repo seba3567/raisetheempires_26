@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import session
+from fastapi_session import session
 
 from empires_gateway.amf.handlers.economy import (
     _economy_session,

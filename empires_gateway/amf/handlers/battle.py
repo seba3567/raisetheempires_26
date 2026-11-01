@@ -12,7 +12,7 @@ import contextlib
 import logging
 from datetime import datetime
 
-from flask import session
+from fastapi_session import session
 
 from battle_engine import (
     cancel_unstarted_invasions,

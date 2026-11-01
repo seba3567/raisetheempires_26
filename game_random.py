@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from flask import session
+from fastapi_session import session
 
 MASK = 0xFFFFFFFF
 

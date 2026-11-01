@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from flask import session
+from fastapi_session import session
 
 import contract
 from empires_gateway.amf.handlers.economy import deposit_reward

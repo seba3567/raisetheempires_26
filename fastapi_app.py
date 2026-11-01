@@ -59,6 +59,29 @@ app = FastAPI(
     version="0.08a",
 )
 
+# FastAPI-native session middleware: load/save via the existing save store,
+# exposing the session through fastapi_session.session (no Flask import in handlers).
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    from fastapi_session import set_session, get_session
+
+    cookie = request.headers.get("cookie", "")
+    with _flask_app.test_request_context(request.url.path, method=request.method, headers={"Cookie": cookie}):
+        flask_req = _flask_app.test_request_context().request
+        sess = _flask_app.session_interface.open_session(_flask_app, flask_req)
+        data = dict(sess) if sess else {}
+        set_session(data)
+        response = await call_next(request)
+        # Save back
+        try:
+            sess.clear()
+            sess.update(data)
+            sess.modified = True
+            _flask_app.session_interface.save_session(_flask_app, sess, response)
+        except Exception:
+            pass
+        return response
+
 
 @app.get("/api/v1/methods")
 def list_methods() -> dict[str, list[str]]:
@@ -461,8 +484,13 @@ from empires_gateway.amf.dispatch import _amf_as_list, _amf_detach, _pad_batch_r
 @app.post("/flashservices/gateway.php")
 async def amf_gateway(request: Request):
     data = await request.body()
+    headers = {}
+    if request.headers.get("cookie"):
+        headers["Cookie"] = request.headers.get("cookie")
+    if request.headers.get("x-player-zid"):
+        headers["X-Player-Zid"] = request.headers.get("x-player-zid")
     with _flask_app.test_request_context(
-        "/flashservices/gateway.php", method="POST", data=data, content_type="application/x-amf"
+        "/flashservices/gateway.php", method="POST", data=data, content_type="application/x-amf", headers=headers
     ):
         try:
             resp_msg = remoting.decode(data)

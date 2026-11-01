@@ -10,6 +10,7 @@
 - FastAPI paralelo con OpenAPI (Fase A) ✅.
 - Migración de rutas HTTP a FastAPI (Fase B) ✅ (todas las rutas migradas, incluyendo assets y tools).
 - AMF0 binario migrado a FastAPI (Fase C) ✅.
+- Session store migrado a FastAPI-native (fastapi_session.py con fallback Flask); handlers usan fastapi_session.session ✅.
 - WSGI mount eliminado; FastAPI es el único servidor (uvicorn); Flask es solo librería (Fase D) ✅.
 
 ## Propuestas (priorizadas)

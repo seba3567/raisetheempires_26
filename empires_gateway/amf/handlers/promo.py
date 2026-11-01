@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import session
+from fastapi_session import session
 
 from empires_gateway.amf.handlers.economy import deposit_reward
 from game_settings import game_settings
