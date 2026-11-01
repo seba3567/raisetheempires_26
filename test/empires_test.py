@@ -9,6 +9,7 @@ empires_server = __import__('empires-server')
 from pathlib import Path
 
 import quest_engine
+from empires_gateway.amf.handlers import battle as battle_handlers
 
 app = Flask(__name__)
 app.secret_key = 'test'
@@ -96,7 +97,10 @@ def test_random_fleet_challenge_response(monkeypatch):
         return {'user_object': {"userInfo": {"player": {"uid": 1}}, "pvp": {
             "invaders": {"u2341959767162880": {"defender_fleet": ['V61,,,,', 'U01,,,,', 'U01,,,,', 'U01,,,,']}}}}}
 
-    monkeypatch.setattr(empires_server, "get_save_by_uid", get_save_by_uid_mock)
+    # Patched where the handler lives: the battle handlers moved out of
+    # empires-server, so a patch on that module's namespace would no longer
+    # reach them.
+    monkeypatch.setattr(battle_handlers, "get_save_by_uid", get_save_by_uid_mock)
 
     with app.test_request_context():
         session.sid = "0"
