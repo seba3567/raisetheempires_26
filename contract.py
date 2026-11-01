@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "ADMIN_ONLY_EXACT",
+    "ADMIN_ONLY_PREFIXES",
     "CONTRACT_PATH",
     "DATABASE_NAME",
     "DATABASE_URL",
@@ -50,12 +52,17 @@ __all__ = [
     "GATEWAY_PORT",
     "MAX_SAFE_ZID",
     "PLAYER_ROLE_HEADER",
+    "PLAYER_STATE_KEYS",
     "PLAYER_ZID_HEADER",
     "PUBLIC_HOST",
     "PUBLIC_PORT",
+    "RESOURCE_ORDER",
     "RTE_CONTRACT_FILE_ENV",
+    "SNAPI_PAYLOAD_KEYS",
+    "SNAPI_USER_KEYS",
     "ZID_DIVISOR",
     "env_value",
+    "is_admin_only_path",
     "load_contract",
 ]
 
@@ -134,6 +141,9 @@ _headers = _section("headers")
 _zid = _section("zid")
 _admin_paths = _section("adminPaths")
 _env = _section("env")
+_snapi = _section("snapi")
+_player_state = _section("playerState")
+_resources = _section("resources")
 
 
 def _require(section: dict[str, Any], key: str, where: str) -> Any:
@@ -221,6 +231,24 @@ def is_admin_only_path(path: str) -> bool:
     if path in ADMIN_ONLY_EXACT:
         return True
     return any(path.startswith(prefix) for prefix in ADMIN_ONLY_PREFIXES)
+
+
+#: The keys the SNAPI user object has to carry.
+#:
+#: The client has no social network of its own: during setup it calls
+#: ``getUserInfo()`` and reads fields off what comes back. If the user object
+#: arrives without ``zid``, the client does not degrade, it dies with Error
+#: #1009 before anything is playable.
+SNAPI_USER_KEYS = _string_list(_snapi, "userKeys", "snapi")
+
+#: The keys the SNAPI payload has to carry.
+SNAPI_PAYLOAD_KEYS = _string_list(_snapi, "payloadKeys", "snapi")
+
+#: The keys ``/player.json`` has to carry.
+PLAYER_STATE_KEYS = _string_list(_player_state, "keys", "playerState")
+
+#: The resources the world keeps, in the order the 2012 editor showed them.
+RESOURCE_ORDER = _string_list(_resources, "order", "resources")
 
 
 #: The canonical name of every environment variable both runtimes read.

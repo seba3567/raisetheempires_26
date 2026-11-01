@@ -33,6 +33,9 @@ export type RuntimeContract = {
 	public: { host: string; port: number };
 	headers: { playerZid: string; playerRole: string };
 	adminPaths: { exact: string[]; prefixes: string[] };
+	snapi: { userKeys: string[]; payloadKeys: string[] };
+	playerState: { keys: string[] };
+	resources: { order: string[] };
 	zid: { divisor: number; maxSafe: number };
 	env: {
 		databaseUrl: string;
@@ -60,10 +63,24 @@ export function parseContract(raw: string): RuntimeContract {
 	const zid = data.zid;
 	const adminPaths = data.adminPaths ?? { exact: [], prefixes: [] };
 	const env = data.env;
+	const snapi = data.snapi;
+	const playerState = data.playerState;
+	const resources = data.resources;
 
-	if (!database || !gateway || !publicSection || !headers || !zid || !env) {
+	if (
+		!database ||
+		!gateway ||
+		!publicSection ||
+		!headers ||
+		!zid ||
+		!env ||
+		!snapi ||
+		!playerState ||
+		!resources
+	) {
 		throw new TypeError(
-			'The runtime contract is missing one of: database, gateway, public, headers, zid, env.'
+			'The runtime contract is missing one of: database, gateway, public, headers, ' +
+				'zid, env, snapi, playerState, resources.'
 		);
 	}
 
@@ -117,6 +134,12 @@ export function parseContract(raw: string): RuntimeContract {
 			exact: (adminPaths.exact ?? []).map(String),
 			prefixes: (adminPaths.prefixes ?? []).map(String)
 		},
+		snapi: {
+			userKeys: (snapi.userKeys ?? []).map(String),
+			payloadKeys: (snapi.payloadKeys ?? []).map(String)
+		},
+		playerState: { keys: (playerState.keys ?? []).map(String) },
+		resources: { order: (resources.order ?? []).map(String) },
 		zid: { divisor: Number(zid.divisor), maxSafe: Number(zid.maxSafe) },
 		env: {
 			databaseUrl: String(env.databaseUrl),

@@ -390,6 +390,9 @@ del repositorio:
 | `headers` | Cómo viaja la identidad del jugador al gateway. |
 | `adminPaths` | Qué rutas del gateway son herramienta de admin. |
 | `env` | El nombre canónico de cada variable, y los alias viejos que aún funcionan. |
+| `snapi` | Las claves del objeto de usuario y del payload que el SWF pide. |
+| `playerState` | Las claves de `/player.json`. |
+| `resources` | Los recursos del mundo, en orden. |
 | `zid` | El divisor del checksum y el máximo exacto para el cliente Flash. |
 
 Python lo lee con `contract.py`; TypeScript con `#lib/server/contract`. Los dos

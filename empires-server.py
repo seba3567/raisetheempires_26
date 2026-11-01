@@ -389,9 +389,11 @@ def snapi_bridge():
         "appFriends": get_allies_id(saves),
     })
 
-
 # Resource keys, in the order the original editor showed them.
-RESOURCE_ORDER = ("coins", "wood", "oil", "aluminum", "copper", "gold", "iron", "uranium")
+#
+# The order lives in the runtime contract, which is where the front door reads
+# it from too: two copies of the list used to be expected to line up.
+RESOURCE_ORDER = contract.RESOURCE_ORDER
 
 #: The resources the world keeps in `world["resources"]`.
 #:

@@ -6,9 +6,15 @@
  * recognises the exact sprite they clicked in 2012, and nothing has to be
  * redrawn.
  *
- * The gateway returns these in `RESOURCE_ORDER`; the order here is the display
- * order and they are expected to line up.
+ * The gateway counts the resources in the order written down in
+ * `contract/runtime.json`; this is the order the player sees them in.
+ *
+ * The two are the same list, but the wire does not carry the order: Flask
+ * sorts the keys of a JSON object, so what arrives is alphabetical. This
+ * catalogue is what decides the display.
  */
+import type { Equal, Expect } from './type-checks.ts';
+
 export interface ResourceDef {
 	key: string;
 	label: string;
@@ -25,6 +31,19 @@ export const RESOURCES: readonly ResourceDef[] = [
 	{ key: 'iron', label: 'Hierro', icon: '/img/Iron_60.png' },
 	{ key: 'uranium', label: 'Uranio', icon: '/img/Uranium_60.png' }
 ] as const;
+
+/**
+ * The resources, in the order the 2012 editor showed them.
+ *
+ * The gateway counts them in the same order, and the two lists used to be
+ * expected to line up with nothing checking that they did.
+ */
+export const RESOURCE_KEYS = RESOURCES.map((resource) => resource.key);
+
+/** The catalogue and the key list are the same fact written twice. */
+export type _ResourceKeysMatch = Expect<
+	Equal<(typeof RESOURCE_KEYS)[number], (typeof RESOURCES)[number]['key']>
+>;
 
 /** What the 2012 template called Empire Points: `player.cash`. */
 export const EMPIRE_POINTS_ICON = '/img/epoints.png';

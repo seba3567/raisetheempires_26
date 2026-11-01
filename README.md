@@ -56,10 +56,10 @@ Everything that crosses one of those seams is written down **once**, in
 [`contract/runtime.json`](contract/runtime.json): the database, the gateway's
 address, the public port and origin, the headers that carry the signed-in
 account, the gateway routes that are admin tools, the parameters of the
-player's id, and **the canonical name of every environment variable**. Python
-reads it through `contract.py`, TypeScript through
-`web/src/lib/server/contract.ts`, and both test suites check that what each
-runtime resolved is what the file says.
+player's id, the canonical name of every environment variable, and the shape
+of the payloads that cross as JSON. Python reads it through `contract.py`,
+TypeScript through `web/src/lib/server/contract.ts`, and both test suites
+check that what each runtime resolved is what the file says.
 
 That is not a preference for tidiness. The front door once bound port 3000
 while the origin compiled into its build said 8080, so every page loaded and

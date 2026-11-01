@@ -21,6 +21,7 @@
  */
 
 import { logDev } from './dev-log';
+import type { Equal, Expect } from './type-checks';
 
 /** Where the payload comes from. Served by the gateway, proxied like the SWF. */
 export const SNAPI_ENDPOINT = '/snapi.json';
@@ -54,6 +55,29 @@ export const LOAD_MESSAGES: Record<LoadStage, string> = {
 /** Told to the host page as the client walks its setup. */
 export type OnProgress = (stage: LoadStage) => void;
 
+/**
+ * The keys the user object has to carry.
+ *
+ * The client has no social network of its own: during setup it calls
+ * `getUserInfo()` and reads fields off what comes back. If the object arrives
+ * without `zid`, the client does not degrade, it dies with Error #1009 before
+ * anything is playable.
+ *
+ * The list lives here and in `contract/runtime.json`, which is where the
+ * gateway reads it from. The test suite checks that the two agree.
+ */
+export const SNAPI_USER_KEYS = [
+	'zid',
+	'uid',
+	'first_name',
+	'name',
+	'sex',
+	'pic_square'
+] as const;
+
+/** The keys the payload has to carry. */
+export const SNAPI_PAYLOAD_KEYS = ['user', 'friends', 'appFriends'] as const;
+
 export interface SnapiUser {
 	/** Must be a JSON number. ActionScript takes it as an int. */
 	zid: number;
@@ -69,6 +93,19 @@ export interface SnapiPayload {
 	friends: unknown[];
 	appFriends: unknown[];
 }
+
+/**
+ * The interface and the key list are the same fact written twice, so the
+ * compiler checks that they are the same. Add a field to one and the build
+ * stops, in the editor, with the field name in the message.
+ */
+export type _SnapiUserKeysMatch = Expect<
+	Equal<keyof SnapiUser, (typeof SNAPI_USER_KEYS)[number]>
+>;
+
+export type _SnapiPayloadKeysMatch = Expect<
+	Equal<keyof SnapiPayload, (typeof SNAPI_PAYLOAD_KEYS)[number]>
+>;
 
 /** Minimal shape of the globals this module installs. */
 type BridgeGlobals = Record<string, unknown>;

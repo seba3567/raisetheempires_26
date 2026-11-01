@@ -126,6 +126,64 @@
 		}
 	},
 
+	"snapi": {
+		"_readme": [
+			"The shape of the payload the SWF asks the hosting page for.",
+			"",
+			"The client has no social network of its own: during setup it calls",
+			"getUserInfo(), getFriendData() and getAppFriendIds() and reads fields",
+			"off what they return. If the user object comes back without `zid`, the",
+			"client does not degrade, it dies with Error #1009 before anything is",
+			"playable.",
+			"",
+			"The gateway produces this and the front door consumes it, so the shape",
+			"is written down here once and both sides are checked against it."
+		],
+		"userKeys": ["zid", "uid", "first_name", "name", "sex", "pic_square"],
+		"payloadKeys": ["user", "friends", "appFriends"]
+	},
+
+	"playerState": {
+		"_readme": [
+			"The shape of /player.json, which the gateway produces and the account",
+			"page and the empire editor consume.",
+			"",
+			"It replaced the front door's own `progress` table, which nothing in the",
+			"game ever wrote to: a player sat at level 1 next to a level 85 empire."
+		],
+		"keys": [
+			"hasSave",
+			"zid",
+			"level",
+			"xp",
+			"empirePoints",
+			"worldName",
+			"picture",
+			"resources"
+		]
+	},
+
+	"resources": {
+		"_readme": [
+			"The resources the world keeps, in the order the 2012 editor showed them.",
+			"",
+			"The gateway counts them in this order and the front door draws them in",
+			"it. Note that the order does not survive the wire: Flask sorts the keys",
+			"of a JSON object, so what the front door receives is alphabetical and",
+			"its own catalogue is what the player sees."
+		],
+		"order": [
+			"coins",
+			"wood",
+			"oil",
+			"aluminum",
+			"copper",
+			"gold",
+			"iron",
+			"uranium"
+		]
+	},
+
 	"zid": {
 		"_readme": "The player's stable id. CRC-64/GO-ISO divided down so the result is an exact integer for the Flash client, which has no integer type.",
 		"divisor": 2048,

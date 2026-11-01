@@ -9,6 +9,25 @@
 
 import { config } from './config.ts';
 import { PLAYER_ZID_HEADER } from './proxy.ts';
+import type { Equal, Expect } from '../type-checks.ts';
+
+/**
+ * The keys `/player.json` has to carry.
+ *
+ * The gateway produces this and the account page reads it, so the shape is
+ * written down once, in `contract/runtime.json`, and both sides are checked
+ * against it.
+ */
+export const PLAYER_STATE_KEYS = [
+	'hasSave',
+	'zid',
+	'level',
+	'xp',
+	'empirePoints',
+	'worldName',
+	'picture',
+	'resources'
+] as const;
 
 export interface PlayerState {
 	hasSave: boolean;
@@ -21,6 +40,11 @@ export interface PlayerState {
 	picture: string | null;
 	resources: Record<string, number | null>;
 }
+
+/** The interface and the key list are the same fact written twice. */
+export type _PlayerStateKeysMatch = Expect<
+	Equal<keyof PlayerState, (typeof PLAYER_STATE_KEYS)[number]>
+>;
 
 /**
  * Ask the gateway what the signed-in player's save contains.
