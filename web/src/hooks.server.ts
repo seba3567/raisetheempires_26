@@ -80,5 +80,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 		response.headers.set('cache-control', 'public, max-age=31536000, immutable');
 	}
 
+	// HTML pages must never be cached: a stale index.html references chunks
+	// that no longer exist after a rebuild, producing
+	// "Failed to fetch dynamically imported module".
+	const contentType = response.headers.get('content-type') ?? '';
+	if (contentType.includes('text/html')) {
+		response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+		response.headers.set('pragma', 'no-cache');
+		response.headers.set('expires', '0');
+	}
+
 	return response;
 };

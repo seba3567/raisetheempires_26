@@ -85,6 +85,19 @@ from empires_gateway.routes.catalog import (
     snapi_bridge,
 )
 from empires_gateway.routes.editor import editor_restore, editor_save, editor_state
+from empires_gateway.assets import (
+    en_us_file,
+    flashFile,
+    game_settings_file,
+    quest_settings_file,
+    record_stats,
+    send_sol_assets,
+    send_sol_assets_alternate,
+    template_css,
+    template_img,
+    template_js,
+    zh_cn_file,
+)
 from empires_gateway.routes.tools import (
     change_seed,
     complete_quest,
@@ -130,6 +143,15 @@ async def _call_flask_view(view_func, request: Request):
             from fastapi.responses import RedirectResponse
 
             return RedirectResponse(url=resp.location, status_code=resp.status_code)
+        # File responses (direct passthrough): read bytes from the iterable.
+        if getattr(resp, "direct_passthrough", False):
+            body = b"".join(resp.response) if hasattr(resp, "response") else b""
+            headers = {}
+            for h in ("Cache-Control", "ETag", "Content-Disposition"):
+                v = resp.headers.get(h)
+                if v:
+                    headers[h] = v
+            return Response(content=body, status_code=status, media_type=resp.mimetype if hasattr(resp, "mimetype") else None, headers=headers)
         if data is None:
             return Response(content=resp.get_data() if hasattr(resp, "get_data") else b"", status_code=status, media_type=resp.mimetype if hasattr(resp, "mimetype") else None)
         return JSONResponse(data, status_code=status)
@@ -285,6 +307,70 @@ async def save_editor_route(request: Request):
     return await _call_flask_view(save_editor, request)
 
 
+# Assets (delegated to Flask view inside request context)
+@app.get("/record_stats.php")
+@app.post("/record_stats.php")
+@app.get("/127.0.0.1record_stats.php")
+@app.post("/127.0.0.1record_stats.php")
+async def record_stats_route(request: Request):
+    return await _call_flask_view(record_stats, request)
+
+
+@app.get("/files/empire-s.assets.zgncdn.com/assets/109338/ZGame.109338.swf")
+async def flash_file_route(request: Request):
+    return await _call_flask_view(flashFile, request)
+
+
+@app.get("/gameSettings.xml")
+@app.get("/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/gameSettings.xml")
+@app.get("/assets/109338/127.0.0.1flashservices/gameSettings.xml")
+async def game_settings_route(request: Request):
+    return await _call_flask_view(game_settings_file, request)
+
+
+@app.get("/en_US.xml")
+@app.get("/127.0.0.1en_US.xml")
+@app.get("/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/en_US.xml")
+@app.get("/assets/109338/127.0.0.1flashservices/en_US.xml")
+async def en_us_route(request: Request):
+    return await _call_flask_view(en_us_file, request)
+
+
+@app.get("/zh_CN.xml")
+@app.get("/127.0.0.1zh_CN.xml")
+async def zh_cn_route(request: Request):
+    return await _call_flask_view(zh_cn_file, request)
+
+
+@app.get("/questSettings.xml")
+@app.get("/127.0.0.1questSettings.xml")
+@app.get("/files/empire-s.assets.zgncdn.com/assets/109338/127.0.0.1flashservices/questSettings.xml")
+@app.get("/assets/109338/127.0.0.1flashservices/questSettings.xml")
+async def quest_settings_route(request: Request):
+    return await _call_flask_view(quest_settings_file, request)
+
+
+@app.get("/img/{path:path}")
+async def img_route(path: str, request: Request):
+    return await _call_flask_view(lambda: template_img(path), request)
+
+
+@app.get("/js/{path:path}")
+async def js_route(path: str, request: Request):
+    return await _call_flask_view(lambda: template_js(path), request)
+
+
+@app.get("/css/{path:path}")
+async def css_route(path: str, request: Request):
+    return await _call_flask_view(lambda: template_css(path), request)
+
+
+@app.get("/nullassets/{path:path}")
+@app.get("/assets/{path:path}")
+async def sol_assets_route(path: str, request: Request):
+    return await _call_flask_view(lambda: send_sol_assets(path), request)
+
+
 # Migrated redirects (stateless)
 from fastapi.responses import RedirectResponse
 
@@ -421,8 +507,5 @@ async def amf_gateway(request: Request):
         return Response(content=ret_body, media_type="application/x-amf")
 
 
-# Mount the legacy Flask app as a fallback so routes not yet migrated keep
-# working. Migrated routes defined above take precedence.
-from starlette.middleware.wsgi import WSGIMiddleware
-
-app.mount("/", WSGIMiddleware(_flask_app))
+# Flask is no longer mounted: FastAPI is the sole server. Flask remains only
+# as a library for session/store helpers used by _call_flask_view.

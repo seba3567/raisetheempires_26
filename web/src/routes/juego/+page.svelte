@@ -329,8 +329,8 @@
 <svelte:head>
 	<title>Juego — Raise the Empires</title>
 	<!-- Precarga del loader de Ruffle para reducir el tiempo hasta el primer frame. -->
-	<link rel="preload" href="/ruffle/ruffle.js" as="script" />
-	<link rel="modulepreload" href="/ruffle/ruffle.js" />
+	<link rel="preload" href="/ruffle/ruffle.js" as="script" crossorigin />
+	<link rel="modulepreload" href="/ruffle/ruffle.js" crossorigin />
 </svelte:head>
 
 <div class="flex flex-col items-center gap-2 w-full">
