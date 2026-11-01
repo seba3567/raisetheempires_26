@@ -353,21 +353,17 @@ export async function addFriend(
     const status = isAcceptance ? "accepted" : "pending";
     const acceptedAt = isAcceptance ? stamp : null;
 
-    const isPostgres = config.database.url.startsWith("postgres");
-    const upsert = isPostgres
-      ? `
+    // PostgreSQL. The MySQL spelling used to live here too, behind a test on
+    // the URL, and it was a landmine rather than a convenience: a URL that did
+    // not start with "postgres" would have sent `ON DUPLICATE KEY UPDATE` to a
+    // server that has never heard of it.
+    const upsert = `
       INSERT INTO friendships (user_id, friend_id, status, requested_by, created_at, accepted_at)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (user_id, friend_id) DO UPDATE SET
         status = EXCLUDED.status,
         requested_by = EXCLUDED.requested_by,
-        accepted_at = EXCLUDED.accepted_at`
-      : `
-      INSERT INTO friendships (user_id, friend_id, status, requested_by, created_at, accepted_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE status = VALUES(status),
-                               requested_by = VALUES(requested_by),
-                               accepted_at = VALUES(accepted_at)`;
+        accepted_at = EXCLUDED.accepted_at`;
 
     await run(upsert, requesterId, targetId, status, requesterId, stamp, acceptedAt);
     await run(upsert, targetId, requesterId, status, requesterId, stamp, acceptedAt);

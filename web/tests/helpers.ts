@@ -6,36 +6,26 @@ import { db } from '#lib/server/db/client';
 /**
  * Empty every table.
  *
- * Three things forced this, all of them MariaDB-specific:
+ * Three things forced this, and all three are still true:
  *
- * * The shared connection, not one of its own. TRUNCATE needs an exclusive
- *   metadata lock, so truncating from a *second* connection makes it wait on
- *   whatever the pool is still holding and every beforeEach times out at 5s.
- *   Going through the same handle the models use cannot deadlock with them,
- *   because it is the same pool.
+ * * The shared connection, not one of its own. The reset has to go through the
+ *   same handle the models use, or it can collide with whatever they are
+ *   holding.
  *
- * * DELETE in dependency order, not TRUNCATE. FOREIGN_KEY_CHECKS is a *session*
- *   variable, and the pool is free to run the TRUNCATE on a different session
- *   from the one that was told to stop checking -- so the reset died with
- *   errno 1701, "Cannot truncate a table referenced in a foreign key
- *   constraint". Deleting the children first needs no such switch at all.
+ * * DELETE in dependency order, not TRUNCATE. The tables reference each other,
+ *   and truncating a parent while a child still points at it is refused. The
+ *   children go first and no such switch is needed at all.
  *
- * * AUTO_INCREMENT reset. Otherwise `ana` is created as id 6, 7, 8 across a
+ * * The id sequence reset. Otherwise `ana` is created as id 6, 7, 8 across a
  *   run, and the zid tests that derive an id from the account break.
  */
-import { config } from '#lib/server/config';
-
 export async function resetDb(): Promise<void> {
 	const sql = await db();
 
 	for (const table of ['activity', 'friendships', 'progress', 'users']) {
 		await sql.unsafe(`DELETE FROM ${table}`);
 	}
-	if (config.database.url.startsWith('postgres')) {
-		await sql.unsafe('ALTER SEQUENCE users_id_seq RESTART WITH 1');
-	} else {
-		await sql.unsafe('ALTER TABLE `users` AUTO_INCREMENT = 1');
-	}
+	await sql.unsafe('ALTER SEQUENCE users_id_seq RESTART WITH 1');
 }
 
 /** Close the shared connection. Used by tests that opened one. */

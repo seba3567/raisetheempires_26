@@ -19,8 +19,15 @@
  * The password is an argument rather than a prompt because this is run from a
  * terminal, where the shell history is a bigger problem than anything this script
  * can do about it -- so if that matters, edit the line below to read it instead.
+ *
+ * It goes through the service's own database layer, so it reaches the same
+ * PostgreSQL the application does and finds the account the same way. It used
+ * to open its own connection against a MySQL URL with MySQL placeholders, which
+ * is a server this project does not use any more: the script could not have
+ * worked.
  */
-import { SQL } from 'bun';
+import { closeDb, db, one, run } from '#lib/server/db/client';
+import { findByUsername } from '#lib/server/models/accounts';
 
 const [, , username, password] = process.argv;
 
@@ -33,21 +40,13 @@ if (password.length < 8) {
 	process.exit(2);
 }
 
-const url = process.env.RTE_DB_URL ?? 'mysql://root:2001@127.0.0.1:3306/raisetheempires';
-const sql = new SQL(url);
-
 try {
-	const rows = (await sql.unsafe(
-		'SELECT id, username, password_hash FROM users WHERE username_key = ?',
-		[username.trim().toLowerCase()]
-	)) as any[];
+	const user = await findByUsername(username);
 
-	if (!rows.length) {
+	if (!user) {
 		console.error(`no existe ninguna cuenta con ese usuario: ${username}`);
 		process.exit(1);
 	}
-
-	const user = rows[0];
 
 	// Why it is being reset, rather than just replacing it silently. A hash that
 	// is merely wrong would have logged in and been changed; one that cannot be
@@ -59,14 +58,15 @@ try {
 	// Prove the new hash survives the same round trip before it replaces the old
 	// one: write it, read it back, verify against what came back. Verifying the
 	// in-memory value would pass even if the column mangles it again.
-	await sql.unsafe('UPDATE users SET password_hash = ? WHERE id = ?', [hash, user.id]);
-	const [readBack] = (await sql.unsafe('SELECT password_hash FROM users WHERE id = ?', [
+	await run('UPDATE users SET password_hash = ? WHERE id = ?', hash, user.id);
+	const readBack = await one<{ password_hash: string }>(
+		'SELECT password_hash FROM users WHERE id = ?',
 		user.id
-	])) as any[];
+	);
 
 	let ok = false;
 	try {
-		ok = await Bun.password.verify(password, readBack.password_hash);
+		ok = await Bun.password.verify(password, readBack?.password_hash ?? '');
 	} catch {
 		ok = false;
 	}
@@ -76,10 +76,7 @@ try {
 			'ATENCION: la nueva hash se guardo pero no verifica al releerla.\n' +
 				'Se ha restaurado la anterior; no se ha cambiado nada.'
 		);
-		await sql.unsafe('UPDATE users SET password_hash = ? WHERE id = ?', [
-			user.password_hash,
-			user.id
-		]);
+		await run('UPDATE users SET password_hash = ? WHERE id = ?', user.password_hash, user.id);
 		process.exit(1);
 	}
 
@@ -90,5 +87,5 @@ try {
 			: 'nota: la anterior no servia (hash ilegible o distinto), por eso se reseteo'
 	);
 } finally {
-	await sql.close();
+	await closeDb();
 }
