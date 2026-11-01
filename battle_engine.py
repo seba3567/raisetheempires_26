@@ -91,9 +91,7 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
     else:
         player_turn = False
         attack_res = ai_best_attack(friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables)
-        enemy_unit_id, _, player_unit_id, ai_drawn = attack_res if attack_res else (None, 0, None, None)
-    if player_turn:
-        ai_drawn = None
+        enemy_unit_id, _, player_unit_id = attack_res if attack_res else (None, 0, None)
 
     if (
         enemy_unit_id is not None
@@ -137,12 +135,9 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
         baddie_strength = baddie_strengths[enemy_unit_id]
 
         init_seed = ["init seed", get_seed_w(), get_seed_z()]
-        # The enemy's turn has already taken a number for the battle AI, and
-        # the client uses that same number for the roll of the turn.
         roll = unit_roll(
             friendly_weak if player_turn else baddie_weak,
             baddie_weak if player_turn else friendly_weak,
-            drawn=ai_drawn,
         )
 
         crit, direct = get_hit_value(friendly_unit_type if player_turn else baddie_unit_type, baddie_unit_type if player_turn else friendly_unit_type)
@@ -825,7 +820,7 @@ def decode_unit_strings(unit_strings):
     return [decode_unit_string(unit_string) for unit_string in unit_strings]
 
 
-def unit_roll(attacker_weak, defender_weak, drawn=None):
+def unit_roll(attacker_weak, defender_weak):
     """The roll of a turn.
 
     A weak unit makes the roll worth -2 or 2, but it does not save the
@@ -838,13 +833,12 @@ def unit_roll(attacker_weak, defender_weak, drawn=None):
     all here, the client drew, and the fight ended with the two sides
     disagreeing about what number came next.
 
-    ``drawn`` is the number a previous step of this same turn already took
-    from the stream. The enemy's turn has one: the battle AI takes a number
-    to choose its target, and the client takes one for the same reason. The
-    roll of the turn is that same number -- taking a second one is what put
-    the two sides a step apart in the first place.
+    The roll is a number of its own, not the one the battle AI took: the
+    client takes one for the AI and another for the roll, and the enemy's
+    turn is worth two draws. Sharing one number between them left the two
+    sides a step apart the other way.
     """
-    rolled = drawn if drawn is not None else roll_random_between(0, 1)
+    rolled = roll_random_between(0, 1)
     if attacker_weak:
         return -2
     if defender_weak:
@@ -1567,7 +1561,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
     ]
 
     if not baddies_alive or not friendlies_alive:
-        return None, 0, None, first_random
+        return None, 0, None
 
     for b_idx, baddie in baddies_alive:
         cand_grades = [(p_idx, get_hit_chance(baddie, friendly)) for p_idx, friendly in friendlies_alive]
@@ -1586,7 +1580,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
             best_attackers.append((b_idx, chosen_def))
 
     if not best_attackers:
-        return None, 0, None, first_random
+        return None, 0, None
 
     if len(best_attackers) > 1:
         f = roll_random_float()
@@ -1595,7 +1589,7 @@ def ai_best_attack(player_units, player_units_strengths, baddies, baddies_streng
     else:
         chosen_baddie, chosen_player = best_attackers[0]
 
-    return chosen_baddie, best_value, chosen_player, first_random
+    return chosen_baddie, best_value, chosen_player
 
 
 def ai_best_unit(first_units, first_units_strengths, second_unit, random, active_consumables, target_group):

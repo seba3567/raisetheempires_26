@@ -335,6 +335,7 @@ def post_gateway():
         print("Rejecting malformed AMF batch:", type(error).__name__, error)
         return make_response("Bad AMF batch", 400)
     resps = []
+    called_methods: list[str] = []
     for reqq in calls:
         # The client matches responses to requests by index, so every call gets
         # exactly one answer, in its own slot. A call that produced no result
@@ -348,6 +349,8 @@ def post_gateway():
         if reqq.get('params') is not None:
             reqq['params'] = _amf_as_list(reqq['params'])
         fn_name = getattr(reqq, 'functionName', None) or reqq.get('functionName')
+        if fn_name:
+            called_methods.append(fn_name)
         handler = AMF_HANDLERS.get(fn_name)
         called_at = time.perf_counter()
         if handler is not None:
@@ -392,5 +395,29 @@ def post_gateway():
 
     ret_body = remoting.encode(ev, strict=True, logger=True).getvalue()  # .read()
     # print(ret_body)
-    return Response(ret_body, mimetype='application/x-amf')
+
+    # Cache only batches that are entirely idempotent reads. A write (or an
+    # unknown method) anywhere in the batch makes the whole answer uncacheable,
+    # because the client matches responses to requests by index.
+    IDEMPOTENT = {
+        "WorldService.loadWorld",
+        "DataServicesService.getFriendsInfo",
+        "DataServicesService.getRecentPlayers",
+        "DataServicesService.getSuggestedNeighbors",
+        "DataServicesService.getRecommendedNeighbors",
+        "DataServicesService.getRequestFriends",
+        "UserService.getTargetingData",
+        "UserService.getTargetingGroups",
+        "UserService.getLeaderboards",
+        "UserService.collectLeaderboards",
+    }
+    response = Response(ret_body, mimetype='application/x-amf')
+    if called_methods and all(m in IDEMPOTENT for m in called_methods):
+        import hashlib
+
+        etag = hashlib.md5(ret_body).hexdigest()
+        response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=60"
+        response.headers["ETag"] = f'"{etag}"'
+        response.headers["Vary"] = "Cookie"
+    return response
 

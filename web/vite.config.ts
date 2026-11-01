@@ -44,7 +44,9 @@ export default defineConfig({
 			// binds 3000 while the origin points at 8080.
 			adapter: adapter({
 				precompress: true,
-				serverOptions: adapterServerOptions(config.port, config.host)
+				// HTTP/2 (prior knowledge, sin TLS) para multiplexar assets.
+				// Experimental en Bun; clientes HTTP/1.1 siguen funcionando.
+				serverOptions: { ...adapterServerOptions(config.port, config.host), http2: true } as any
 			}),
 			paths: { origin: config.publicOrigin },
 			csrf: { trustedOrigins: config.trustedOrigins }
