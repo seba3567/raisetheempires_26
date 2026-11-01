@@ -6,6 +6,7 @@ from typing import Any
 import msgspec
 from flask import session
 
+import game_random
 from game_settings import game_settings, get_zid, lookup_item_by_code, lookup_items_by_type_and_subtype
 from logger import report_battle_log
 from quest_engine import (
@@ -238,6 +239,11 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
 
     result = {"attackerStunned": None, "psh": 1 if is_shielded(ally_target, active_consumables) else 0, "esh": 0, "ps": friendly_strengths[player_unit_id], "es": baddie_strengths[enemy_unit_id], "hv": None, "ur": roll,
      "playerUnit": player_unit_id, "enemyUnit": enemy_unit_id, "seeds": {"w": get_seed_w(), "z": get_seed_z()},
+     # How many numbers the fight has drawn. The client counts them too, and
+     # the two counts have to agree: that is what "out of sync" means. It is
+     # in the answer so that the server's count can be read next to the
+     # client's complaint in the log.
+     "draws": game_random.draws(),
      "energy": None}
 
     process_consumable_end_turn(active_consumables, baddie_strengths, friendly_strengths, player_turn)
@@ -796,11 +802,24 @@ def decode_unit_strings(unit_strings):
 
 
 def unit_roll(attacker_weak, defender_weak):
+    """The roll of a turn.
+
+    A weak unit makes the roll worth -2 or 2, but it does not save the
+    draw: the client draws a number every turn and throws it away when a
+    unit is weak. The server has to draw too, or the two random streams get
+    a step apart -- and when they do, the client stops the fight with
+    "ZGameRandom fatally out of sync" and asks for a refresh.
+
+    That is not theoretical. A turn where the enemy was weak did not draw at
+    all here, the client drew, and the fight ended with the two sides
+    disagreeing about what number came next.
+    """
+    rolled = roll_random_between(0, 1)
     if attacker_weak:
         return -2
     if defender_weak:
         return 2
-    return roll_random_between(0, 1)
+    return rolled
 
 
 def get_hit_value(unit_type, defender_type):

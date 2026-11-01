@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import math
 from collections.abc import Callable
 from functools import reduce
 from typing import Any
@@ -10,6 +9,7 @@ Predicate = Callable[..., Any]
 
 from flask import session
 
+import game_random
 from game_settings import (
     allies,
     game_settings,
@@ -683,58 +683,47 @@ def do_rewards(label: str, raw_rewards: Any, meta: dict[str, Any], inc_modifier:
 
 
 def roll_random() -> int:
-    world = session['user_object']["userInfo"]["world"]
-    world.setdefault("randSeedZ", 7549)
-    world.setdefault("randSeedW", 484584)
-    prev_seed = str(world["randSeedW"]) + ', ' +  str(world["randSeedZ"])
-    world["randSeedZ"] = 36969 * (world["randSeedZ"] & 65535)  + (world["randSeedZ"] >> 16 & 65535) & 4294967295
-    world["randSeedW"] = 18000 * (world["randSeedW"] & 65535)  + (world["randSeedW"] >> 16 & 65535) & 4294967295
-    print("Seed", prev_seed, "=>", str(world["randSeedW"]) + ', ' + str(world["randSeedZ"]))
-    return (world["randSeedZ"] << 16) +  world["randSeedW"] & 4294967295
+    """Draw a number from the battle's stream.
+
+    The generator lives in ``game_random``, which owns the seeds and counts
+    the draws: the client simulates the battle and stops it dead if the two
+    sides have not drawn the same number of values. This name stays because
+    half the project reaches for it.
+    """
+    return game_random.roll_random()
 
 
 def roll_random_float() -> float:
-    number = roll_random() / (2 ** 32 - 1)
-    number_ = math.floor(number * 10 ** 3) / 10 ** 3
-    print("random float", number_)
-    return number_
+    return game_random.roll_random_float()
 
 
 def roll_random_between(a: float, b: float) -> float:
-    f = roll_random_float() * (b - a) + a
-    print("random between", a ,"and", b, "=", f)
-    return f
+    return game_random.roll_random_between(a, b)
 
 
 def get_seed_w() -> int:
-    world = session.get('user_object', {}).get("userInfo", {}).get("world", {})
-    return world.get("randSeedW", 484584)
+    return game_random.get_seed_w()
 
 
 def get_seed_z() -> int:
-    world = session.get('user_object', {}).get("userInfo", {}).get("world", {})
-    return world.get("randSeedZ", 7549)
-
+    return game_random.get_seed_z()
 
 
 def roll_reward_random() -> int:
-    world = session['user_object']["userInfo"]["world"]
-    world.setdefault("rewardRandSeedZ", 7549)
-    world.setdefault("rewardRandSeedW", 484584)
-    world["rewardRandSeedZ"] = 36969 * (world["rewardRandSeedZ"] & 65535)  + (world["rewardRandSeedZ"] >> 16 & 65535) & 4294967295
-    world["rewardRandSeedW"] = 18000 * (world["rewardRandSeedW"] & 65535)  + (world["rewardRandSeedW"] >> 16 & 65535) & 4294967295
-    print( (world["rewardRandSeedZ"] << 16) +  world["rewardRandSeedW"] & 4294967295)
-    return (world["rewardRandSeedZ"] << 16) +  world["rewardRandSeedW"] & 4294967295
+    """Draw a number from the rewards' stream, which is a stream of its own.
+
+    A reward is not a battle: paying one out must not move the numbers the
+    fight is using.
+    """
+    return game_random.roll_reward_random()
 
 
 def roll_reward_random_float() -> float:
-    number = roll_reward_random() / (2 ** 32 - 1)
-    return math.floor(number * 10 ** 3) / 10 ** 3
+    return game_random.roll_reward_random_float()
 
 
 def roll_reward_random_between(a: float, b: float) -> float:
-    return roll_reward_random_float() * (b - a) + a
-
+    return game_random.roll_reward_random_between(a, b)
 
 
 def progress_harvest_consumable(state: Any, state_machine: Any, game_item: dict[str, Any], step: str, previous_state: Any, reference_item: str | None, previous_reference_item: str | None, *state_args: Any) -> Predicate:
