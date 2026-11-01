@@ -36,6 +36,30 @@ class StaleBattleReference(Exception):
     (e.g. a queued client request replayed after the battle/session was reset)."""
 
 
+def get_base_damage() -> float:
+    """The flat damage a hit carries, before the strengths.
+
+    It is the game's own table: ``combatDamageBase`` in the game settings.
+    Every one of its five entries says 25, so this is the number the engine
+    was using -- but it is read from the data now instead of written down
+    here, and the number is in one place.
+
+    The same section carries two lists this does not use yet:
+    ``combatDamageTierIncrement`` and ``combatDamageBaseMin``. They are
+    indexed by something the game does not name -- the table has five
+    entries and the game has nine tiers, eleven unit classes, two terrains
+    and five combat domains -- and guessing which one it is would change
+    every fight in the game. The base is the part that is certain, so this
+    is the part that is used.
+    """
+    section = game_settings.get("settings", {}).get("combatDamage", {})
+    values = str(section.get("-combatDamageBase", "25")).split(",")
+    try:
+        return float(values[0])
+    except (TypeError, ValueError):
+        return 25.0
+
+
 def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
     friendlies, friendly_strengths, baddies, baddie_strengths, active_consumables = init_battle(params)
     meta = {"newPVE": 0}
@@ -122,14 +146,19 @@ def battle_complete_response(params: dict[str, Any]) -> dict[str, Any]:
 
         hit = roll >= direct
 
-        base_damage = 25 # TODO tier difference & increments
+        base_damage = get_base_damage()
 
         if player_turn:
             damage = base_damage * (3 * friendly_max_strength + baddie_strength) / (3 * baddie_strength + friendly_max_strength)
             damage = damage / 100 * baddie_max_strength
+            # The counters the game is built on. A bomber is worth one and a
+            # half against a tank, and without this it hit a tank exactly as
+            # hard as an infantryman did.
+            damage *= get_against_modifier(friendlies[player_unit_id], baddies[enemy_unit_id])
         else:
             damage = base_damage * (3 * baddie_max_strength + friendly_strength) / (3 * friendly_strength + baddie_max_strength)
             damage = damage / 100 * friendly_max_strength
+            damage *= get_against_modifier(baddies[enemy_unit_id], friendlies[player_unit_id])
 
 
         consumable_extra_damage = \
@@ -712,17 +741,35 @@ def get_next_fleet_name(name):
 
 
 def get_last_fleet_name():
+    """The name of the fleet the player brought to the fight.
+
+    The session may have no fleets at all -- a battle that was asked for
+    before the player had one -- and the old code indexed ``session["fleets"]``
+    straight away, so the request died with a KeyError instead of the
+    empty answer the other missing pieces give.
+    """
+    fleets = session.get("fleets") or {}
     i = 0
     fleet_name = "fleet1_" + str(get_zid())
-    while fleet_name in session["fleets"] or "fleet" + str(i+1) + "_" + str(get_zid()) in session["fleets"]:
+    while fleet_name in fleets or "fleet" + str(i+1) + "_" + str(get_zid()) in fleets:
         i += 1
         fleet_name = "fleet" + str(i) + "_" + str(get_zid())
     return "fleet" + str(i-1) + "_" + str(get_zid())
 
 
 def get_friendly_by_ally_fleet(name):
+    """The friendly fleet that belongs to that ally fleet.
+
+    The old code took the first match out of the list and threw when there
+    was none. A consumable aimed at an ally whose fleet is not there any
+    more is not a reason to fail the whole request.
+    """
     print("Using corresponding friendly fleet for ally consumable")
-    return [fleet[5:] for fleet in session["fleets"] if fleet.startswith('ally_') and name in session["fleets"][fleet]][0]
+    fleets = session.get("fleets") or {}
+    for fleet in fleets:
+        if fleet.startswith('ally_') and name in fleets[fleet]:
+            return fleet[5:]
+    return ""
 
 
 def decode_unit_count_list(raw_units):
@@ -756,8 +803,13 @@ def unit_roll(attacker_weak, defender_weak):
     return roll_random_between(0, 1)
 
 
-def get_hit_value(type, defender_type):
-    grade = get_combat_chain_grade(type, defender_type)
+def get_hit_value(unit_type, defender_type):
+    """The critical and direct hit thresholds for this pairing.
+
+    The name used to be ``type``, which shadowed the builtin inside a
+    function that also reads a setting called "type".
+    """
+    grade = get_combat_chain_grade(unit_type, defender_type)
 
     [value] = [e for e in game_settings['settings']['combatHitValues']['value'] if e['-type'] == grade]
 
@@ -1291,7 +1343,7 @@ def apply_consumable_direct_impact(meta, selected_consumable, targeted_unit, uni
     # pirateBalloon01(npc), pirateFighter01, pirateBomber01, pirateFighter02, pirateBomber02, pirateFighter03,pirateBomber03, pirateFighter05, pirateBomber05,
     # pirateUBoat03, pirateCaptainKrunsch and many more
     for a in against:
-        if a['-type'] in (get_unit_type(units[targeted_unit]), get_unit_terrain(units[targeted_unit])):
+        if a['-type'] in (get_unit_type(units[targeted_unit]), get_unit_acting_class(units[targeted_unit])):
             damage *= float(a['-mod'])
     if damage > 0 and is_shielded(("ally" if ally else "enemy",targeted_unit), active_consumables):
         consume_shield(("ally" if ally else "enemy",targeted_unit), active_consumables)
@@ -1344,7 +1396,7 @@ def apply_consumable_direct_impact(meta, selected_consumable, targeted_unit, uni
                                          int(selected_consumable["consumable"]["-chipFactor"]) *
                                          int(selected_consumable["consumable"].get("-di", 0)) / 100)
             for a in against:
-                if a['-type'] in (get_unit_type(units[live_index[i]]), get_unit_terrain(units[live_index[i]])):
+                if a['-type'] in (get_unit_type(units[live_index[i]]), get_unit_acting_class(units[live_index[i]])):
                     colateral_damage *= float(a['-mod'])
             units_strengths[live_index[i]] -= colateral_damage
             if not ally and 1 >= units_strengths[live_index[i]] > 0:
@@ -1504,20 +1556,76 @@ def ai_best_unit(first_units, first_units_strengths, second_unit, random, active
     return None, -1
 
 
+def _unit_type_parts(unit):
+    """The type string of a unit, split.
+
+    It reads "class,terrain" for most units and "class,class,terrain,mega"
+    for the mega ones, so the parts are not in the same place.
+    """
+    raw_type = unit.get("unit", {}).get("-type", "") if isinstance(unit, dict) else ""
+    return [part for part in str(raw_type).split(",") if part]
+
+
 def get_unit_type(unit):
-    raw_type = unit.get("unit", {}).get("-type", ",") if isinstance(unit, dict) else ","
-    parts = raw_type.split(',')
+    parts = _unit_type_parts(unit)
     return parts[0] if parts else ""
 
 
-def get_unit_terrain(unit):
-    raw_type = unit.get("unit", {}).get("-type", ",") if isinstance(unit, dict) else ","
-    parts = raw_type.split(',')
-    return parts[1] if len(parts) > 1 else ""
+def get_unit_acting_class(unit):
+    """The class a unit acts as, when it is not its own class.
+
+    A mega unit is "mega_arm,tank,land,mega": a mega arm that acts as a
+    tank and stands on land. The second slot is the class it acts as for
+    the mega units and the terrain for everybody else, and reading it as
+    the terrain is what made the "strong against tanks" modifiers miss
+    every mega unit in the game.
+    """
+    parts = _unit_type_parts(unit)
+    if len(parts) >= 2 and parts[0].startswith("mega_"):
+        return parts[1]
+    return ""
+
+
+def get_against_modifier(attacker, defender) -> float:
+    """The extra damage the attacker does against this kind of defender.
+
+    The catalogue says it: a bomber is worth one and a half against a tank
+    and a battleship, a ship is worth two against an infantryman. It was in
+    the data all along and it never reached the damage -- the only place
+    that read "against" was the consumables -- so the counters the game is
+    built on did nothing at all: a bomber and an infantryman hit a tank
+    exactly as hard.
+    """
+    against = attacker.get("unit", {}).get("against") if isinstance(attacker, dict) else None
+    if not isinstance(against, list):
+        return 1.0
+
+    target_types = {get_unit_type(defender), get_unit_acting_class(defender)}
+    modifier = 1.0
+    for entry in against:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("-type") in target_types:
+            try:
+                modifier *= float(entry.get("-mod", 1) or 1)
+            except (TypeError, ValueError):
+                continue
+    return modifier
 
 
 def get_unit_secondary(unit):
-    return unit["unit"].get("-secondary")
+    """The second weapon a unit carries, if it carries one.
+
+    ``unit["unit"]`` was read straight away, so a unit the catalogue knows
+    without a nested definition -- a building, a decoration -- was a
+    KeyError rather than "this one has no secondary".
+    """
+    if not isinstance(unit, dict):
+        return None
+    nested = unit.get("unit")
+    if not isinstance(nested, dict):
+        return None
+    return nested.get("-secondary")
 
 
 def get_unit_max_strength(unit, ally, params=None):

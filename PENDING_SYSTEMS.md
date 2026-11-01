@@ -113,3 +113,36 @@ llegue a la base de datos: el juego recibe la respuesta fija y sigue.
   solo `reviveUnits` tiene lógica real en la extendida. Los que importan
   (`resolveBattle`, `loadWorld`, `spawnFleet`, `sendZaspReport`) viven en la
   tabla base de `empires-server.py` y sí funcionan.
+
+---
+
+## 6. Motor de combate (`battle_engine.py`)
+
+* **Estado**: **INTEGRADO** ✅ para el turno de combate, los consumibles y las
+  recompensas.
+* **Lo que se corrigió**:
+  * **Los contadores del juego llegan al daño.** El catálogo dice que un
+    bombardero vale una y media contra un tanque y un barco, y que una unidad
+    naval vale dos contra un infante: 334 unidades lo tienen escrito en su
+    campo `against`. Ese campo solo se leía en los consumibles, así que un
+    bombardero y un infante golpeaban un tanque igual de fuerte. Ahora el
+    modificador se aplica al daño del turno.
+  * **Las mega-unidades dejan de ser invisibles para esos modificadores.** Una
+    mega-unidad es `mega_arm,tank,land,mega`: un brazo que actúa de tanque. La
+    segunda posición de su tipo es la clase que representa, no el terreno, y
+    leerla como el terreno hacía que ningún modificador la alcanzara.
+  * **El daño base sale de los datos del juego.** `combatDamageBase` de los
+    ajustes del juego, en vez de un 25 escrito en el motor.
+  * **Varias partes que reventaban la petición** en vez de responder: una
+    sesión sin fleets, un fleet aliado que ya no está, una unidad sin
+    definición anidada.
+* **Lo que sigue abierto**:
+  * `combatDamage` trae dos listas más que no se usan:
+    `combatDamageTierIncrement` y `combatDamageBaseMin`. Están indexadas por
+    algo que el juego no nombra — la tabla tiene cinco entradas y el juego
+    tiene nueve tiers, once clases de unidad, dos terrenos y cinco dominios
+    de combate — y adivinar cuál sería cambiar todas las partidas del juego.
+    La base, que es lo que se puede saber con certeza, sí se usa.
+  * La fórmula del daño usa la fuerza **máxima** del atacante y la **actual**
+    del defensor. Es lo que hace el motor desde el principio y no hay nada en
+    los datos que diga que sea de otra manera.
