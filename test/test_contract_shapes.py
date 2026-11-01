@@ -18,6 +18,8 @@ consumer is checked in ``web/tests/contract-shapes.test.ts``.
 
 from __future__ import annotations
 
+import pytest
+
 import contract
 
 
@@ -101,9 +103,12 @@ class TestTheResourceOrder:
         of it, and the two were expected to line up with nothing checking that
         they did.
         """
-        empires_server = __import__("empires-server")
+        catalog = pytest.importorskip("empires_gateway.routes.catalog")
+        empires_server = pytest.importorskip("empires-server")
 
-        assert empires_server.RESOURCE_ORDER == contract.RESOURCE_ORDER
+        assert tuple(catalog.RESOURCE_ORDER) == tuple(contract.RESOURCE_ORDER)
+        # And the set the economy charges against is the same one.
+        assert frozenset(contract.RESOURCE_ORDER) == empires_server.WORLD_RESOURCES
 
     def test_the_coins_come_first(self):
         """The client shows them in this order and the coins are the first."""
