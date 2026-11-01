@@ -85,6 +85,23 @@ from empires_gateway.routes.catalog import (
     snapi_bridge,
 )
 from empires_gateway.routes.editor import editor_restore, editor_save, editor_state
+from empires_gateway.routes.tools import (
+    change_seed,
+    complete_quest,
+    delete_save,
+    deprogress_battle_map,
+    list_session,
+    more_money as gazillionaire,
+    more_money,
+    patch_user,
+    patch_user_empty_dict,
+    patch_user_empty_list,
+    patch_user_list,
+    remove_quest,
+    save_editor,
+    unlock_quest,
+    wipe_session,
+)
 
 
 @app.get("/motd.json")
@@ -163,6 +180,109 @@ async def gift_send_route(request: Request):
 @app.post("/api/pvp/reward")
 async def pvp_reward_route(request: Request):
     return await _call_flask_view(api_pvp_reward, request)
+
+
+# Tools (admin) migrated
+@app.get("/wipe_session")
+@app.post("/wipe_session")
+async def wipe_session_route(request: Request):
+    return await _call_flask_view(wipe_session, request)
+
+
+@app.get("/list_session")
+@app.post("/list_session")
+async def list_session_route(request: Request):
+    return await _call_flask_view(list_session, request)
+
+
+@app.delete("/save")
+async def delete_save_route(request: Request):
+    return await _call_flask_view(delete_save, request)
+
+
+@app.get("/gazillionaire")
+@app.post("/gazillionaire")
+async def gazillionaire_route(request: Request):
+    return await _call_flask_view(gazillionaire, request)
+
+
+@app.get("/deprogress")
+@app.post("/deprogress")
+async def deprogress_route(request: Request):
+    return await _call_flask_view(deprogress_battle_map, request)
+
+
+@app.get("/seed/w/{w}/z/{z}")
+@app.post("/seed/w/{w}/z/{z}")
+async def seed_route(w: int, z: int, request: Request):
+    # Flask reads w,z from route; pass through request context with path
+    return await _call_flask_view(lambda: change_seed(w, z), request)
+
+
+@app.get("/patch/{path:path}/empty-dict")
+@app.post("/patch/{path:path}/empty-dict")
+async def patch_empty_dict_route(path: str, request: Request):
+    return await _call_flask_view(lambda: patch_user_empty_dict(path), request)
+
+
+@app.get("/patch/{path:path}/empty-list")
+@app.post("/patch/{path:path}/empty-list")
+async def patch_empty_list_route(path: str, request: Request):
+    return await _call_flask_view(lambda: patch_user_empty_list(path), request)
+
+
+@app.get("/patch/{path:path}/none")
+@app.post("/patch/{path:path}/none")
+async def patch_none_route(path: str, request: Request):
+    return await _call_flask_view(lambda: patch_user_dict(path), request)
+
+
+@app.get("/patch/{path:path}/int/{value}")
+@app.post("/patch/{path:path}/int/{value}")
+@app.get("/patch/{path:path}/string/{value}")
+@app.post("/patch/{path:path}/string/{value}")
+async def patch_value_route(path: str, value, request: Request):
+    # Determine if int
+    try:
+        v = int(value)
+    except (ValueError, TypeError):
+        v = value
+    return await _call_flask_view(lambda: patch_user(path, v), request)
+
+
+@app.get("/patch/{path:path}/list/index/{i}/int/{value}")
+@app.post("/patch/{path:path}/list/index/{i}/int/{value}")
+@app.get("/patch/{path:path}/list/index/{i}/string/{value}")
+@app.post("/patch/{path:path}/list/index/{i}/string/{value}")
+async def patch_list_route(path: str, i: int, value, request: Request):
+    try:
+        v = int(value)
+    except (ValueError, TypeError):
+        v = value
+    return await _call_flask_view(lambda: patch_user_list(path, i, v), request)
+
+
+@app.get("/unlock_quest/{value}")
+@app.post("/unlock_quest/{value}")
+async def unlock_quest_route(value: str, request: Request):
+    return await _call_flask_view(lambda: unlock_quest(value), request)
+
+
+@app.get("/complete_quest/{value}")
+@app.post("/complete_quest/{value}")
+async def complete_quest_route(value: str, request: Request):
+    return await _call_flask_view(lambda: complete_quest(value), request)
+
+
+@app.get("/remove_quest/{value}")
+@app.post("/remove_quest/{value}")
+async def remove_quest_route(value: str, request: Request):
+    return await _call_flask_view(lambda: remove_quest(value), request)
+
+
+@app.get("/save-editor")
+async def save_editor_route(request: Request):
+    return await _call_flask_view(save_editor, request)
 
 
 # Migrated redirects (stateless)
