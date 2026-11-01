@@ -8,7 +8,7 @@
 - Defaults de rendimiento (calidad baja, 1x DPI).
 - PostgreSQL 18 + Granian + SvelteKit 3/Bun.
 - FastAPI paralelo con OpenAPI (Fase A) ✅.
-- Migración de rutas HTTP a FastAPI (Fase B) ✅ (patrón establecido, rutas clave migradas; assets/tools restantes vía WSGI fallback).
+- Migración de rutas HTTP a FastAPI (Fase B) ✅ (rutas clave + tools migradas; assets estáticos vía WSGI fallback).
 - AMF0 binario migrado a FastAPI (Fase C) ✅.
 - FastAPI es el servidor principal (uvicorn); Flask es librería/fallback (Fase D) ✅.
 
