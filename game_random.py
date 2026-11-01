@@ -95,12 +95,20 @@ def _draw(w_key: str, z_key: str, count_key: str, start_w: int, start_z: int) ->
     the_world.setdefault(w_key, start_w)
     the_world.setdefault(z_key, start_z)
 
-    w = _step(int(the_world[w_key]), W_MULTIPLIER)
-    z = _step(int(the_world[z_key]), Z_MULTIPLIER)
+    before = (int(the_world[w_key]), int(the_world[z_key]))
+    w = _step(before[0], W_MULTIPLIER)
+    z = _step(before[1], Z_MULTIPLIER)
 
     the_world[w_key] = w
     the_world[z_key] = z
     the_world[count_key] = int(the_world.get(count_key, 0)) + 1
+
+    # This line is how a desync is found: the client's complaint quotes the
+    # seeds it holds, and this quotes the ones the server holds.
+    print(
+        f"Seed {before[0]}, {before[1]} => {w}, {z}",
+        f"(draw {the_world[count_key]})",
+    )
 
     return ((z << 16) + w) & MASK
 
