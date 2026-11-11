@@ -11,16 +11,12 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from flask import current_app, has_app_context, has_request_context, session
-from flask_session.sqlalchemy import SqlAlchemySessionInterface
-from flask_sqlalchemy import SQLAlchemy
-
+from fastapi_session import has_request_context, session
 import contract
 from save_store import WriteConflict, save_uid
 
 crash_log = True
 
-db = SQLAlchemy()
 
 def ensure_fleets(save: dict[str, Any] | None = None) -> dict[str, Any]:
     """``session['fleets']`` as a dict, creating or repairing it if needed.
@@ -246,9 +242,9 @@ def backup_chain(save: dict[str, Any] | None = None) -> list[Any]:
     fetched: the editor only needs the label and the level, and selecting ten
     40 KB blobs to render a menu is the cost this removed.
     """
-    from flask import current_app
+    from save_store import Store
 
-    store = current_app.session_interface.save_store
+    store = Store(save_store_url())
     store_id = (save or session).get("session_id") if save else _current_store_id()
     if not store_id:
         return []
@@ -257,9 +253,29 @@ def backup_chain(save: dict[str, Any] | None = None) -> list[Any]:
 
 def _current_store_id() -> str | None:
     """The store id the current request writes to, or None if there is no row."""
-    from flask import current_app
+    from fastapi_session import has_request_context, session
 
-    return current_app.session_interface._get_store_id(session.sid)
+    if not has_request_context():
+        return None
+    # Account-bound
+    try:
+        from game_settings import supplied_zid
+
+        zid = supplied_zid()
+        if zid is not None:
+            return "session:acct" + str(zid)
+    except Exception:
+        pass
+    # Cookie-based
+    sid = getattr(session, "sid", None)
+    if sid is None:
+        try:
+            sid = session.get("_id") if hasattr(session, "get") else None
+        except Exception:
+            sid = None
+    if sid:
+        return "session:" + str(sid)
+    return None
 
 
 def create_backup(message: str, limit: int = MAX_BACKUPS) -> str:
@@ -294,8 +310,10 @@ def save_store_url() -> str:
     to the live database while believing it was not.
     """
     configured = None
-    if has_request_context() or has_app_context():
-        configured = current_app.config.get("SAVE_STORE_PATH")
+    # FastAPI-native: read from environment / contract, not from Flask's app config.
+    import os
+
+    configured = os.environ.get("RTE_DB_URL") or os.environ.get("SAVE_STORE_PATH")
     return _with_installed_driver(configured or contract.env_value(
         contract.ENV_DATABASE_URL) or contract.DATABASE_URL)
 
@@ -416,8 +434,9 @@ sys.excepthook = exception_handler
 
 def decode_save(serialized_save: bytes) -> dict[str, Any] | None:
     try:
-        sess_int: SqlAlchemySessionInterface = current_app.session_interface
-        return sess_int.serializer.decode(serialized_save)
+        import msgspec
+
+        return msgspec.msgpack.decode(serialized_save)
     except Exception as e:
         print("Skipping corrupt save")
         print(e)
@@ -460,40 +479,12 @@ def get_saves() -> list[dict[str, Any]]:
     handed on: the old filter tested for the key, not for a value, and callers
     then did ``save['user_object'][...]`` on it.
     """
-    interface = current_app.session_interface
+    # FastAPI-native: read directly from the save store, no Flask interface.
+    from save_store import Store
 
-    if not hasattr(interface, "save_store"):
-        # A plain Flask session interface, and not even a server-side one.
-        if hasattr(interface, "sql_session_model"):
-            # A sqlalchemy-backed one -- a bare app in the older tests, or any
-            # deployment that never installed the account-bound interface.
-            # Read the sessions table the way this function used to.
-            saves = []
-            for record in interface.sql_session_model.query.all():
-                decoded = decode_save(record.data)
-                if not isinstance(decoded, dict):
-                    continue
-                user_object = decoded.get("user_object")
-                if isinstance(user_object, dict) and user_object.get("userInfo"):
-                    decoded["session_id"] = record.session_id
-                    saves.append(decoded)
-            return saves
-
-        # A cookie session. There is no server-side store to enumerate at all --
-        # the one save that exists is the session in hand.
-        current = dict(session)
-        user_object = current.get("user_object")
-        if isinstance(user_object, dict) and user_object.get("userInfo"):
-            return [current]
-        return []
-
+    store = Store(save_store_url())
     saves = []
-    for loaded in interface.save_store.load_all():
-        # The old filter asked whether the key was present and not whether it
-        # held anything, so a row with ``user_object: null`` -- or a list, which
-        # is what a half-written /editor/save paste leaves -- passed and then
-        # blew up the first caller that did ``save['user_object']["userInfo"]``.
-        # One unusable row should cost that row, not the whole session list.
+    for loaded in store.load_all():
         user_object = loaded.data.get("user_object")
         if not isinstance(user_object, dict) or not user_object.get("userInfo"):
             _report_unusable_save(loaded.store_id, user_object)
@@ -530,22 +521,11 @@ def get_save_by_uid(wanted: int | str, required: bool = False) -> dict[str, Any]
 
     ``required=True`` raises instead of returning None.
     """
-    from flask import current_app
+    # FastAPI-native: read directly from the save store.
+    from save_store import Store
 
-    interface = current_app.session_interface
-    if not hasattr(interface, "save_store"):
-        # A plain Flask session interface -- a test building a bare app, or any
-        # deployment that never installed the account-bound one. No store to ask,
-        # so fall back to the scan this function replaced.
-        for candidate in get_saves():
-            found = save_uid(candidate)
-            if found is not None and str(found) == str(wanted):
-                return candidate
-        if required:
-            raise SaveNotFound(f"no save for uid {wanted!r}")
-        return None
-
-    loaded = interface.save_store.load_by_uid(wanted)
+    store = Store(save_store_url())
+    loaded = store.load_by_uid(wanted)
     if loaded is None or not loaded.data:
         if required:
             raise SaveNotFound(f"no save for uid {wanted!r}")
@@ -585,7 +565,9 @@ def store_session(save: dict[str, Any]) -> bool:
     Returns whether the write happened, so a caller can tell "saved" from "there
     was nothing to save into".
     """
-    sess_int: SqlAlchemySessionInterface = current_app.session_interface
+    from save_store import Store
+
+    store = Store(save_store_url())
     session_id = save.get("session_id")
     revision = save.get("__save_revision")
 
@@ -595,8 +577,8 @@ def store_session(save: dict[str, Any]) -> bool:
                if key not in ("session_id", "__save_revision")}
 
     try:
-        written = sess_int.save_store.store(session_id, payload,
-                                           expected_revision=revision)
+        written = store.store(session_id, payload,
+                             expected_revision=revision)
     except WriteConflict as conflict:
         # Someone wrote between this save being read and now. Refusing is the
         # safe half: the alternative is overwriting their turn, which is the bug
