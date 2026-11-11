@@ -1,0 +1,15 @@
+package MS42_Entry_Point_Sea_SW
+{
+   import flash.display.BitmapData;
+   
+   [Embed(source="/_assets/3_MS42_Entry_Point_Sea_SW.png.png")]
+   public dynamic class png extends BitmapData
+   {
+      
+      public function png(param1:Number, param2:Number)
+      {
+         super(param1,param2);
+      }
+   }
+}
+

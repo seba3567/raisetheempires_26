@@ -1,145 +1,103 @@
-![Empires & Allies](web/static/logo.png "Empires & Allies logo")
+# Raise the Empires - Assets del juego
 
-> Empires and Allies(Facebook) officially closed June 17th, 2013
+Arbol de recursos del juego, aislado del backend y descompilado a codigo fuente.
 
-The Old Empires & Allies preservation project by the Raise the Empires team.
-This project is dedicated to preserving this Flash game so that it's not lost to time.
+Este repositorio contiene **solo los assets del juego**. El backend (FastAPI,
+gateway AMF, persistencia), el cliente web, los tests y las herramientas de
+build se eliminaron; el codigo del backend sigue disponible en la rama `main`
+de este mismo repositorio.
 
-[![version](https://img.shields.io/badge/version-0.08a--preview1-blue)](#)
-[![size](https://img.shields.io/badge/size-730%20MB-brightgreen)](#)
-[![downloads](https://img.shields.io/github/downloads/AcidCaos/raisetheempires/total?label=downloads%40all)](../../releases/latest)
-
----
-
-## Releases
-
-| Version | Update | Release date |  Source  | Download |
-| ------- | ------ | ------------ | ------ | -------- |
-| **alpha 0.08a-preview1** | **Titan Update: Part I** | August 27, 2021 | :label: [tag](../../releases/tag/0.08a-preview1) | :tickets: [**Installer**](../../releases/download/0.08a-preview1/empires-setup_0.08a-preview1.exe) |
-| alpha 0.07a   | Return of the Flash       | January 13, 2021   | :label: [tag](../../releases/tag/0.07a) | :tickets: [Installer](../../releases/download/0.07a/empires-setup_0.07a.exe) |
-| alpha 0.06a   | Invasion Update       | July 11, 2020   | :label: [tag](../../releases/tag/0.06a) | :tickets: [Installer](../../releases/download/0.06a/empires-setup_0.06a.exe) |
-| alpha 0.05a   | Multiplayer Update       | February 3, 2020   | :label: [tag](../../releases/tag/0.05a) | :tickets: [Installer](../../releases/download/0.05a/empires-setup_0.05.exe) |
-| alpha 0.04a   | Combat Update            | November 14, 2019  | :label: [tag](../../releases/tag/0.04a) | :tickets: [Installer](../../releases/download/0.04a/empires-setup_0.04.exe) |
-| alpha 0.03a   | Stability Update         | October 14, 2019   | :label: [tag](../../releases/tag/0.03a) | :tickets: [Installer](../../releases/download/0.03a/empires-setup_0.03.exe) |
-| alpha 0.02a   | Campaign Update          | September 14, 2019 | :label: [tag](../../releases/tag/0.02a) | :ticket: [Launcher](../../releases/download/0.02a/raise_the_empires_0.02a.zip) |
-| pre-alpha 0.01a   | The Empires Strikes Back | July 21, 2019      | :label: [tag](../../releases/tag/0.01a) | :ticket: [Launcher](../../releases/download/0.01a/RaiseTheEmpires-prealpa_0.01a.zip) |
-
-| :exclamation: For *0.07a* and older versions, check the [Flash Continuation](FLASH.md) documentation |
-| :---: |
-
-## Playing in a modern browser
-
-The playable site is `web/` — a SvelteKit 3 + Svelte 5 app on Bun that serves
-the accounts, the friend list, the progress page and the game itself. Sign in
-and open `/juego`: the original client runs through [Ruffle](https://ruffle.rs)
-**embedded in that page**, so there is no Adobe Flash Player and no second
-origin. The SWF behind it is the same one, with the same FlashVars and player
-options; `/ruffle.html` is just a redirect to `/juego` now that the 2013
-standalone template is gone.
-
-If you get `Error #2126: NetConnection object must be connected`, the client
-fell back to the host compiled into the SWF (`127.0.0.1`) instead of the served
-one. That happens when the `app_url` FlashVar is missing — note it is `app_url`,
-not `sn_app_url`. Ruffle's `NetConnection.connect()` only accepts `http://` and
-`https://` URLs, and the compiled-in default has no scheme.
-
-`/nodebug.html` is the equivalent page for real Flash — see
-[FLASH.md](FLASH.md).
-
-## How the two halves fit together
-
-There are two programs here, in two languages: the AMF0 gateway in Python (this
-directory) and the front door in `web/`. They meet over HTTP, over one
-PostgreSQL database and over the identity of the player.
-
-Everything that crosses one of those seams is written down **once**, in
-[`contract/runtime.json`](contract/runtime.json): the database, the gateway's
-address, the public port and origin, the headers that carry the signed-in
-account, the gateway routes that are admin tools, the parameters of the
-player's id, the canonical name of every environment variable, and the shape
-of the payloads that cross as JSON. Python reads it through `contract.py`,
-TypeScript through `web/src/lib/server/contract.ts`, and both test suites
-check that what each runtime resolved is what the file says.
-
-That is not a preference for tidiness. The front door once bound port 3000
-while the origin compiled into its build said 8080, so every page loaded and
-every form — the login included — was refused with 403 *"Cross-site POST form
-submissions are forbidden"*. A fact with two owners is a fact that will
-disagree; the port and the origin now have one, and so do the environment
-variables: `RTE_DB_URL` and `PUBLIC_ORIGIN` are read by both halves, with the
-old names still working as aliases.
-
-Environment variables still override the file: it holds the defaults, not a
-deployment's configuration.
-
-`DEVELOPMENT.md` has how to run it; `web/README.md` has the front door's half
-in detail.
-
-Ruffle is **vendored into `web/static/ruffle/` and pinned by content hash**, not
-loaded from a CDN. Please keep it that way: this game is archived, so an
-unpinned CDN tag — or a CDN that quietly re-bundles — could break it with no way
-to roll back. Note that `ruffle.js` is a *loader*, not a bundle, so the folder
-must keep the chunks and the two WASM binaries next to it. See
-[DEVELOPMENT.md](DEVELOPMENT.md#ruffle-is-vendored-not-fetched) for the full
-procedure and the hashes.
-
-## Reporting Bugs and Contacting
-:speech_balloon: Check our [Discord group](https://discord.gg/xrNE6Hg)  [![Discord Channel](https://img.shields.io/discord/536575691563466772?label=)](https://discord.gg/xrNE6Hg)
-
-:paw_prints: The project [Contributors](../../contributors)
-
-## Tools
-:compass: [Empires & Allies Modding Support](mods#readme)
-
-:iphone: [Empires & Allies Android(Termux) ~ GNU/Linux ~ macOS](https://github.com/Questandachievement7Developer/RaiseTheEmpiresPort_Native#readme)
-
-:minidisc: [Running a server](DEVELOPMENT.md)
-
-:classical_building: [Emipres & Allies Revision History](https://github.com/AcidCaos/empires-revision-history#readme)
-
-:world_map: [Empires & Allies Empire Map Editor](https://github.com/AcidCaos/ea-empire-editor#readme)
-
-## External Links
-:beginner: [Empires & Allies Wiki (FANDOM)](https://empiresandallies.fandom.com/wiki/Empires_%26_Allies_Wiki/Main_2)
-
-:clapper: [Empires & Allies Trailer](https://www.youtube.com/watch?v=pAdlyz9miqo)
-
-:smiley_cat: [Empires & Allies subreddit](https://reddit.com/r/EmpiresAndAllies)
-
-## On archives and accessibility to digital heritage
-- [Exemption to PCCPSACT](https://www.federalregister.gov/documents/2018/10/26/2018-23241/exemption-to-prohibition-on-circumvention-of-copyright-protection-systems-for-access-control), exemptions to the provision of the Digital Millennium Copyright Act (“DMCA”). 
-- [EFGAMP](https://efgamp.eu/), the European Federation of Video Game Archives, Museums and Preservation projects.
-- [UNESCO PERSIST Programme](https://unescopersist.org/), helps ensure that digital information can continue to be accessed in the future.
-- [The Internet Archive](https://archive.org/), a digital library of Internet sites and other cultural artifacts in digital form.
-- [BlueMaxima's Flashpoint](https://bluemaxima.org/flashpoint/), the webgame preservation project.
-- [Adobe Flash Player Archive](https://archive.org/download/flashplayerarchive/), the Adobe Inc. archive.org Flash Player Archive.
-
----
-
-## License [![GPL v3](https://img.shields.io/badge/GPL%20v3-blue)](http://www.gnu.org/licenses/gpl-3.0)
-```
-Old Empires and Allies preservation project.
-Copyright (C) 2019  The Raise the Empires team
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-```
-### Related
-```
-Chromium 82.0, Copyright 2020-2021 The Chromium Authors. All rights reserved.
-Chromium is made possible by the Chromium open source project and other open source software.
-```
+## Estructura
 
 ```
-Adobe Flash Player License Terms <http://aka.ms/adobeflash/>.
+assets/                    arbol canonico: las rutas que el cliente pide
+  assets/game/...          edificios, unidades, decoraciones, consumos, misiones
+  assets/displays/...      dialogos, pantallas, miniseries, megaseries
+  assets/ui/...            HUD y avisos
+  assets/images/...        imagenes de interfaz (episodios)
+  assets/sound/...         musica
+  assets/boot/             SWF de arranque ZGame*.swf
+  assets/settings/         gameSettings / questSettings / idiomas por revision
+  assets/allies/           disposicion de islas (JSON)
+
+decompiled/                fuentes ActionScript + imagenes embebidas
+  assets/game/.../         espejo del arbol canonico, un modulo por SWF
+    scripts/               clases .as descompiladas
+    images/                imagenes extraidas del SWF
+  _variants/               modulos de variantes que el juego ya no solicita
+
+_variants/                 SWF obsoletos o no referenciados por el manifiesto
+reports/                   informes de inventario, manifiesto y verificacion
 ```
+
+## Como se determino el arbol canonico
+
+El manifiesto del juego (`gameSettings.xml`) lista una linea por recurso:
+
+```
+<md5>:<ruta del recurso>
+```
+
+Por ejemplo `2fda94716385231417dcb9956e876fb8:assets/game/gifts/Aluminum_96.png`.
+Ese manifiesto es la lista de lo que el cliente pide y con que hash debe
+servirse, asi que unirlo contra los archivos en disco resuelve la ruta real de
+cada recurso sin adivinar.
+
+El proyecto tenia cuatro revisiones del juego, cada una con su manifiesto:
+
+| Revision | Entradas | SWF |
+|---|---|---|
+| `rev32995` | 1883 | 283 |
+| `rev29oct2012` | 6151 | 876 |
+| `rev107829` | 7689 | 1169 |
+| `rev57372` | 4254 | 561 |
+
+El join se hizo por ruta primero y, para los archivos con nombre CDN
+(`<Nombre>_<md5>.swf`), por el md5 embebido en el nombre. Los archivos con
+contenido identico se deduplicaron por hash.
+
+## Descompilacion
+
+JPEXS Flash Decompiler 26.4.0 (Java 21), exportando `script` e `image`:
+
+```
+ffdec.bat -export script,image <destino> <archivo.swf>
+```
+
+Cobertura: los 866 SWF, sin fallos. De ellos, 853 tienen ActionScript
+(63.011 clases) y los 13 restantes son vectores puros sin codigo.
+
+El codigo conserva los paquetes e imports originales, por ejemplo:
+
+```actionscript
+package displays.screens.questTreeScreen
+{
+   import ZQuest.Init.QuestSettingsInit;
+   import core.ZGlobal;
+   ...
+}
+```
+
+## Estado de los archivos
+
+Sobre 981 archivos locales:
+
+- **490 verificados**: el md5 coincide con lo que pide el manifiesto.
+- **63 modificados**: el contenido difiere del upstream (parches locales, o
+  recompresion de PNG/MP3).
+- **428 no referenciados**: ninguna revision los pide.
+
+Los no referenciados se conservan en `_variants/` con su descompilacion
+correspondiente, para no perder nada.
+
+## Nota sobre los hashes
+
+El manifiesto guarda el md5 del archivo publicado originalmente por el CDN.
+Para los PNG y MP3 las copias locales fueron recomprimidas, asi que su md5 no
+coincide aunque el recurso sea el correcto. En los SWF la coincidencia es
+exacta, y sirve como verificacion de integridad.
+
+## Herramientas usadas
+
+- `ffdec` (JPEXS) 26.4.0 para descompilar
+- scripts propios de inventario, resolucion contra el manifiesto y verificacion

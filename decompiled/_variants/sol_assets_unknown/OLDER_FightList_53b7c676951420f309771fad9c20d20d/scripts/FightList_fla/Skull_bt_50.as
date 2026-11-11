@@ -1,0 +1,21 @@
+package FightList_fla
+{
+   import flash.display.MovieClip;
+   
+   [Embed(source="/_assets/assets.swf", symbol="symbol51")]
+   public dynamic class Skull_bt_50 extends MovieClip
+   {
+      
+      public function Skull_bt_50()
+      {
+         super();
+         addFrameScript(0,this.frame1);
+      }
+      
+      internal function frame1() : *
+      {
+         stop();
+      }
+   }
+}
+

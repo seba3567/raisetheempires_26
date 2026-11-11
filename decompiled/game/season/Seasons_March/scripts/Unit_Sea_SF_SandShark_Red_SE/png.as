@@ -1,0 +1,15 @@
+package Unit_Sea_SF_SandShark_Red_SE
+{
+   import flash.display.BitmapData;
+   
+   [Embed(source="/_assets/41_Unit_Sea_SF_SandShark_Red_SE.png.png")]
+   public dynamic class png extends BitmapData
+   {
+      
+      public function png(param1:int = 122, param2:int = 98)
+      {
+         super(param1,param2);
+      }
+   }
+}
+

@@ -1,0 +1,15 @@
+package AirFighterLvl01_48
+{
+   import flash.display.BitmapData;
+   
+   [Embed(source="/_assets/282_AirFighterLvl01_48.png.png")]
+   public dynamic class png extends BitmapData
+   {
+      
+      public function png(param1:Number, param2:Number)
+      {
+         super(param1,param2);
+      }
+   }
+}
+

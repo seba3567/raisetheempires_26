@@ -1,0 +1,15 @@
+package Bubble_Gov
+{
+   import flash.display.BitmapData;
+   
+   [Embed(source="/_assets/231_Bubble_Gov.png.png")]
+   public dynamic class png extends BitmapData
+   {
+      
+      public function png(param1:int = 67, param2:int = 66)
+      {
+         super(param1,param2);
+      }
+   }
+}
+

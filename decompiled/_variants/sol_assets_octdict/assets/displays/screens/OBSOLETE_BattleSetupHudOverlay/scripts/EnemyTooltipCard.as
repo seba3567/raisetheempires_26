@@ -1,0 +1,22 @@
+package
+{
+   import flash.display.MovieClip;
+   
+   [Embed(source="/_assets/assets.swf", symbol="symbol61")]
+   public class EnemyTooltipCard extends MovieClip
+   {
+      
+      public var hit_mc:MovieClip;
+      
+      public var window_lt:MovieClip;
+      
+      public var window_rt:MovieClip;
+      
+      public function EnemyTooltipCard()
+      {
+         super();
+         trace("Raise the empires: EnemyTooltipCard contructor called");
+      }
+   }
+}
+

@@ -1,0 +1,39 @@
+package Boss_07_win_fla
+{
+   import flash.display.MovieClip;
+   import flash.text.TextField;
+   
+   [Embed(source="/_assets/assets.swf", symbol="symbol34")]
+   public dynamic class deploy_bt_8 extends MovieClip
+   {
+      
+      public var skip_tf:TextField;
+      
+      public function deploy_bt_8()
+      {
+         super();
+         addFrameScript(0,this.frame1,1,this.frame2,2,this.frame3,3,this.frame4);
+      }
+      
+      internal function frame1() : *
+      {
+         stop();
+      }
+      
+      internal function frame2() : *
+      {
+         stop();
+      }
+      
+      internal function frame3() : *
+      {
+         stop();
+      }
+      
+      internal function frame4() : *
+      {
+         stop();
+      }
+   }
+}
+

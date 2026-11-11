@@ -1,64 +1,4 @@
-/dist*/
-/.idea
-/build/
-/*.spec
-*.rar
-/log.txt
-/log-test.txt
-# Los logs del watchdog del stack.
-/log-gateway.out.log
-/log-gateway.err.log
-/log-web.out.log
-/log-web.err.log
-# El log rotado. pesa 6 MB y no aporta nada al proyecto.
-/log.txt.*
-/server.out.log
-/server.err.log
-# Gateway logs from a run started with stdout redirected, plus the scratch
-# output of the migration scripts.
-/flask.out.log
-/flask.err.log
-/_migrate.log
-/_migrate.err
-/_restore.log
-/_restore.err
-/_peek.log
-/_peek.err
-/_verify.log
-/_verify.err
-# Gateway logs from the runs started by hand, the mysqld console redirect, and
-# the one-off probe scripts those runs left in the root.
-/gw.out.log
-/gw.err.log
-/_gw.out.log
-/_gw.err.log
-/_gw[0-9].*.log
-/_mysqld.*.log
-/_tools/
-/_*.py
-# Experimentos descartados y la cache de wheels de pip. Ni el uno ni el otro
-# son contenido del proyecto.
-/scratch/
-/_wheels/
-# Copias de respaldo de assets, guardadas por si un swf sale mal.
-/assets/*.bak
-/assets/*.bak[0-9]*
-# Copia de seguridad de las partidas basura que se borraron de la base. Vive
-# en la raiz para poder recuperarla, pero no es contenido del proyecto.
-/_junk_saves_backup.json
-/chromium
-/chromium-profile
-/cache
-# Saves live in PostgreSQL (SAVE_STORE_PATH). These only match a stray file from
-# before the move, so that one can never be committed by accident.
-/save.db
-/instance
-/backup-save-db
-# Volcados de mysqldump hechos a mano antes de un borrado.
-/backup-antes-borrado-*.sql
-.coverage
-coverage.xml
-test-results.xml
+# Rama "assets": solo recursos del juego, sin backend ni tooling.
 
 # Python
 __pycache__/
@@ -73,8 +13,26 @@ venv/
 .tox/
 /htmlcov/
 
-# Bun / TypeScript (web/)
-node_modules/
-/web/.env
-/web/*.log
-/web/instance/
+# Logs y volcados
+*.log
+/log.txt.*
+/server.out.log
+/server.err.log
+/flask.out.log
+/flask.err.log
+/_*.log
+/_*.err
+/_tools/
+/_*.py
+
+# Cache y artefactos de build
+/dist*/
+/build/
+/*.spec
+/instance
+/cache
+/.idea
+
+# Copias de respaldo de assets, guardadas por si un swf sale mal.
+/assets/*.bak
+/assets/*.bak[0-9]*

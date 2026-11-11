@@ -1,0 +1,15 @@
+package VP_04
+{
+   import flash.display.BitmapData;
+   
+   [Embed(source="/_assets/12_VP_04.png.jpg")]
+   public dynamic class png extends BitmapData
+   {
+      
+      public function png(param1:Number, param2:Number)
+      {
+         super(param1,param2);
+      }
+   }
+}
+
